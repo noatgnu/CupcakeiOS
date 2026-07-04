@@ -1,0 +1,32 @@
+# Xcode
+#
+# User-specific project state (per-machine window layout, scheme ordering, breakpoints) —
+# never shared between contributors, and regenerated automatically on next open.
+xcuserdata/
+*.xcuserstate
+*.xcscmblueprint
+*.xccheckout
+
+# Build products / local caches — never hand-authored, always regenerable.
+DerivedData/
+build/
+*.moved-aside
+*.hmap
+*.ipa
+*.dSYM
+*.dSYM.zip
+
+# Playgrounds
+timeline.xctimeline
+playground.xcworkspace
+
+# Swift Package Manager
+#
+# Packages/CupcakeKit's own local build/index state when built directly via `swift build`/
+# `swift test` outside of Xcode. Package.resolved is intentionally NOT ignored here — once
+# CupcakeKit gains external dependencies, that file should be committed for reproducible builds.
+.build/
+.swiftpm/
+
+# macOS
+.DS_Store
