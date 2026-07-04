@@ -5,22 +5,27 @@
 
 import SwiftUI
 
-/// Single adaptive navigation shell: a 3-column `NavigationSplitView` on macOS/regular-width
-/// iPad, degrading to a `NavigationStack` on compact-width iPhone. Real sidebar/detail content
-/// (protocols, sessions, storage, instruments, settings) lands in Phase 1's Features/ work.
+/// Switches between the login screen and the main Protocols/Sessions tabs based on whether a
+/// `DeviceToken` is on hand (or standalone mode is active). Matches the reference web app's own
+/// nav structure (`protocols-navbar.html`): Protocols and Sessions are separate top-level
+/// destinations — session browsing is not nested inside protocol editing, since a session isn't
+/// scoped to "the protocol you happened to start it from" (multiple independent sessions can
+/// exist per protocol, and the only way back to one you've navigated away from is this list).
 struct RootNavigationView: View {
+    @Environment(AppSession.self) private var appSession
+
     var body: some View {
-        NavigationSplitView {
-            List {
-                Text("Cupcake")
+        if appSession.canUseApp {
+            TabView {
+                ProtocolListView()
+                    .tabItem { Label("Protocols", systemImage: "list.bullet.clipboard") }
+                SessionListView()
+                    .tabItem { Label("Sessions", systemImage: "clock") }
             }
-            .navigationTitle("Cupcake")
-        } detail: {
-            Text("Select an item")
+        } else {
+            NavigationStack {
+                LoginView()
+            }
         }
     }
-}
-
-#Preview {
-    RootNavigationView()
 }

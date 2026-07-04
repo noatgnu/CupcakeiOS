@@ -34,6 +34,21 @@ public actor APIClient {
         return try await execute(request)
     }
 
+    /// GET a fully-qualified URL as-is — for following a DRF pagination `next` link, which is
+    /// always an absolute URL, not a path relative to `baseURL`.
+    public func get<Response: Decodable & Sendable>(
+        absoluteURL: URL,
+        authorizationHeader: String? = nil
+    ) async throws -> Response {
+        var request = URLRequest(url: absoluteURL)
+        request.httpMethod = HTTPMethod.get.rawValue
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        if let authorizationHeader {
+            request.setValue(authorizationHeader, forHTTPHeaderField: "Authorization")
+        }
+        return try await execute(request)
+    }
+
     /// POST/PATCH/PUT with an encodable request body.
     public func send<Body: Encodable & Sendable, Response: Decodable & Sendable>(
         _ path: String,
