@@ -38,42 +38,56 @@ public actor StepReagentSyncService {
         }
     }
 
-    /// Creates a brand-new server-side `Reagent` — only needed when attaching a reagent that
-    /// doesn't already exist there (an existing reagent is referenced by its own `serverID`
-    /// instead). Returns `(clientID, serverID)` so the caller can immediately use the `serverID`
-    /// in a follow-up `createStepReagent` call without a second round-trip.
-    public func createReagent(name: String, unit: String) async throws -> (clientID: UUID, serverID: Int64) {
-        guard let token = deviceToken() else {
-            throw StepReagentSyncError.noDeviceToken
-        }
-        let dto: ReagentDTO = try await apiClient.send(
-            "reagents/",
-            method: .post,
-            body: CreateReagentRequest(name: name, unit: unit),
-            authorizationHeader: "DeviceToken \(token)"
-        )
-        let clientID = try await store.upsertSingle(dto)
-        return (clientID, dto.id)
-    }
-
+    /// Same "sync the existing local record in place" shape as
+    /// `ProtocolSyncService.syncLocallyCreatedProtocol` — the create-locally-then-sync path used
+    /// when signed in, and what `OutboxService.replay(_:)` calls to retry a queued
+    /// `createStepReagent` entry. Handles the reagent itself inline: if the attached reagent
+    /// doesn't have a `serverID` yet (a brand-new reagent, or one only ever created locally
+    /// before), it's created on the server first and its `serverID` attached, all within this
+    /// one call — a step-reagent's reagent has no independent existence in this app's UI outside
+    /// this attachment flow, so there's no separate `createReagent` outbox entry type to manage.
+    ///
+    /// Throws `SyncDependencyError.parentNotSynced` if the step itself hasn't synced yet — an
+    /// ordering issue, retried like a connectivity failure, not a terminal error.
     @discardableResult
-    public func createStepReagent(stepServerID: Int64, reagentServerID: Int64, quantity: Double, scalable: Bool, scalableFactor: Double) async throws -> UUID {
+    public func syncLocallyCreatedStepReagent(clientID: UUID) async throws -> Int64 {
         guard let token = deviceToken() else {
             throw StepReagentSyncError.noDeviceToken
         }
+        let fields = try await store.stepReagentFields(clientID: clientID)
+        guard let stepServerID = fields.stepServerID else {
+            throw SyncDependencyError.parentNotSynced
+        }
+
+        let reagentServerID: Int64
+        if let existingReagentServerID = fields.reagentServerID {
+            reagentServerID = existingReagentServerID
+        } else {
+            let reagentDTO: ReagentDTO = try await apiClient.send(
+                "reagents/",
+                method: .post,
+                body: CreateReagentRequest(name: fields.reagentName, unit: fields.reagentUnit),
+                authorizationHeader: "DeviceToken \(token)"
+            )
+            try await store.attachReagentServerID(reagentClientID: fields.reagentClientID, dto: reagentDTO)
+            reagentServerID = reagentDTO.id
+        }
+
         let dto: StepReagentDTO = try await apiClient.send(
             "step-reagents/",
             method: .post,
-            body: CreateStepReagentRequest(step: stepServerID, reagentId: reagentServerID, quantity: quantity, scalable: scalable, scalableFactor: scalableFactor),
+            body: CreateStepReagentRequest(step: stepServerID, reagentId: reagentServerID, quantity: fields.quantity, scalable: fields.scalable, scalableFactor: fields.scalableFactor),
             authorizationHeader: "DeviceToken \(token)"
         )
-        return try await store.upsertSingle(dto)
+        try await store.attachServerID(stepReagentClientID: clientID, dto: dto)
+        return dto.id
     }
 }
 
 public enum StepReagentSyncError: Error {
     case noDeviceToken
-    case stepNotCached
+    case stepReagentNotCached
+    case reagentNotCached
 }
 
 /// SwiftData access is isolated to this `@ModelActor` — see `ProtocolStore`'s doc comment for why.
@@ -120,22 +134,72 @@ actor StepReagentStore {
         stepReagent.scalableFactor = dto.scalableFactor
     }
 
-    func upsertSingle(_ dto: ReagentDTO) throws -> UUID {
-        let clientID = upsertReagent(dto)
-        try modelContext.save()
-        return clientID
+    func stepReagentFields(clientID: UUID) throws -> (
+        stepServerID: Int64?,
+        reagentClientID: UUID,
+        reagentServerID: Int64?,
+        reagentName: String,
+        reagentUnit: String,
+        quantity: Double,
+        scalable: Bool,
+        scalableFactor: Double
+    ) {
+        guard let stepReagent = try modelContext.fetch(
+            FetchDescriptor<CachedStepReagent>(predicate: #Predicate { $0.clientID == clientID })
+        ).first else {
+            throw StepReagentSyncError.stepReagentNotCached
+        }
+        let stepClientID = stepReagent.stepClientID
+        let step = try modelContext.fetch(
+            FetchDescriptor<CachedProtocolStep>(predicate: #Predicate { $0.clientID == stepClientID })
+        ).first
+
+        let reagentClientID = stepReagent.reagentClientID
+        guard let reagent = try modelContext.fetch(
+            FetchDescriptor<CachedReagent>(predicate: #Predicate { $0.clientID == reagentClientID })
+        ).first else {
+            throw StepReagentSyncError.reagentNotCached
+        }
+
+        return (
+            step?.serverID,
+            reagentClientID,
+            reagent.serverID,
+            reagent.name,
+            reagent.unit,
+            stepReagent.quantity,
+            stepReagent.scalable,
+            stepReagent.scalableFactor
+        )
     }
 
-    func upsertSingle(_ dto: StepReagentDTO) throws -> UUID {
-        upsert(dto)
-        try modelContext.save()
-        let stepReagentServerID = dto.id
-        guard let stepReagent = try modelContext.fetch(
-            FetchDescriptor<CachedStepReagent>(predicate: #Predicate { $0.serverID == stepReagentServerID })
+    /// Attaches a newly-assigned `serverID` to the existing local reagent matched by `clientID`.
+    func attachReagentServerID(reagentClientID: UUID, dto: ReagentDTO) throws {
+        guard let reagent = try modelContext.fetch(
+            FetchDescriptor<CachedReagent>(predicate: #Predicate { $0.clientID == reagentClientID })
         ).first else {
-            throw StepReagentSyncError.stepNotCached
+            throw StepReagentSyncError.reagentNotCached
         }
-        return stepReagent.clientID
+        reagent.serverID = dto.id
+        reagent.name = dto.name
+        reagent.unit = dto.unit
+        try modelContext.save()
+    }
+
+    /// Attaches a newly-assigned `serverID` to the existing local step-reagent matched by
+    /// `clientID` — the record already exists (created locally first), so this updates it in
+    /// place rather than inserting a second copy.
+    func attachServerID(stepReagentClientID: UUID, dto: StepReagentDTO) throws {
+        guard let stepReagent = try modelContext.fetch(
+            FetchDescriptor<CachedStepReagent>(predicate: #Predicate { $0.clientID == stepReagentClientID })
+        ).first else {
+            throw StepReagentSyncError.stepReagentNotCached
+        }
+        stepReagent.serverID = dto.id
+        stepReagent.quantity = dto.quantity
+        stepReagent.scalable = dto.scalable
+        stepReagent.scalableFactor = dto.scalableFactor
+        try modelContext.save()
     }
 
     private func upsertReagent(_ dto: ReagentDTO) -> UUID {

@@ -1,13 +1,15 @@
 import CupcakeModels
+import CupcakeNetworking
 import CupcakeSync
 import SwiftData
 import SwiftUI
 
 /// Completes the Protocol -> Section -> Step -> StepReagent authoring hierarchy: attaching a
-/// reagent (existing or newly named on the spot) with a quantity to a step. Creates on the
-/// server when the owning protocol is online-authored (`canAuthorOnline`), falling back to a
-/// local-only write otherwise — same "online when possible, else local" pattern used for
-/// session/protocol/section/step creation.
+/// reagent (existing or newly named on the spot) with a quantity to a step. Always created
+/// locally first (so nothing is lost or blocked on the network), then synced immediately when
+/// the owning protocol is online-authored (`canAuthorOnline`) — a genuine unreachability failure
+/// queues it in the outbox instead of erroring out, same as protocol/section/step/session
+/// creation.
 ///
 /// Verified against the reference web app's `step-reagent-modal.ts`:
 /// - Reagent name is a live typeahead (`searchReagent()`, 200ms debounce, min 1 char) against the
@@ -127,48 +129,46 @@ struct AttachReagentSheet: View {
         isSaving = true
         defer { isSaving = false }
 
-        if canAuthorOnline, let stepServerID = step.serverID {
-            do {
-                let services = appSession.makeSyncServices()
-                let reagentServerID: Int64
-                if let matchedReagentID, let matched = reagents.first(where: { $0.clientID == matchedReagentID }), let existingServerID = matched.serverID {
-                    reagentServerID = existingServerID
-                } else {
-                    let created = try await services.stepReagentSync.createReagent(name: reagentNameQuery, unit: unit)
-                    reagentServerID = created.serverID
-                }
-                try await services.stepReagentSync.createStepReagent(
-                    stepServerID: stepServerID,
-                    reagentServerID: reagentServerID,
-                    quantity: quantity,
-                    scalable: isScalable,
-                    scalableFactor: scalableFactor
-                )
+        let reagentClientID: UUID
+        if let matchedReagentID {
+            reagentClientID = matchedReagentID
+        } else {
+            let reagent = CachedReagent(name: reagentNameQuery, unit: unit)
+            modelContext.insert(reagent)
+            reagentClientID = reagent.clientID
+        }
+
+        let stepReagent = CachedStepReagent(
+            stepClientID: step.clientID,
+            reagentClientID: reagentClientID,
+            quantity: quantity,
+            scalable: isScalable,
+            scalableFactor: scalableFactor
+        )
+        modelContext.insert(stepReagent)
+        try? modelContext.save()
+
+        guard canAuthorOnline else {
+            dismiss()
+            return
+        }
+
+        let clientID = stepReagent.clientID
+        let services = appSession.makeSyncServices()
+        do {
+            try await services.stepReagentSync.syncLocallyCreatedStepReagent(clientID: clientID)
+            dismiss()
+        } catch let error as APIError {
+            if case .transport = error {
+                try? await services.outboxSync.enqueueCreateStepReagent(clientID: clientID)
                 dismiss()
-            } catch {
-                errorMessage = error.localizedDescription
+            } else {
+                errorMessage = "Saved locally, but couldn't sync: \(error.localizedDescription)"
                 isShowingError = true
             }
-        } else {
-            let reagentClientID: UUID
-            if let matchedReagentID {
-                reagentClientID = matchedReagentID
-            } else {
-                let reagent = CachedReagent(name: reagentNameQuery, unit: unit)
-                modelContext.insert(reagent)
-                reagentClientID = reagent.clientID
-            }
-
-            let stepReagent = CachedStepReagent(
-                stepClientID: step.clientID,
-                reagentClientID: reagentClientID,
-                quantity: quantity,
-                scalable: isScalable,
-                scalableFactor: scalableFactor
-            )
-            modelContext.insert(stepReagent)
-            try? modelContext.save()
-            dismiss()
+        } catch {
+            errorMessage = "Saved locally, but couldn't sync: \(error.localizedDescription)"
+            isShowingError = true
         }
     }
 }

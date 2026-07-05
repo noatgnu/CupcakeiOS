@@ -43,6 +43,38 @@ public actor InstrumentSyncService {
             page = try await apiClient.get(absoluteURL: nextURL, authorizationHeader: authorization)
         }
     }
+
+    /// Pushes an *already locally-created* booking to the server, attaching the new `serverID`
+    /// to that same local record — the create-locally-then-sync path used when signed in, and
+    /// what `OutboxService.replay(_:)` calls to retry a queued `createInstrumentUsage` entry.
+    /// Never sends `approved` — see `CreateInstrumentUsageRequest`'s doc comment for why a
+    /// client claiming its own pre-approval would be wrong even though the backend permits it.
+    @discardableResult
+    public func syncLocallyCreatedInstrumentUsage(clientID: UUID) async throws -> Int64 {
+        guard let token = deviceToken() else {
+            throw InstrumentSyncError.noDeviceToken
+        }
+        let fields = try await store.instrumentUsageFields(clientID: clientID)
+        let dto: InstrumentUsageDTO = try await apiClient.send(
+            "instrument-usage/",
+            method: .post,
+            body: CreateInstrumentUsageRequest(
+                instrument: fields.instrumentServerID,
+                timeStarted: fields.timeStarted,
+                timeEnded: fields.timeEnded,
+                description: fields.description,
+                maintenance: fields.maintenance
+            ),
+            authorizationHeader: "DeviceToken \(token)"
+        )
+        try await store.attachServerID(instrumentUsageClientID: clientID, dto: dto)
+        return dto.id
+    }
+}
+
+public enum InstrumentSyncError: Error {
+    case noDeviceToken
+    case instrumentUsageNotCached
 }
 
 /// SwiftData access is isolated to this `@ModelActor` — see `ProtocolStore`'s doc comment for why.
@@ -105,6 +137,33 @@ actor InstrumentStore {
             usage.approved = dto.approved
             usage.maintenance = dto.maintenance
         }
+        try modelContext.save()
+    }
+
+    func instrumentUsageFields(clientID: UUID) throws -> (instrumentServerID: Int64, timeStarted: String, timeEnded: String?, description: String, maintenance: Bool) {
+        guard let usage = try modelContext.fetch(
+            FetchDescriptor<CachedInstrumentUsage>(predicate: #Predicate { $0.clientID == clientID })
+        ).first, let timeStarted = usage.timeStarted else {
+            throw InstrumentSyncError.instrumentUsageNotCached
+        }
+        return (usage.instrumentServerID, timeStarted, usage.timeEnded, usage.usageDescription, usage.maintenance)
+    }
+
+    /// Attaches a newly-assigned `serverID` to the existing local record matched by `clientID` —
+    /// the record already exists (created locally first), so this updates it in place rather
+    /// than inserting a second copy.
+    func attachServerID(instrumentUsageClientID: UUID, dto: InstrumentUsageDTO) throws {
+        guard let usage = try modelContext.fetch(
+            FetchDescriptor<CachedInstrumentUsage>(predicate: #Predicate { $0.clientID == instrumentUsageClientID })
+        ).first else {
+            throw InstrumentSyncError.instrumentUsageNotCached
+        }
+        usage.serverID = dto.id
+        usage.timeStarted = dto.timeStarted
+        usage.timeEnded = dto.timeEnded
+        usage.usageDescription = dto.description
+        usage.approved = dto.approved
+        usage.maintenance = dto.maintenance
         try modelContext.save()
     }
 }

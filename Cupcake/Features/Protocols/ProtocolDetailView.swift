@@ -1,4 +1,5 @@
 import CupcakeModels
+import CupcakeNetworking
 import CupcakeSync
 import SwiftData
 import SwiftUI
@@ -181,51 +182,60 @@ struct ProtocolDetailView: View {
     /// Created instantly with a default name, no dialog — matches the reference web app's
     /// `createSection()` (`protocol-editor.ts:186-210`), which POSTs immediately with a
     /// `"New Section N"` placeholder name and lets the user rename afterward, rather than
-    /// collecting a name upfront. Goes to the server when this protocol is online-authored
-    /// (`canAuthorOnline`), else created directly in the local store — same "online when
-    /// possible, else local" pattern as `startSession`.
+    /// collecting a name upfront.
+    ///
+    /// Created **locally first** always (so nothing is lost or blocked on the network), then
+    /// synced immediately if this protocol is online-authored (`canAuthorOnline`) — a genuine
+    /// unreachability failure queues it in the outbox instead of erroring out, same as
+    /// `NewProtocolView`'s pattern.
     private func addSection() async {
         let description = "New Section \(sections.count + 1)"
         let order = sections.count
+        let section = CachedProtocolSection(sectionDescription: description, order: order, protocolModel: protocolModel)
+        modelContext.insert(section)
+        try? modelContext.save()
 
-        if canAuthorOnline, let protocolServerID = protocolModel.serverID {
-            do {
-                let services = appSession.makeSyncServices()
-                try await services.protocolSync.createSection(protocolServerID: protocolServerID, description: description, duration: nil, order: order)
-            } catch {
-                errorMessage = error.localizedDescription
+        guard canAuthorOnline else { return }
+        let clientID = section.clientID
+        let services = appSession.makeSyncServices()
+        do {
+            try await services.protocolSync.syncLocallyCreatedSection(clientID: clientID)
+        } catch let error as APIError {
+            if case .transport = error {
+                try? await services.outboxSync.enqueueCreateSection(clientID: clientID)
+            } else {
+                errorMessage = "Saved locally, but couldn't sync: \(error.localizedDescription)"
                 isShowingError = true
             }
-        } else {
-            let section = CachedProtocolSection(sectionDescription: description, order: order, protocolModel: protocolModel)
-            modelContext.insert(section)
-            try? modelContext.save()
+        } catch {
+            errorMessage = "Saved locally, but couldn't sync: \(error.localizedDescription)"
+            isShowingError = true
         }
     }
 
+    /// Same create-locally-then-sync-or-queue shape as `addSection`.
     private func addStep(description: String, duration: Int?, to section: CachedProtocolSection) async {
         let order = section.steps.count
+        let step = CachedProtocolStep(stepDescription: description, order: order, stepDuration: duration, section: section)
+        modelContext.insert(step)
+        recomputeSectionDuration(for: section)
+        try? modelContext.save()
 
-        if canAuthorOnline, let protocolServerID = protocolModel.serverID, let sectionServerID = section.serverID {
-            do {
-                let services = appSession.makeSyncServices()
-                try await services.protocolSync.createStep(protocolServerID: protocolServerID, sectionServerID: sectionServerID, description: description, duration: duration, order: order)
-                recomputeSectionDuration(for: section)
-                try? modelContext.save()
-            } catch {
-                errorMessage = error.localizedDescription
+        guard canAuthorOnline else { return }
+        let clientID = step.clientID
+        let services = appSession.makeSyncServices()
+        do {
+            try await services.protocolSync.syncLocallyCreatedStep(clientID: clientID)
+        } catch let error as APIError {
+            if case .transport = error {
+                try? await services.outboxSync.enqueueCreateStep(clientID: clientID)
+            } else {
+                errorMessage = "Saved locally, but couldn't sync: \(error.localizedDescription)"
                 isShowingError = true
             }
-        } else {
-            let step = CachedProtocolStep(
-                stepDescription: description,
-                order: order,
-                stepDuration: duration,
-                section: section
-            )
-            modelContext.insert(step)
-            recomputeSectionDuration(for: section)
-            try? modelContext.save()
+        } catch {
+            errorMessage = "Saved locally, but couldn't sync: \(error.localizedDescription)"
+            isShowingError = true
         }
     }
 
@@ -245,30 +255,36 @@ struct ProtocolDetailView: View {
         isCreatingSession = true
         defer { isCreatingSession = false }
 
-        if canAuthorOnline, let serverID = protocolModel.serverID {
-            do {
-                let services = appSession.makeSyncServices()
-                createdSessionClientID = try await services.sessionSync.createSession(
-                    name: name,
-                    enabled: enabled,
-                    protocolServerIDs: [serverID]
-                )
-            } catch {
-                errorMessage = error.localizedDescription
+        // Created locally first always (so nothing is lost or blocked on the network, and the UI
+        // can navigate to it immediately), then synced right away if this protocol is
+        // online-authored — same create-locally-then-sync-or-queue pattern as `addSection`.
+        let session = CachedSession(
+            uniqueID: nil,
+            name: name,
+            enabled: enabled,
+            isRunning: true,
+            status: "running",
+            primaryProtocolClientID: protocolModel.clientID
+        )
+        modelContext.insert(session)
+        try? modelContext.save()
+        createdSessionClientID = session.clientID
+
+        guard canAuthorOnline else { return }
+        let clientID = session.clientID
+        let services = appSession.makeSyncServices()
+        do {
+            try await services.sessionSync.syncLocallyCreatedSession(clientID: clientID)
+        } catch let error as APIError {
+            if case .transport = error {
+                try? await services.outboxSync.enqueueCreateSession(clientID: clientID)
+            } else {
+                errorMessage = "Saved locally, but couldn't sync: \(error.localizedDescription)"
                 isShowingError = true
             }
-        } else {
-            let session = CachedSession(
-                uniqueID: nil,
-                name: name,
-                enabled: enabled,
-                isRunning: true,
-                status: "running",
-                primaryProtocolClientID: protocolModel.clientID
-            )
-            modelContext.insert(session)
-            try? modelContext.save()
-            createdSessionClientID = session.clientID
+        } catch {
+            errorMessage = "Saved locally, but couldn't sync: \(error.localizedDescription)"
+            isShowingError = true
         }
     }
 }

@@ -54,10 +54,36 @@ public actor SessionSyncService {
         )
         return try await store.upsertOne(dto)
     }
+
+    /// Same "sync the existing local record in place" shape as
+    /// `ProtocolSyncService.syncLocallyCreatedProtocol` — the create-locally-then-sync path used
+    /// when signed in, and what `OutboxService.replay(_:)` calls to retry a queued
+    /// `createSession` entry. Throws `SyncDependencyError.parentNotSynced` if the session's
+    /// primary protocol hasn't synced yet (an ordering issue, retried like a connectivity
+    /// failure, not a terminal error).
+    @discardableResult
+    public func syncLocallyCreatedSession(clientID: UUID) async throws -> Int64 {
+        guard let token = deviceToken() else {
+            throw SessionSyncError.noDeviceToken
+        }
+        let fields = try await store.sessionFields(clientID: clientID)
+        guard let protocolServerID = fields.protocolServerID else {
+            throw SyncDependencyError.parentNotSynced
+        }
+        let dto: SessionDTO = try await apiClient.send(
+            "sessions/",
+            method: .post,
+            body: CreateSessionRequest(name: fields.name ?? "", enabled: fields.enabled, protocols: [protocolServerID]),
+            authorizationHeader: "DeviceToken \(token)"
+        )
+        try await store.attachServerID(clientID: clientID, dto: dto)
+        return dto.id
+    }
 }
 
 public enum SessionSyncError: Error {
     case noDeviceToken
+    case sessionNotCached
 }
 
 /// SwiftData access is isolated to this `@ModelActor` — see `ProtocolStore`'s doc comment for why.
@@ -74,6 +100,41 @@ actor SessionStore {
         let clientID = upsert(dto)
         try modelContext.save()
         return clientID
+    }
+
+    func sessionFields(clientID: UUID) throws -> (name: String?, enabled: Bool, protocolServerID: Int64?) {
+        guard let session = try modelContext.fetch(
+            FetchDescriptor<CachedSession>(predicate: #Predicate { $0.clientID == clientID })
+        ).first else {
+            throw SessionSyncError.sessionNotCached
+        }
+        var protocolServerID: Int64?
+        if let primaryProtocolClientID = session.primaryProtocolClientID {
+            let match = try? modelContext.fetch(
+                FetchDescriptor<CachedProtocol>(predicate: #Predicate { $0.clientID == primaryProtocolClientID })
+            )
+            protocolServerID = match?.first?.serverID
+        }
+        return (session.name, session.enabled, protocolServerID)
+    }
+
+    /// Attaches a newly-assigned `serverID` to the existing local record matched by `clientID` —
+    /// the record already exists (created locally first), so this updates it in place rather
+    /// than inserting a second copy the way the read-sync `upsert` does.
+    func attachServerID(clientID: UUID, dto: SessionDTO) throws {
+        guard let session = try modelContext.fetch(
+            FetchDescriptor<CachedSession>(predicate: #Predicate { $0.clientID == clientID })
+        ).first else {
+            throw SessionSyncError.sessionNotCached
+        }
+        session.serverID = dto.id
+        session.uniqueID = dto.uniqueId
+        session.name = dto.name
+        session.enabled = dto.enabled
+        session.isRunning = dto.isRunning
+        session.status = dto.status
+        session.protocolServerIDs = dto.protocols
+        try modelContext.save()
     }
 
     @discardableResult

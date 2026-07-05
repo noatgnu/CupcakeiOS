@@ -1,4 +1,5 @@
 import CupcakeModels
+import CupcakeNetworking
 import CupcakeSync
 import SwiftData
 import SwiftUI
@@ -73,20 +74,37 @@ struct SessionDetailView: View {
         }
     }
 
+    /// Always created locally first (so nothing is lost or blocked on the network, and the sheet
+    /// dismisses immediately), then synced right away when signed in — a genuine unreachability
+    /// failure queues it in the outbox instead of erroring out, same create-locally-then-
+    /// sync-or-queue pattern as protocol/section/step/session/step-reagent creation.
     private func saveAnnotation(step: CachedProtocolStep) async {
         isSaving = true
         defer { isSaving = false }
+
+        let services = appSession.makeSyncServices()
+        let clientID = try? await services.stepAnnotationSync.createTextAnnotation(
+            sessionClientID: sessionClientID,
+            stepClientID: step.clientID,
+            text: annotationText
+        )
+        annotationText = ""
+        selectedStep = nil
+
+        guard appSession.isAuthenticated, let clientID else { return }
         do {
-            let services = appSession.makeSyncServices()
-            try await services.stepAnnotationSync.createTextAnnotation(
-                sessionClientID: sessionClientID,
-                stepClientID: step.clientID,
-                text: annotationText
-            )
-            annotationText = ""
-            selectedStep = nil
+            try await services.stepAnnotationSync.syncLocallyCreatedTextAnnotation(clientID: clientID)
+        } catch let error as APIError {
+            if case .transport = error {
+                try? await services.outboxSync.enqueueCreateTextAnnotation(clientID: clientID)
+            } else {
+                errorMessage = "Saved locally, but couldn't sync: \(error.localizedDescription)"
+                isShowingError = true
+            }
+        } catch SyncDependencyError.parentNotSynced {
+            try? await services.outboxSync.enqueueCreateTextAnnotation(clientID: clientID)
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage = "Saved locally, but couldn't sync: \(error.localizedDescription)"
             isShowingError = true
         }
     }

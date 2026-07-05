@@ -115,7 +115,7 @@ struct SyncServiceTests {
         }
     }
 
-    @Test("createTextAnnotation posts via the annotation_data shortcut when both session and step have a serverID")
+    @Test("createTextAnnotation always inserts locally, then syncLocallyCreatedTextAnnotation posts via the annotation_data shortcut")
     func createTextAnnotationOnlinePath() async throws {
         StubURLProtocol.handler = { request in
             let json = Data("""
@@ -139,18 +139,19 @@ struct SyncServiceTests {
         let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
         let service = StepAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
 
-        try await service.createTextAnnotation(sessionClientID: session.clientID, stepClientID: step.clientID, text: "Gloves are on.")
+        let clientID = try await service.createTextAnnotation(sessionClientID: session.clientID, stepClientID: step.clientID, text: "Gloves are on.")
+        try await service.syncLocallyCreatedTextAnnotation(clientID: clientID)
 
         let annotations = try context.fetch(FetchDescriptor<CachedStepAnnotation>())
-        #expect(annotations.count == 1)
+        #expect(annotations.count == 1, "sync should attach a serverID to the existing local record, not insert a duplicate")
         #expect(annotations.first?.annotationText == "Gloves are on.")
         #expect(annotations.first?.serverID == 100)
     }
 
-    @Test("createTextAnnotation falls back to a local-only insert without a serverID or device token")
+    @Test("createTextAnnotation is always a local-only insert regardless of serverID/device token")
     func createTextAnnotationLocalOnlyPath() async throws {
         StubURLProtocol.handler = { _ in
-            Issue.record("should not make a network request when session/step have no serverID")
+            Issue.record("createTextAnnotation itself should never make a network request")
             throw URLError(.badURL)
         }
 
@@ -344,7 +345,12 @@ struct SyncServiceTests {
         let container = try makeInMemoryContainer(for: [CachedProtocol.self, CachedProtocolSection.self, CachedProtocolStep.self, OutboxEntry.self])
         let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
         let protocolSync = ProtocolSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
-        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync)
+        let sessionSync = SessionSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let stepReagentSync = StepReagentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let stepAnnotationSync = StepAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let inventorySync = InventorySyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let instrumentSync = InstrumentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync)
 
         let context = ModelContext(container)
         let localProtocol = CachedProtocol(protocolTitle: "Sample Prep", protocolDescription: nil, enabled: false, isLocallyAuthored: true)
@@ -363,6 +369,94 @@ struct SyncServiceTests {
         #expect(try context.fetch(FetchDescriptor<OutboxEntry>()).isEmpty, "a successfully-replayed entry should be removed from the outbox")
     }
 
+    @Test("OutboxService replays a protocol then its section in FIFO order, resolving the section's parent dependency")
+    func outboxReplayResolvesSectionAfterItsProtocol() async throws {
+        StubURLProtocol.handler = { request in
+            if request.url!.path.hasSuffix("/protocols") {
+                let json = Data("""
+                {"id": 77, "protocol_title": "Sample Prep", "protocol_description": null, "enabled": false, "sections": []}
+                """.utf8)
+                return (HTTPURLResponse(url: request.url!, statusCode: 201, httpVersion: nil, headerFields: nil)!, json)
+            } else {
+                let json = Data("""
+                {"id": 5, "section_description": "Setup", "order": 0, "section_duration": null, "steps": []}
+                """.utf8)
+                return (HTTPURLResponse(url: request.url!, statusCode: 201, httpVersion: nil, headerFields: nil)!, json)
+            }
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedProtocol.self, CachedProtocolSection.self, CachedProtocolStep.self, OutboxEntry.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let protocolSync = ProtocolSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let sessionSync = SessionSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let stepReagentSync = StepReagentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let stepAnnotationSync = StepAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let inventorySync = InventorySyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let instrumentSync = InstrumentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync)
+
+        let context = ModelContext(container)
+        let localProtocol = CachedProtocol(protocolTitle: "Sample Prep", protocolDescription: nil, enabled: false, isLocallyAuthored: true)
+        context.insert(localProtocol)
+        let localSection = CachedProtocolSection(sectionDescription: "Setup", order: 0, protocolModel: localProtocol)
+        context.insert(localSection)
+        try context.save()
+
+        // Enqueued in creation order — the protocol first, then the section that depends on it.
+        try await outbox.enqueueCreateProtocol(clientID: localProtocol.clientID, title: "Sample Prep", description: nil, enabled: false)
+        try await outbox.enqueueCreateSection(clientID: localSection.clientID)
+        await outbox.replayPending()
+
+        let protocols = try context.fetch(FetchDescriptor<CachedProtocol>())
+        #expect(protocols.first?.serverID == 77)
+
+        let sections = try context.fetch(FetchDescriptor<CachedProtocolSection>())
+        #expect(sections.count == 1, "replay should attach a serverID to the existing local section, not insert a duplicate")
+        #expect(sections.first?.serverID == 5, "the section should resolve its parent's serverID within the same replay pass, since FIFO order processed the protocol first")
+
+        #expect(try context.fetch(FetchDescriptor<OutboxEntry>()).isEmpty)
+    }
+
+    @Test("OutboxService retries (not fails) a section queued before its parent protocol has synced")
+    func outboxReplayRetriesSectionWhoseParentIsntSyncedYet() async throws {
+        StubURLProtocol.handler = { _ in
+            throw URLError(.notConnectedToInternet)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedProtocol.self, CachedProtocolSection.self, CachedProtocolStep.self, OutboxEntry.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let protocolSync = ProtocolSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let sessionSync = SessionSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let stepReagentSync = StepReagentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let stepAnnotationSync = StepAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let inventorySync = InventorySyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let instrumentSync = InstrumentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync)
+
+        let context = ModelContext(container)
+        let localProtocol = CachedProtocol(protocolTitle: "Sample Prep", protocolDescription: nil, enabled: false, isLocallyAuthored: true)
+        context.insert(localProtocol)
+        let localSection = CachedProtocolSection(sectionDescription: "Setup", order: 0, protocolModel: localProtocol)
+        context.insert(localSection)
+        try context.save()
+
+        // Only the section's entry is queued (simulating: its own creation attempt failed and
+        // got queued, but for whatever reason the protocol's own entry isn't there — e.g. it
+        // synced in a previous, separate replay pass that this test doesn't model). The
+        // dependency check must still key off the *local* protocol record's current serverID,
+        // which is nil here, not assume the protocol is fine just because it has no entry.
+        try await outbox.enqueueCreateSection(clientID: localSection.clientID)
+        await outbox.replayPending()
+
+        let entries = try context.fetch(FetchDescriptor<OutboxEntry>())
+        #expect(entries.count == 1, "an unmet parent dependency should retry, not be dropped or marked failed")
+        #expect(entries.first?.status == OutboxEntryStatus.pending.rawValue)
+        #expect(entries.first?.retryCount == 1)
+
+        let sections = try context.fetch(FetchDescriptor<CachedProtocolSection>())
+        #expect(sections.first?.serverID == nil)
+    }
+
     @Test("OutboxService leaves a queued entry pending and bumps retryCount on a transport failure")
     func outboxReplayRetriesOnTransportFailure() async throws {
         StubURLProtocol.handler = { _ in
@@ -372,7 +466,12 @@ struct SyncServiceTests {
         let container = try makeInMemoryContainer(for: [CachedProtocol.self, CachedProtocolSection.self, CachedProtocolStep.self, OutboxEntry.self])
         let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
         let protocolSync = ProtocolSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
-        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync)
+        let sessionSync = SessionSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let stepReagentSync = StepReagentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let stepAnnotationSync = StepAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let inventorySync = InventorySyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let instrumentSync = InstrumentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync)
 
         let context = ModelContext(container)
         let localProtocol = CachedProtocol(protocolTitle: "Sample Prep", protocolDescription: nil, enabled: false, isLocallyAuthored: true)
@@ -389,5 +488,445 @@ struct SyncServiceTests {
 
         let protocols = try context.fetch(FetchDescriptor<CachedProtocol>())
         #expect(protocols.first?.serverID == nil, "no serverID should be attached until a replay actually succeeds")
+    }
+
+    @Test("OutboxService replays a session once its primary protocol has synced, in the same FIFO pass")
+    func outboxReplayResolvesSessionAfterItsProtocol() async throws {
+        StubURLProtocol.handler = { request in
+            if request.url!.path.hasSuffix("/protocols") {
+                let json = Data("""
+                {"id": 77, "protocol_title": "Sample Prep", "protocol_description": null, "enabled": false, "sections": []}
+                """.utf8)
+                return (HTTPURLResponse(url: request.url!, statusCode: 201, httpVersion: nil, headerFields: nil)!, json)
+            } else {
+                let json = Data("""
+                {"id": 9, "unique_id": "abc", "name": "Run 1", "enabled": true, "processing": false,
+                 "started_at": null, "ended_at": null, "is_running": null, "status": "ready", "protocols": [77]}
+                """.utf8)
+                return (HTTPURLResponse(url: request.url!, statusCode: 201, httpVersion: nil, headerFields: nil)!, json)
+            }
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedProtocol.self, CachedProtocolSection.self, CachedProtocolStep.self, CachedSession.self, OutboxEntry.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let protocolSync = ProtocolSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let sessionSync = SessionSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let stepReagentSync = StepReagentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let stepAnnotationSync = StepAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let inventorySync = InventorySyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let instrumentSync = InstrumentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync)
+
+        let context = ModelContext(container)
+        let localProtocol = CachedProtocol(protocolTitle: "Sample Prep", protocolDescription: nil, enabled: false, isLocallyAuthored: true)
+        context.insert(localProtocol)
+        let localSession = CachedSession(name: "Run 1", enabled: true, isRunning: true, status: "running", primaryProtocolClientID: localProtocol.clientID)
+        context.insert(localSession)
+        try context.save()
+
+        try await outbox.enqueueCreateProtocol(clientID: localProtocol.clientID, title: "Sample Prep", description: nil, enabled: false)
+        try await outbox.enqueueCreateSession(clientID: localSession.clientID)
+        await outbox.replayPending()
+
+        let sessions = try context.fetch(FetchDescriptor<CachedSession>())
+        #expect(sessions.count == 1, "replay should attach a serverID to the existing local session, not insert a duplicate")
+        #expect(sessions.first?.serverID == 9)
+
+        #expect(try context.fetch(FetchDescriptor<OutboxEntry>()).isEmpty)
+    }
+
+    @Test("OutboxService retries (not fails) a session queued before its primary protocol has synced")
+    func outboxReplayRetriesSessionWhoseParentIsntSyncedYet() async throws {
+        StubURLProtocol.handler = { _ in
+            throw URLError(.notConnectedToInternet)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedProtocol.self, CachedProtocolSection.self, CachedProtocolStep.self, CachedSession.self, OutboxEntry.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let protocolSync = ProtocolSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let sessionSync = SessionSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let stepReagentSync = StepReagentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let stepAnnotationSync = StepAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let inventorySync = InventorySyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let instrumentSync = InstrumentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync)
+
+        let context = ModelContext(container)
+        let localProtocol = CachedProtocol(protocolTitle: "Sample Prep", protocolDescription: nil, enabled: false, isLocallyAuthored: true)
+        context.insert(localProtocol)
+        let localSession = CachedSession(name: "Run 1", enabled: true, isRunning: true, status: "running", primaryProtocolClientID: localProtocol.clientID)
+        context.insert(localSession)
+        try context.save()
+
+        try await outbox.enqueueCreateSession(clientID: localSession.clientID)
+        await outbox.replayPending()
+
+        let entries = try context.fetch(FetchDescriptor<OutboxEntry>())
+        #expect(entries.count == 1, "an unmet parent dependency should retry, not be dropped or marked failed")
+        #expect(entries.first?.status == OutboxEntryStatus.pending.rawValue)
+        #expect(entries.first?.retryCount == 1)
+
+        let sessions = try context.fetch(FetchDescriptor<CachedSession>())
+        #expect(sessions.first?.serverID == nil)
+    }
+
+    @Test("OutboxService replays a step-reagent once its step has synced, creating the new reagent inline")
+    func outboxReplayResolvesStepReagentAfterItsStep() async throws {
+        StubURLProtocol.handler = { request in
+            if request.url!.path.hasSuffix("/steps") {
+                let json = Data("""
+                {"id": 10, "step_description": "Mix", "order": 0, "step_duration": null}
+                """.utf8)
+                return (HTTPURLResponse(url: request.url!, statusCode: 201, httpVersion: nil, headerFields: nil)!, json)
+            } else if request.url!.path.hasSuffix("/reagents") {
+                let json = Data("""
+                {"id": 3, "name": "NaCl", "unit": "g"}
+                """.utf8)
+                return (HTTPURLResponse(url: request.url!, statusCode: 201, httpVersion: nil, headerFields: nil)!, json)
+            } else {
+                let json = Data("""
+                {"id": 20, "step": 10, "reagent": {"id": 3, "name": "NaCl", "unit": "g"},
+                 "quantity": 5.0, "scalable": false, "scalable_factor": 1.0}
+                """.utf8)
+                return (HTTPURLResponse(url: request.url!, statusCode: 201, httpVersion: nil, headerFields: nil)!, json)
+            }
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedProtocolStep.self, CachedReagent.self, CachedStepReagent.self, OutboxEntry.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let protocolSync = ProtocolSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let sessionSync = SessionSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let stepReagentSync = StepReagentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let stepAnnotationSync = StepAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let inventorySync = InventorySyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let instrumentSync = InstrumentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync)
+
+        let context = ModelContext(container)
+        let localStep = CachedProtocolStep(stepDescription: "Mix", order: 0, stepDuration: nil)
+        context.insert(localStep)
+        let localReagent = CachedReagent(name: "NaCl", unit: "g")
+        context.insert(localReagent)
+        let localStepReagent = CachedStepReagent(stepClientID: localStep.clientID, reagentClientID: localReagent.clientID, quantity: 5.0, scalable: false, scalableFactor: 1.0)
+        context.insert(localStepReagent)
+        try context.save()
+
+        // Simulate the step already having synced in a prior pass — its own outbox entry isn't
+        // modeled here since `ProtocolSyncService`'s own FIFO-ordering behavior is already
+        // covered by the section/step tests above; this test is purely about the reagent's
+        // inline creation and the step-reagent's own dependency check.
+        localStep.serverID = 10
+        try context.save()
+
+        try await outbox.enqueueCreateStepReagent(clientID: localStepReagent.clientID)
+        await outbox.replayPending()
+
+        let reagents = try context.fetch(FetchDescriptor<CachedReagent>())
+        #expect(reagents.count == 1, "the reagent should get a serverID attached in place, not be duplicated")
+        #expect(reagents.first?.serverID == 3)
+
+        let stepReagents = try context.fetch(FetchDescriptor<CachedStepReagent>())
+        #expect(stepReagents.count == 1)
+        #expect(stepReagents.first?.serverID == 20)
+
+        #expect(try context.fetch(FetchDescriptor<OutboxEntry>()).isEmpty)
+    }
+
+    @Test("OutboxService retries (not fails) a step-reagent queued before its step has synced")
+    func outboxReplayRetriesStepReagentWhoseStepIsntSyncedYet() async throws {
+        StubURLProtocol.handler = { _ in
+            throw URLError(.notConnectedToInternet)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedProtocolStep.self, CachedReagent.self, CachedStepReagent.self, OutboxEntry.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let protocolSync = ProtocolSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let sessionSync = SessionSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let stepReagentSync = StepReagentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let stepAnnotationSync = StepAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let inventorySync = InventorySyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let instrumentSync = InstrumentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync)
+
+        let context = ModelContext(container)
+        let localStep = CachedProtocolStep(stepDescription: "Mix", order: 0, stepDuration: nil)
+        context.insert(localStep)
+        let localReagent = CachedReagent(name: "NaCl", unit: "g")
+        context.insert(localReagent)
+        let localStepReagent = CachedStepReagent(stepClientID: localStep.clientID, reagentClientID: localReagent.clientID, quantity: 5.0, scalable: false, scalableFactor: 1.0)
+        context.insert(localStepReagent)
+        try context.save()
+
+        try await outbox.enqueueCreateStepReagent(clientID: localStepReagent.clientID)
+        await outbox.replayPending()
+
+        let entries = try context.fetch(FetchDescriptor<OutboxEntry>())
+        #expect(entries.count == 1, "an unmet parent dependency should retry, not be dropped or marked failed")
+        #expect(entries.first?.status == OutboxEntryStatus.pending.rawValue)
+        #expect(entries.first?.retryCount == 1)
+
+        let stepReagents = try context.fetch(FetchDescriptor<CachedStepReagent>())
+        #expect(stepReagents.first?.serverID == nil)
+    }
+
+    @Test("OutboxService replays a text annotation once its session and step have synced")
+    func outboxReplayResolvesTextAnnotationAfterItsSessionAndStep() async throws {
+        StubURLProtocol.handler = { request in
+            if request.url!.path.hasSuffix("/protocols") {
+                let json = Data("""
+                {"id": 77, "protocol_title": "Sample Prep", "protocol_description": null, "enabled": false, "sections": []}
+                """.utf8)
+                return (HTTPURLResponse(url: request.url!, statusCode: 201, httpVersion: nil, headerFields: nil)!, json)
+            } else if request.url!.path.hasSuffix("/sessions") {
+                let json = Data("""
+                {"id": 9, "unique_id": "abc", "name": "Run 1", "enabled": true, "processing": false,
+                 "started_at": null, "ended_at": null, "is_running": null, "status": "ready", "protocols": [77]}
+                """.utf8)
+                return (HTTPURLResponse(url: request.url!, statusCode: 201, httpVersion: nil, headerFields: nil)!, json)
+            } else {
+                let json = Data("""
+                {"id": 100, "session": 9, "step": 10, "annotation": 55,
+                 "annotation_text": "Gloves are on.", "annotation_type": "text", "order": 0}
+                """.utf8)
+                return (HTTPURLResponse(url: request.url!, statusCode: 201, httpVersion: nil, headerFields: nil)!, json)
+            }
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedProtocol.self, CachedProtocolSection.self, CachedProtocolStep.self, CachedSession.self, CachedStepAnnotation.self, OutboxEntry.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let protocolSync = ProtocolSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let sessionSync = SessionSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let stepReagentSync = StepReagentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let stepAnnotationSync = StepAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let inventorySync = InventorySyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let instrumentSync = InstrumentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync)
+
+        let context = ModelContext(container)
+        let localProtocol = CachedProtocol(protocolTitle: "Sample Prep", protocolDescription: nil, enabled: false, isLocallyAuthored: true)
+        context.insert(localProtocol)
+        let localSession = CachedSession(name: "Run 1", enabled: true, isRunning: true, status: "running", primaryProtocolClientID: localProtocol.clientID)
+        context.insert(localSession)
+        let localStep = CachedProtocolStep(serverID: 10, stepDescription: "Put on gloves", order: 0)
+        context.insert(localStep)
+        let localAnnotation = CachedStepAnnotation(sessionClientID: localSession.clientID, stepClientID: localStep.clientID, annotationText: "Gloves are on.", annotationType: "text", order: 0)
+        context.insert(localAnnotation)
+        try context.save()
+
+        // Enqueued in creation order: protocol, then session (depends on it), then the
+        // annotation (depends on the session — the step is already synced in this test).
+        try await outbox.enqueueCreateProtocol(clientID: localProtocol.clientID, title: "Sample Prep", description: nil, enabled: false)
+        try await outbox.enqueueCreateSession(clientID: localSession.clientID)
+        try await outbox.enqueueCreateTextAnnotation(clientID: localAnnotation.clientID)
+        await outbox.replayPending()
+
+        let annotations = try context.fetch(FetchDescriptor<CachedStepAnnotation>())
+        #expect(annotations.count == 1, "replay should attach a serverID to the existing local annotation, not insert a duplicate")
+        #expect(annotations.first?.serverID == 100)
+
+        #expect(try context.fetch(FetchDescriptor<OutboxEntry>()).isEmpty)
+    }
+
+    @Test("OutboxService retries (not fails) a text annotation queued before its session has synced")
+    func outboxReplayRetriesTextAnnotationWhoseSessionIsntSyncedYet() async throws {
+        StubURLProtocol.handler = { _ in
+            throw URLError(.notConnectedToInternet)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedProtocol.self, CachedProtocolSection.self, CachedProtocolStep.self, CachedSession.self, CachedStepAnnotation.self, OutboxEntry.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let protocolSync = ProtocolSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let sessionSync = SessionSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let stepReagentSync = StepReagentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let stepAnnotationSync = StepAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let inventorySync = InventorySyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let instrumentSync = InstrumentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync)
+
+        let context = ModelContext(container)
+        let localSession = CachedSession(name: "Run 1", enabled: true, isRunning: true, status: "running")
+        context.insert(localSession)
+        let localStep = CachedProtocolStep(serverID: 10, stepDescription: "Put on gloves", order: 0)
+        context.insert(localStep)
+        let localAnnotation = CachedStepAnnotation(sessionClientID: localSession.clientID, stepClientID: localStep.clientID, annotationText: "Gloves are on.", annotationType: "text", order: 0)
+        context.insert(localAnnotation)
+        try context.save()
+
+        try await outbox.enqueueCreateTextAnnotation(clientID: localAnnotation.clientID)
+        await outbox.replayPending()
+
+        let entries = try context.fetch(FetchDescriptor<OutboxEntry>())
+        #expect(entries.count == 1, "an unmet parent dependency should retry, not be dropped or marked failed")
+        #expect(entries.first?.status == OutboxEntryStatus.pending.rawValue)
+        #expect(entries.first?.retryCount == 1)
+
+        let annotations = try context.fetch(FetchDescriptor<CachedStepAnnotation>())
+        #expect(annotations.first?.serverID == nil)
+    }
+
+    @Test("OutboxService replays a stored reagent once its reagent and storage object have synced")
+    func outboxReplayResolvesStoredReagent() async throws {
+        StubURLProtocol.handler = { request in
+            let json = Data("""
+            {"id": 30, "reagent": 3, "reagent_name": "NaCl", "reagent_unit": "g",
+             "storage_object": 5, "storage_object_name": "Fridge A", "quantity": 100.0,
+             "current_quantity": 100.0, "barcode": null, "expiration_date": null, "low_stock_threshold": null}
+            """.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 201, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedStorageObject.self, CachedReagent.self, CachedStoredReagent.self, OutboxEntry.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let inventorySync = InventorySyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let protocolSync = ProtocolSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let sessionSync = SessionSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let stepReagentSync = StepReagentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let stepAnnotationSync = StepAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let instrumentSync = InstrumentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync)
+
+        let context = ModelContext(container)
+        let localStoredReagent = CachedStoredReagent(reagentServerID: 3, reagentName: "NaCl", reagentUnit: "g", storageObjectServerID: 5, storageObjectName: "Fridge A", quantity: 100.0, currentQuantity: 100.0)
+        context.insert(localStoredReagent)
+        try context.save()
+
+        try await outbox.enqueueCreateStoredReagent(clientID: localStoredReagent.clientID)
+        await outbox.replayPending()
+
+        let storedReagents = try context.fetch(FetchDescriptor<CachedStoredReagent>())
+        #expect(storedReagents.count == 1, "replay should attach a serverID to the existing local record, not insert a duplicate")
+        #expect(storedReagents.first?.serverID == 30)
+        #expect(try context.fetch(FetchDescriptor<OutboxEntry>()).isEmpty)
+    }
+
+    @Test("OutboxService retries (not fails) a stored reagent queued before its reagent has synced")
+    func outboxReplayRetriesStoredReagentWhoseReagentIsntSyncedYet() async throws {
+        StubURLProtocol.handler = { _ in
+            throw URLError(.notConnectedToInternet)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedStorageObject.self, CachedReagent.self, CachedStoredReagent.self, OutboxEntry.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let inventorySync = InventorySyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let protocolSync = ProtocolSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let sessionSync = SessionSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let stepReagentSync = StepReagentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let stepAnnotationSync = StepAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let instrumentSync = InstrumentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync)
+
+        let context = ModelContext(container)
+        // No reagentServerID/storageObjectServerID set — the not-yet-synced case.
+        let localStoredReagent = CachedStoredReagent(reagentName: "NaCl", reagentUnit: "g", storageObjectName: "Fridge A", quantity: 100.0, currentQuantity: 100.0)
+        context.insert(localStoredReagent)
+        try context.save()
+
+        try await outbox.enqueueCreateStoredReagent(clientID: localStoredReagent.clientID)
+        await outbox.replayPending()
+
+        let entries = try context.fetch(FetchDescriptor<OutboxEntry>())
+        #expect(entries.count == 1, "an unmet parent dependency should retry, not be dropped or marked failed")
+        #expect(entries.first?.status == OutboxEntryStatus.pending.rawValue)
+        #expect(entries.first?.retryCount == 1)
+    }
+
+    @Test("OutboxService replays a reagent action once its stored reagent has synced")
+    func outboxReplayResolvesReagentAction() async throws {
+        StubURLProtocol.handler = { request in
+            let json = Data("""
+            {"id": 55, "reagent": 30, "action_type": "add", "quantity": 10.0, "notes": null}
+            """.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 201, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedStoredReagent.self, CachedReagentAction.self, OutboxEntry.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let inventorySync = InventorySyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let protocolSync = ProtocolSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let sessionSync = SessionSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let stepReagentSync = StepReagentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let stepAnnotationSync = StepAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let instrumentSync = InstrumentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync)
+
+        let context = ModelContext(container)
+        let localStoredReagent = CachedStoredReagent(serverID: 30, quantity: 100.0, currentQuantity: 100.0)
+        context.insert(localStoredReagent)
+        let localAction = CachedReagentAction(storedReagentClientID: localStoredReagent.clientID, actionType: "add", quantity: 10.0)
+        context.insert(localAction)
+        try context.save()
+
+        try await outbox.enqueueCreateReagentAction(clientID: localAction.clientID)
+        await outbox.replayPending()
+
+        let actions = try context.fetch(FetchDescriptor<CachedReagentAction>())
+        #expect(actions.count == 1)
+        #expect(actions.first?.serverID == 55)
+        #expect(try context.fetch(FetchDescriptor<OutboxEntry>()).isEmpty)
+    }
+
+    @Test("OutboxService retries (not fails) a reagent action queued before its stored reagent has synced")
+    func outboxReplayRetriesReagentActionWhoseParentIsntSyncedYet() async throws {
+        StubURLProtocol.handler = { _ in
+            throw URLError(.notConnectedToInternet)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedStoredReagent.self, CachedReagentAction.self, OutboxEntry.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let inventorySync = InventorySyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let protocolSync = ProtocolSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let sessionSync = SessionSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let stepReagentSync = StepReagentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let stepAnnotationSync = StepAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let instrumentSync = InstrumentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync)
+
+        let context = ModelContext(container)
+        let localStoredReagent = CachedStoredReagent(quantity: 100.0, currentQuantity: 100.0)
+        context.insert(localStoredReagent)
+        let localAction = CachedReagentAction(storedReagentClientID: localStoredReagent.clientID, actionType: "add", quantity: 10.0)
+        context.insert(localAction)
+        try context.save()
+
+        try await outbox.enqueueCreateReagentAction(clientID: localAction.clientID)
+        await outbox.replayPending()
+
+        let entries = try context.fetch(FetchDescriptor<OutboxEntry>())
+        #expect(entries.count == 1, "an unmet parent dependency should retry, not be dropped or marked failed")
+        #expect(entries.first?.retryCount == 1)
+    }
+
+    @Test("OutboxService replays an instrument usage booking")
+    func outboxReplayResolvesInstrumentUsage() async throws {
+        StubURLProtocol.handler = { request in
+            let json = Data("""
+            {"id": 8, "instrument": 4, "instrument_name": "Centrifuge", "time_started": "2026-01-01T10:00:00Z",
+             "time_ended": null, "usage_hours": null, "description": "Spin down", "approved": false, "maintenance": false}
+            """.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 201, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedInstrument.self, CachedInstrumentUsage.self, OutboxEntry.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let instrumentSync = InstrumentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let protocolSync = ProtocolSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let sessionSync = SessionSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let stepReagentSync = StepReagentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let stepAnnotationSync = StepAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let inventorySync = InventorySyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync)
+
+        let context = ModelContext(container)
+        let localUsage = CachedInstrumentUsage(instrumentServerID: 4, instrumentName: "Centrifuge", timeStarted: "2026-01-01T10:00:00Z", usageDescription: "Spin down", approved: false, maintenance: false)
+        context.insert(localUsage)
+        try context.save()
+
+        try await outbox.enqueueCreateInstrumentUsage(clientID: localUsage.clientID)
+        await outbox.replayPending()
+
+        let usages = try context.fetch(FetchDescriptor<CachedInstrumentUsage>())
+        #expect(usages.count == 1, "replay should attach a serverID to the existing local record, not insert a duplicate")
+        #expect(usages.first?.serverID == 8)
+        #expect(try context.fetch(FetchDescriptor<OutboxEntry>()).isEmpty)
     }
 }

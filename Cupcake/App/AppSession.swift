@@ -137,15 +137,28 @@ final class AppSession {
         let client = apiClient ?? APIClient(baseURL: Self.placeholderBaseURL)
         let tokenSnapshot = deviceToken
         let protocolSync = ProtocolSyncService(modelContainer: modelContainer, apiClient: client, deviceToken: { tokenSnapshot })
+        let sessionSync = SessionSyncService(modelContainer: modelContainer, apiClient: client, deviceToken: { tokenSnapshot })
+        let stepReagentSync = StepReagentSyncService(modelContainer: modelContainer, apiClient: client, deviceToken: { tokenSnapshot })
+        let stepAnnotationSync = StepAnnotationSyncService(modelContainer: modelContainer, apiClient: client, deviceToken: { tokenSnapshot })
+        let inventorySync = InventorySyncService(modelContainer: modelContainer, apiClient: client, deviceToken: { tokenSnapshot })
+        let instrumentSync = InstrumentSyncService(modelContainer: modelContainer, apiClient: client, deviceToken: { tokenSnapshot })
         return SyncServices(
             protocolSync: protocolSync,
-            sessionSync: SessionSyncService(modelContainer: modelContainer, apiClient: client, deviceToken: { tokenSnapshot }),
-            stepAnnotationSync: StepAnnotationSyncService(modelContainer: modelContainer, apiClient: client, deviceToken: { tokenSnapshot }),
+            sessionSync: sessionSync,
+            stepAnnotationSync: stepAnnotationSync,
             sessionAnnotationSync: SessionAnnotationSyncService(modelContainer: modelContainer, apiClient: client, deviceToken: { tokenSnapshot }),
-            inventorySync: InventorySyncService(modelContainer: modelContainer, apiClient: client, deviceToken: { tokenSnapshot }),
-            instrumentSync: InstrumentSyncService(modelContainer: modelContainer, apiClient: client, deviceToken: { tokenSnapshot }),
-            stepReagentSync: StepReagentSyncService(modelContainer: modelContainer, apiClient: client, deviceToken: { tokenSnapshot }),
-            outboxSync: OutboxService(modelContainer: modelContainer, protocolSync: protocolSync)
+            inventorySync: inventorySync,
+            instrumentSync: instrumentSync,
+            stepReagentSync: stepReagentSync,
+            outboxSync: OutboxService(
+                modelContainer: modelContainer,
+                protocolSync: protocolSync,
+                sessionSync: sessionSync,
+                stepReagentSync: stepReagentSync,
+                stepAnnotationSync: stepAnnotationSync,
+                inventorySync: inventorySync,
+                instrumentSync: instrumentSync
+            )
         )
     }
 

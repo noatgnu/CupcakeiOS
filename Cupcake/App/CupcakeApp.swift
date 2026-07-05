@@ -22,6 +22,28 @@ struct CupcakeApp: App {
         let store = Self.makeCupcakeStore(inMemoryOnly: isUITesting)
         cupcakeStore = store
         _appSession = State(initialValue: AppSession(modelContainer: store))
+
+        // `CachedStorageObject`/`CachedInstrument` are read-only server data (never
+        // offline-createable) — in standalone mode there's genuinely no way to reach the
+        // Storage/Instruments create flows without this, since neither the location nor the
+        // instrument itself can ever be created locally. Seeds one fake "already synced" record
+        // of each so the UI test suite can exercise `AddStoredReagentSheet`/`BookInstrumentSheet`
+        // without a live backend.
+        if ProcessInfo.processInfo.arguments.contains("--ui-testing-seed-storage-instrument") {
+            let context = ModelContext(store)
+            let location = CachedStorageObject(serverID: 9001, objectType: "shelf", objectName: "Test Shelf")
+            context.insert(location)
+            let instrument = CachedInstrument(
+                serverID: 9002,
+                instrumentName: "Test Centrifuge",
+                enabled: true,
+                acceptsBookings: true,
+                allowOverlappingBookings: false,
+                maintenanceOverdue: false
+            )
+            context.insert(instrument)
+            try? context.save()
+        }
     }
 
     var body: some Scene {
@@ -47,6 +69,7 @@ struct CupcakeApp: App {
             CachedReagent.self,
             CachedStepReagent.self,
             CachedStoredReagent.self,
+            CachedReagentAction.self,
             CachedInstrument.self,
             CachedInstrumentUsage.self,
             OutboxEntry.self,

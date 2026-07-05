@@ -5,12 +5,11 @@
 
 import SwiftUI
 
-/// Switches between the login screen and the main Protocols/Sessions tabs based on whether a
-/// `DeviceToken` is on hand (or standalone mode is active). Matches the reference web app's own
-/// nav structure (`protocols-navbar.html`): Protocols and Sessions are separate top-level
-/// destinations — session browsing is not nested inside protocol editing, since a session isn't
-/// scoped to "the protocol you happened to start it from" (multiple independent sessions can
-/// exist per protocol, and the only way back to one you've navigated away from is this list).
+/// Switches between the login screen and the main tabs based on whether a `DeviceToken` is on
+/// hand (or standalone mode is active). Protocols/Sessions match the reference web app's own nav
+/// structure (`protocols-navbar.html`): separate top-level destinations, not nested inside one
+/// another. Storage and Instruments are read-only lookup/browsing screens — sync infrastructure
+/// for both existed well before any UI did, a gap independent of the Protocols/Sessions work.
 struct RootNavigationView: View {
     @Environment(AppSession.self) private var appSession
 
@@ -21,6 +20,12 @@ struct RootNavigationView: View {
                     .tabItem { Label("Protocols", systemImage: "list.bullet.clipboard") }
                 SessionListView()
                     .tabItem { Label("Sessions", systemImage: "clock") }
+                NavigationStack {
+                    StorageListView(parentServerID: nil)
+                }
+                .tabItem { Label("Storage", systemImage: "shippingbox") }
+                InstrumentListView()
+                    .tabItem { Label("Instruments", systemImage: "wrench.and.screwdriver") }
             }
         } else {
             NavigationStack {

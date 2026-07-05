@@ -25,3 +25,26 @@ public struct InstrumentUsageDTO: Decodable, Sendable {
     public let approved: Bool
     public let maintenance: Bool
 }
+
+/// `POST instrument-usage/` body. Field set verified against `InstrumentUsageSerializer`
+/// (`ccm/serializers.py:418-453`) and the reference web app's `instrument-usage-modal.ts`, which
+/// only ever collects `timeStarted`/`timeEnded`/`description`/`maintenance` — `approved` is
+/// deliberately never sent by this app (it's technically writable server-side and defaults to
+/// `false` only when omitted, but a client claiming its own booking is pre-approved would be
+/// wrong to do even though the backend doesn't stop it — see `InstrumentSyncService`'s doc
+/// comment). Both timestamps are ISO 8601 strings; `timeEnded` is nil for an in-progress booking.
+public struct CreateInstrumentUsageRequest: Encodable, Sendable {
+    public var instrument: Int64
+    public var timeStarted: String
+    public var timeEnded: String?
+    public var description: String
+    public var maintenance: Bool
+
+    public init(instrument: Int64, timeStarted: String, timeEnded: String?, description: String, maintenance: Bool) {
+        self.instrument = instrument
+        self.timeStarted = timeStarted
+        self.timeEnded = timeEnded
+        self.description = description
+        self.maintenance = maintenance
+    }
+}

@@ -137,6 +137,121 @@ final class CupcakeOfflineFlowUITests: XCTestCase {
         XCTAssertTrue(savedAnnotation.waitForExistence(timeout: 5), "The locally-created annotation should appear without any network access")
     }
 
+    /// Storage/Instruments are read-only lookup tabs — in standalone mode there's no server to
+    /// sync from, so both should render their empty state cleanly rather than crash or show
+    /// nothing at all.
+    @MainActor
+    func testStorageAndInstrumentTabsShowEmptyState() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing-reset-state"]
+        app.launch()
+
+        let continueOfflineButton = app.buttons["continueOfflineButton"]
+        XCTAssertTrue(continueOfflineButton.waitForExistence(timeout: 5))
+        continueOfflineButton.tap()
+
+        // On macOS, TabView items render as RadioButtons in a "Navigation Tab Bar" RadioGroup
+        // (confirmed via the accessibility dump), not as plain Buttons the way iOS exposes them.
+        let storageTab = firstExisting(app.tabBars.buttons["Storage"], app.buttons["Storage"], app.radioButtons["Storage"])
+        XCTAssertTrue(storageTab.waitForExistence(timeout: 5), "Storage tab should exist")
+        storageTab.tap()
+        XCTAssertTrue(app.staticTexts["Empty"].waitForExistence(timeout: 5), "Storage tab should show its empty state with no synced data")
+
+        let instrumentsTab = firstExisting(app.tabBars.buttons["Instruments"], app.buttons["Instruments"], app.radioButtons["Instruments"])
+        XCTAssertTrue(instrumentsTab.waitForExistence(timeout: 5), "Instruments tab should exist")
+        instrumentsTab.tap()
+        XCTAssertTrue(app.staticTexts["No Instruments"].waitForExistence(timeout: 5), "Instruments tab should show its empty state with no synced data")
+    }
+
+    /// `CachedStorageObject`/`CachedInstrument` are read-only server data (never
+    /// offline-createable), so exercising `AddStoredReagentSheet`/`BookInstrumentSheet` in
+    /// standalone mode needs a fake "already synced" location/instrument seeded ahead of time —
+    /// see `--ui-testing-seed-storage-instrument` in `CupcakeApp.init()`.
+    @MainActor
+    func testAddStoredReagentAndBookInstrumentOffline() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing-reset-state", "--ui-testing-seed-storage-instrument"]
+        app.launch()
+
+        let continueOfflineButton = app.buttons["continueOfflineButton"]
+        XCTAssertTrue(continueOfflineButton.waitForExistence(timeout: 5))
+        continueOfflineButton.tap()
+
+        // 1. Drill into the seeded storage location and add a reagent.
+        let storageTab = firstExisting(app.tabBars.buttons["Storage"], app.buttons["Storage"], app.radioButtons["Storage"])
+        XCTAssertTrue(storageTab.waitForExistence(timeout: 5))
+        storageTab.tap()
+
+        // NavigationLink rows can expose as a single Button (macOS) or nested StaticTexts (iOS)
+        // depending on their content — matches the earlier tab-bar discovery, same reasoning.
+        let shelfRow = firstExisting(app.staticTexts["Test Shelf"], app.buttons["Test Shelf"])
+        XCTAssertTrue(shelfRow.waitForExistence(timeout: 5))
+        shelfRow.tap()
+
+        tapToolbarButton("addStoredReagentButton", label: "Add Reagent", in: app)
+
+        let reagentNameField = app.textFields["newStoredReagentNameField"]
+        XCTAssertTrue(reagentNameField.waitForExistence(timeout: 5))
+        reagentNameField.tap()
+        reagentNameField.typeText("NaCl")
+
+        selectPickerOption("newStoredReagentUnitPicker", option: "g", in: app)
+
+        let quantityField = app.textFields["newStoredReagentQuantityField"]
+        quantityField.tap()
+        quantityField.typeText("500")
+
+        app.buttons["saveStoredReagentButton"].tap()
+
+        // A NavigationLink row's multi-line VStack collapses into one comma-joined accessibility
+        // label on macOS (confirmed via the accessibility dump: "NaCl, 500 g", not just "NaCl"),
+        // so match by substring rather than an exact label.
+        let reagentRow = elementContaining("NaCl", in: app)
+        XCTAssertTrue(reagentRow.waitForExistence(timeout: 5), "The newly-added reagent should appear in the location's list")
+
+        // 2. Open it and record a "reserve" action against it.
+        reagentRow.tap()
+
+        app.buttons["recordActionButton"].tap()
+
+        // `.pickerStyle(.segmented)` exposes as a RadioGroup of RadioButtons on macOS, and as
+        // plain Buttons in an OtherElement group on iOS — neither matches the menu-style
+        // `selectPickerOption` helper (which expects a PopUpButton/pushed list), so select the
+        // segment directly instead.
+        let reserveSegment = firstExisting(app.radioButtons["Reserve"], app.buttons["Reserve"])
+        XCTAssertTrue(reserveSegment.waitForExistence(timeout: 5), "\"Reserve\" segment not found")
+        reserveSegment.tap()
+
+        let actionQuantityField = app.textFields["reagentActionQuantityField"]
+        XCTAssertTrue(actionQuantityField.waitForExistence(timeout: 5))
+        actionQuantityField.tap()
+        actionQuantityField.typeText("50")
+
+        app.buttons["saveReagentActionButton"].tap()
+
+        XCTAssertTrue(elementContaining("Reserve 50", in: app).waitForExistence(timeout: 5), "The recorded action should appear in the reagent's history")
+        XCTAssertTrue(elementContaining("450", in: app).waitForExistence(timeout: 5), "Current Quantity should reflect the reserve action immediately, offline")
+
+        // 3. Book the seeded instrument.
+        let instrumentsTab = firstExisting(app.tabBars.buttons["Instruments"], app.buttons["Instruments"], app.radioButtons["Instruments"])
+        instrumentsTab.tap()
+
+        let instrumentRow = elementContaining("Test Centrifuge", in: app)
+        XCTAssertTrue(instrumentRow.waitForExistence(timeout: 5))
+        instrumentRow.tap()
+
+        tapToolbarButton("bookInstrumentButton", label: "Book", in: app)
+
+        let descriptionField = app.textFields["bookingDescriptionField"]
+        XCTAssertTrue(descriptionField.waitForExistence(timeout: 5))
+        descriptionField.tap()
+        descriptionField.typeText("Spin down samples")
+
+        app.buttons["saveBookingButton"].tap()
+
+        XCTAssertTrue(app.staticTexts["Spin down samples"].waitForExistence(timeout: 5), "The newly-created booking should appear in the instrument's Bookings section")
+    }
+
     /// Selects an option from a SwiftUI `Picker` in a `Form` — on iOS this pushes a new list
     /// screen (tapping an option auto-pops back); on macOS it opens a pull-down menu.
     @MainActor
@@ -155,6 +270,17 @@ final class CupcakeOfflineFlowUITests: XCTestCase {
             return candidate
         }
         return candidates[0]
+    }
+
+    /// A multi-`Text` `VStack` inside a `NavigationLink` row collapses into one comma-joined
+    /// accessibility label on macOS (confirmed via the accessibility dump: a row showing
+    /// "NaCl" + "500 g" on two lines exposes as a single Button labeled "NaCl, 500 g") — matches
+    /// by substring across both `staticTexts` and `buttons`, since which element type wins
+    /// depends on the row's exact content and isn't worth predicting up front. Also checks
+    /// `value`, not just `label` — a plain `Text` exposes its content via AX `value`.
+    private func elementContaining(_ substring: String, in app: XCUIApplication) -> XCUIElement {
+        let predicate = NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", substring, substring)
+        return firstExisting(app.staticTexts.matching(predicate).firstMatch, app.buttons.matching(predicate).firstMatch)
     }
 
     /// Selects all existing text in a field and replaces it — used for renaming a

@@ -28,6 +28,14 @@ public final class OutboxEntry {
     public var retryCount: Int
     public var lastError: String?
     public var createdAt: Date
+    /// Strict FIFO replay order — assigned by `OutboxStore.enqueue` as one-past-the-current-max,
+    /// **not** derived from `createdAt`. Two entries created in rapid succession (e.g. a section
+    /// added immediately after its just-created parent protocol) can land on the exact same
+    /// `Date()` tick, which would make `sortBy: [SortDescriptor(\.createdAt)]` order them
+    /// arbitrarily — and a section replayed before its protocol would spuriously hit
+    /// `ProtocolSyncError.parentNotSynced` on its first attempt. `sequence` is guaranteed
+    /// strictly increasing regardless of clock resolution.
+    public var sequence: Int
 
     public init(
         id: UUID = UUID(),
@@ -37,7 +45,8 @@ public final class OutboxEntry {
         status: String = OutboxEntryStatus.pending.rawValue,
         retryCount: Int = 0,
         lastError: String? = nil,
-        createdAt: Date = Date()
+        createdAt: Date = Date(),
+        sequence: Int = 0
     ) {
         self.id = id
         self.operationType = operationType
@@ -47,6 +56,7 @@ public final class OutboxEntry {
         self.retryCount = retryCount
         self.lastError = lastError
         self.createdAt = createdAt
+        self.sequence = sequence
     }
 }
 
@@ -55,11 +65,17 @@ public enum OutboxEntryStatus: String, Sendable {
     case failed
 }
 
-/// One case per outbox-eligible create operation. Only `createProtocol` is wired up to actually
-/// replay yet (see `OutboxService`'s doc comment) — the others are listed here so the pattern is
-/// visible for whoever extends it next, not because they're implemented.
+/// One case per outbox-eligible create operation.
 public enum OutboxOperationType: String, Sendable {
     case createProtocol
+    case createSection
+    case createStep
+    case createSession
+    case createStepReagent
+    case createTextAnnotation
+    case createStoredReagent
+    case createReagentAction
+    case createInstrumentUsage
 }
 
 /// `OutboxEntry.payloadJSON` for `OutboxOperationType.createProtocol` — a plain `Codable` twin of
@@ -77,4 +93,14 @@ public struct CreateProtocolPayload: Codable, Sendable {
         self.description = description
         self.enabled = enabled
     }
+}
+
+/// `OutboxEntry.payloadJSON` for operations that need no field snapshot at all —
+/// `.createSection`/`.createStep`/`.createSession`. `relatedClientID` alone is enough to look the
+/// local record back up at replay time and read its *current* fields (and, crucially, its
+/// parent's now-possibly-synced `serverID`) directly, since those can change between enqueue and
+/// replay in ways a frozen snapshot wouldn't reflect. Still a distinct, named type (rather than
+/// no payload at all) so the pattern reads the same as every other operation's.
+public struct EmptyOutboxPayload: Codable, Sendable {
+    public init() {}
 }

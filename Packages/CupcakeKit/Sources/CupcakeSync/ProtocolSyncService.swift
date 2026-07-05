@@ -55,32 +55,50 @@ public actor ProtocolSyncService {
         return dto.id
     }
 
+    /// Same "sync the existing local record in place" shape as `syncLocallyCreatedProtocol`, for
+    /// a section. If the parent protocol hasn't synced yet (queued in the outbox behind it, or
+    /// simply hasn't been attempted yet), throws `SyncDependencyError.parentNotSynced` —
+    /// `OutboxService` treats that the same as a connectivity failure (retry later), not a
+    /// terminal error, since it's purely an ordering issue that resolves itself once the
+    /// protocol's own entry replays.
     @discardableResult
-    public func createSection(protocolServerID: Int64, description: String?, duration: Int?, order: Int) async throws -> UUID {
+    public func syncLocallyCreatedSection(clientID: UUID) async throws -> Int64 {
         guard let token = deviceToken() else {
             throw ProtocolSyncError.noDeviceToken
+        }
+        let fields = try await store.sectionFields(clientID: clientID)
+        guard let protocolServerID = fields.protocolServerID else {
+            throw SyncDependencyError.parentNotSynced
         }
         let dto: ProtocolSectionDTO = try await apiClient.send(
             "sections/",
             method: .post,
-            body: CreateProtocolSectionRequest(protocolServerID: protocolServerID, sectionDescription: description, sectionDuration: duration, order: order),
+            body: CreateProtocolSectionRequest(protocolServerID: protocolServerID, sectionDescription: fields.description, sectionDuration: fields.duration, order: fields.order),
             authorizationHeader: "DeviceToken \(token)"
         )
-        return try await store.upsertSingle(dto, protocolServerID: protocolServerID)
+        try await store.attachServerID(sectionClientID: clientID, dto: dto)
+        return dto.id
     }
 
+    /// Same shape again, for a step — needs both its parent protocol's and its own section's
+    /// `serverID`, either of which might not exist yet if they're still queued ahead of it.
     @discardableResult
-    public func createStep(protocolServerID: Int64, sectionServerID: Int64, description: String, duration: Int?, order: Int) async throws -> UUID {
+    public func syncLocallyCreatedStep(clientID: UUID) async throws -> Int64 {
         guard let token = deviceToken() else {
             throw ProtocolSyncError.noDeviceToken
+        }
+        let fields = try await store.stepFields(clientID: clientID)
+        guard let protocolServerID = fields.protocolServerID, let sectionServerID = fields.sectionServerID else {
+            throw SyncDependencyError.parentNotSynced
         }
         let dto: ProtocolStepDTO = try await apiClient.send(
             "steps/",
             method: .post,
-            body: CreateProtocolStepRequest(protocolServerID: protocolServerID, sectionServerID: sectionServerID, stepDescription: description, stepDuration: duration, order: order),
+            body: CreateProtocolStepRequest(protocolServerID: protocolServerID, sectionServerID: sectionServerID, stepDescription: fields.description, stepDuration: fields.duration, order: fields.order),
             authorizationHeader: "DeviceToken \(token)"
         )
-        return try await store.upsertSingle(dto, sectionServerID: sectionServerID)
+        try await store.attachServerID(stepClientID: clientID, dto: dto)
+        return dto.id
     }
 }
 
@@ -130,42 +148,50 @@ actor ProtocolStore {
         try modelContext.save()
     }
 
-    /// The section-creation response doesn't nest its parent protocol — look up the already-cached
-    /// `CachedProtocol` by the server id the caller already knows (it just used it to make the
-    /// request) rather than re-fetching the whole protocol.
-    func upsertSingle(_ dto: ProtocolSectionDTO, protocolServerID: Int64) throws -> UUID {
-        guard let cachedProtocol = try modelContext.fetch(
-            FetchDescriptor<CachedProtocol>(predicate: #Predicate { $0.serverID == protocolServerID })
-        ).first else {
-            throw ProtocolSyncError.protocolNotCached
-        }
-        upsert(dto, into: cachedProtocol)
-        try modelContext.save()
-        let sectionServerID = dto.id
-        guard let cachedSection = try modelContext.fetch(
-            FetchDescriptor<CachedProtocolSection>(predicate: #Predicate { $0.serverID == sectionServerID })
+    func sectionFields(clientID: UUID) throws -> (protocolServerID: Int64?, description: String?, duration: Int?, order: Int) {
+        guard let section = try modelContext.fetch(
+            FetchDescriptor<CachedProtocolSection>(predicate: #Predicate { $0.clientID == clientID })
         ).first else {
             throw ProtocolSyncError.sectionNotCached
         }
-        return cachedSection.clientID
+        return (section.protocolModel?.serverID, section.sectionDescription, section.sectionDuration, section.order)
     }
 
-    /// Same reasoning as the section overload above, but for a step's parent section.
-    func upsertSingle(_ dto: ProtocolStepDTO, sectionServerID: Int64) throws -> UUID {
+    func stepFields(clientID: UUID) throws -> (protocolServerID: Int64?, sectionServerID: Int64?, description: String, duration: Int?, order: Int) {
+        guard let step = try modelContext.fetch(
+            FetchDescriptor<CachedProtocolStep>(predicate: #Predicate { $0.clientID == clientID })
+        ).first else {
+            throw ProtocolSyncError.stepNotCached
+        }
+        return (step.section?.protocolModel?.serverID, step.section?.serverID, step.stepDescription, step.stepDuration, step.order)
+    }
+
+    /// Attaches a newly-assigned `serverID` to the existing local section matched by `clientID`.
+    func attachServerID(sectionClientID: UUID, dto: ProtocolSectionDTO) throws {
         guard let section = try modelContext.fetch(
-            FetchDescriptor<CachedProtocolSection>(predicate: #Predicate { $0.serverID == sectionServerID })
+            FetchDescriptor<CachedProtocolSection>(predicate: #Predicate { $0.clientID == sectionClientID })
         ).first else {
-            throw ProtocolSyncError.stepNotCached
+            throw ProtocolSyncError.sectionNotCached
         }
-        upsert(dto, into: section)
+        section.serverID = dto.id
+        section.sectionDescription = dto.sectionDescription
+        section.sectionDuration = dto.sectionDuration
+        section.order = dto.order
         try modelContext.save()
-        let stepServerID = dto.id
-        guard let cachedStep = try modelContext.fetch(
-            FetchDescriptor<CachedProtocolStep>(predicate: #Predicate { $0.serverID == stepServerID })
+    }
+
+    /// Attaches a newly-assigned `serverID` to the existing local step matched by `clientID`.
+    func attachServerID(stepClientID: UUID, dto: ProtocolStepDTO) throws {
+        guard let step = try modelContext.fetch(
+            FetchDescriptor<CachedProtocolStep>(predicate: #Predicate { $0.clientID == stepClientID })
         ).first else {
             throw ProtocolSyncError.stepNotCached
         }
-        return cachedStep.clientID
+        step.serverID = dto.id
+        step.stepDescription = dto.stepDescription
+        step.stepDuration = dto.stepDuration
+        step.order = dto.order
+        try modelContext.save()
     }
 
     private func upsert(_ dto: ProtocolDTO) {
