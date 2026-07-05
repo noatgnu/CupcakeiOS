@@ -4,14 +4,17 @@
 //
 
 import CupcakeModels
+import CupcakeOntology
 import SwiftData
 import SwiftUI
 
 @main
 struct CupcakeApp: App {
-    // CupcakeOntologyStore (Phase 4's read-only ontology reference data) is a separate
-    // ModelContainer, added once CupcakeOntology has real @Model types to put in it.
     let cupcakeStore: ModelContainer
+    // Independent lifecycle from `cupcakeStore` — read-only after import, safe to blow away/
+    // rebuild per table, no sync/outbox involvement. Scoped to just the Settings tab's subtree
+    // via its own `.modelContainer()` modifier below, not merged into the main store's schema.
+    let cupcakeOntologyStore: ModelContainer
     @State private var appSession: AppSession
 
     init() {
@@ -21,6 +24,7 @@ struct CupcakeApp: App {
         }
         let store = Self.makeCupcakeStore(inMemoryOnly: isUITesting)
         cupcakeStore = store
+        cupcakeOntologyStore = Self.makeOntologyStore(inMemoryOnly: isUITesting)
         _appSession = State(initialValue: AppSession(modelContainer: store))
 
         // `CachedStorageObject`/`CachedInstrument` are read-only server data (never
@@ -48,13 +52,26 @@ struct CupcakeApp: App {
 
     var body: some Scene {
         WindowGroup {
-            RootNavigationView()
+            // The ontology store is only attached to the Settings tab's subtree (inside
+            // `RootNavigationView`, via its own nested `.modelContainer()`), not merged into the
+            // main store's schema — `@Query` resolves against whichever container is nearest in
+            // the view hierarchy, and `ModelContext.container` recovers the raw `ModelContainer`
+            // wherever `OntologyImportService` needs to be constructed from it.
+            RootNavigationView(ontologyStore: cupcakeOntologyStore)
                 .environment(appSession)
         }
         .modelContainer(cupcakeStore)
         #if os(macOS)
         .defaultSize(width: 1200, height: 700)
         #endif
+    }
+
+    private static func makeOntologyStore(inMemoryOnly: Bool) -> ModelContainer {
+        do {
+            return try CupcakeOntologyStore.makeContainer(inMemoryOnly: inMemoryOnly)
+        } catch {
+            fatalError("Could not create CupcakeOntologyStore ModelContainer: \(error)")
+        }
     }
 
     private static func makeCupcakeStore(inMemoryOnly: Bool) -> ModelContainer {
@@ -72,6 +89,8 @@ struct CupcakeApp: App {
             CachedReagentAction.self,
             CachedInstrument.self,
             CachedInstrumentUsage.self,
+            CachedProject.self,
+            CachedInstrumentJob.self,
             OutboxEntry.self,
         ])
         let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: inMemoryOnly)

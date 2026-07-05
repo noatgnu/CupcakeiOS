@@ -1,4 +1,5 @@
 import CupcakeNetworking
+import Foundation
 
 /// The single entry point the app UI calls. Username/password authenticates exactly once,
 /// immediately exchanged for a `write`-permission `DeviceToken` that's used for all REST traffic
@@ -19,6 +20,25 @@ public actor AuthManager {
     @discardableResult
     public func signIn(username: String, password: String, deviceLabel: String) async throws -> DeviceTokenDTO {
         let login = try await authService.login(username: username, password: password)
+        let deviceToken = try await authService.createDeviceToken(
+            accessToken: login.accessToken,
+            label: deviceLabel
+        )
+        try keychain.save(deviceToken.token)
+        return deviceToken
+    }
+
+    /// Where the app should point `ASWebAuthenticationSession` — see `AuthService.orcidLoginURL()`.
+    public nonisolated func orcidLoginURL() -> URL {
+        authService.orcidLoginURL()
+    }
+
+    /// Call once `ASWebAuthenticationSession`'s callback hands back `cupcake://oauth-callback?auth_code=...`
+    /// — same exchange-for-device-token tail as `signIn`, just starting from an ORCID auth code
+    /// instead of a password.
+    @discardableResult
+    public func completeORCIDSignIn(authCode: String, deviceLabel: String) async throws -> DeviceTokenDTO {
+        let login = try await authService.exchangeAuthCode(authCode)
         let deviceToken = try await authService.createDeviceToken(
             accessToken: login.accessToken,
             label: deviceLabel

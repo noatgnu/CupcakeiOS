@@ -20,6 +20,8 @@ struct SyncIssuesView: View {
     @Query private var storedReagents: [CachedStoredReagent]
     @Query private var reagentActions: [CachedReagentAction]
     @Query private var instrumentUsages: [CachedInstrumentUsage]
+    @Query private var jobs: [CachedInstrumentJob]
+    @Query private var jobProjects: [CachedProject]
 
     @State private var isRetrying = false
 
@@ -61,6 +63,12 @@ struct SyncIssuesView: View {
         case .createInstrumentUsage:
             let usage = instrumentUsages.first(where: { $0.clientID == entry.relatedClientID })
             return "Book instrument: \(usage?.instrumentName ?? "…")"
+        case .createProject:
+            let name = jobProjects.first(where: { $0.clientID == entry.relatedClientID })?.projectName ?? "Project"
+            return "Create project: \(name)"
+        case .createInstrumentJob:
+            let name = jobs.first(where: { $0.clientID == entry.relatedClientID })?.jobName ?? "Untitled Job"
+            return "Create job: \(name)"
         }
     }
 

@@ -45,6 +45,17 @@ public struct DeviceTokenCreateRequest: Encodable, Sendable {
     }
 }
 
+/// `POST auth/exchange-code/` request body — trades the short-lived opaque code from the ORCID
+/// callback's redirect for real JWTs. Response shape is identical to `LoginResponse`'s (the
+/// callback's `user` payload has one extra `orcid_id` field, silently ignored by `Decodable`).
+public struct ExchangeAuthCodeRequest: Encodable, Sendable {
+    public var authCode: String
+
+    public init(authCode: String) {
+        self.authCode = authCode
+    }
+}
+
 /// `DeviceToken` as returned by the backend. `createdAt`/`lastUsedAt`/`expiresAt` are kept as
 /// raw strings rather than `Date` — this bootstrap path never needs to display them, and DRF's
 /// exact timestamp format isn't worth committing to here (decode failures on unrelated field

@@ -350,7 +350,9 @@ struct SyncServiceTests {
         let stepAnnotationSync = StepAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
         let inventorySync = InventorySyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
         let instrumentSync = InstrumentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
-        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync)
+        let projectSync = ProjectSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let instrumentJobSync = InstrumentJobSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync, projectSync: projectSync, instrumentJobSync: instrumentJobSync)
 
         let context = ModelContext(container)
         let localProtocol = CachedProtocol(protocolTitle: "Sample Prep", protocolDescription: nil, enabled: false, isLocallyAuthored: true)
@@ -393,7 +395,9 @@ struct SyncServiceTests {
         let stepAnnotationSync = StepAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
         let inventorySync = InventorySyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
         let instrumentSync = InstrumentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
-        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync)
+        let projectSync = ProjectSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let instrumentJobSync = InstrumentJobSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync, projectSync: projectSync, instrumentJobSync: instrumentJobSync)
 
         let context = ModelContext(container)
         let localProtocol = CachedProtocol(protocolTitle: "Sample Prep", protocolDescription: nil, enabled: false, isLocallyAuthored: true)
@@ -431,7 +435,9 @@ struct SyncServiceTests {
         let stepAnnotationSync = StepAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
         let inventorySync = InventorySyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
         let instrumentSync = InstrumentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
-        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync)
+        let projectSync = ProjectSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let instrumentJobSync = InstrumentJobSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync, projectSync: projectSync, instrumentJobSync: instrumentJobSync)
 
         let context = ModelContext(container)
         let localProtocol = CachedProtocol(protocolTitle: "Sample Prep", protocolDescription: nil, enabled: false, isLocallyAuthored: true)
@@ -471,7 +477,9 @@ struct SyncServiceTests {
         let stepAnnotationSync = StepAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
         let inventorySync = InventorySyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
         let instrumentSync = InstrumentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
-        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync)
+        let projectSync = ProjectSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let instrumentJobSync = InstrumentJobSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync, projectSync: projectSync, instrumentJobSync: instrumentJobSync)
 
         let context = ModelContext(container)
         let localProtocol = CachedProtocol(protocolTitle: "Sample Prep", protocolDescription: nil, enabled: false, isLocallyAuthored: true)
@@ -515,7 +523,9 @@ struct SyncServiceTests {
         let stepAnnotationSync = StepAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
         let inventorySync = InventorySyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
         let instrumentSync = InstrumentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
-        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync)
+        let projectSync = ProjectSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let instrumentJobSync = InstrumentJobSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync, projectSync: projectSync, instrumentJobSync: instrumentJobSync)
 
         let context = ModelContext(container)
         let localProtocol = CachedProtocol(protocolTitle: "Sample Prep", protocolDescription: nil, enabled: false, isLocallyAuthored: true)
@@ -549,7 +559,9 @@ struct SyncServiceTests {
         let stepAnnotationSync = StepAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
         let inventorySync = InventorySyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
         let instrumentSync = InstrumentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
-        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync)
+        let projectSync = ProjectSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let instrumentJobSync = InstrumentJobSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync, projectSync: projectSync, instrumentJobSync: instrumentJobSync)
 
         let context = ModelContext(container)
         let localProtocol = CachedProtocol(protocolTitle: "Sample Prep", protocolDescription: nil, enabled: false, isLocallyAuthored: true)
@@ -600,7 +612,9 @@ struct SyncServiceTests {
         let stepAnnotationSync = StepAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
         let inventorySync = InventorySyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
         let instrumentSync = InstrumentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
-        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync)
+        let projectSync = ProjectSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let instrumentJobSync = InstrumentJobSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync, projectSync: projectSync, instrumentJobSync: instrumentJobSync)
 
         let context = ModelContext(container)
         let localStep = CachedProtocolStep(stepDescription: "Mix", order: 0, stepDuration: nil)
@@ -646,7 +660,9 @@ struct SyncServiceTests {
         let stepAnnotationSync = StepAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
         let inventorySync = InventorySyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
         let instrumentSync = InstrumentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
-        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync)
+        let projectSync = ProjectSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let instrumentJobSync = InstrumentJobSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync, projectSync: projectSync, instrumentJobSync: instrumentJobSync)
 
         let context = ModelContext(container)
         let localStep = CachedProtocolStep(stepDescription: "Mix", order: 0, stepDuration: nil)
@@ -700,7 +716,9 @@ struct SyncServiceTests {
         let stepAnnotationSync = StepAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
         let inventorySync = InventorySyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
         let instrumentSync = InstrumentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
-        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync)
+        let projectSync = ProjectSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let instrumentJobSync = InstrumentJobSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync, projectSync: projectSync, instrumentJobSync: instrumentJobSync)
 
         let context = ModelContext(container)
         let localProtocol = CachedProtocol(protocolTitle: "Sample Prep", protocolDescription: nil, enabled: false, isLocallyAuthored: true)
@@ -741,7 +759,9 @@ struct SyncServiceTests {
         let stepAnnotationSync = StepAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
         let inventorySync = InventorySyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
         let instrumentSync = InstrumentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
-        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync)
+        let projectSync = ProjectSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let instrumentJobSync = InstrumentJobSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync, projectSync: projectSync, instrumentJobSync: instrumentJobSync)
 
         let context = ModelContext(container)
         let localSession = CachedSession(name: "Run 1", enabled: true, isRunning: true, status: "running")
@@ -783,7 +803,9 @@ struct SyncServiceTests {
         let stepReagentSync = StepReagentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
         let stepAnnotationSync = StepAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
         let instrumentSync = InstrumentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
-        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync)
+        let projectSync = ProjectSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let instrumentJobSync = InstrumentJobSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync, projectSync: projectSync, instrumentJobSync: instrumentJobSync)
 
         let context = ModelContext(container)
         let localStoredReagent = CachedStoredReagent(reagentServerID: 3, reagentName: "NaCl", reagentUnit: "g", storageObjectServerID: 5, storageObjectName: "Fridge A", quantity: 100.0, currentQuantity: 100.0)
@@ -813,7 +835,9 @@ struct SyncServiceTests {
         let stepReagentSync = StepReagentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
         let stepAnnotationSync = StepAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
         let instrumentSync = InstrumentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
-        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync)
+        let projectSync = ProjectSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let instrumentJobSync = InstrumentJobSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync, projectSync: projectSync, instrumentJobSync: instrumentJobSync)
 
         let context = ModelContext(container)
         // No reagentServerID/storageObjectServerID set — the not-yet-synced case.
@@ -847,7 +871,9 @@ struct SyncServiceTests {
         let stepReagentSync = StepReagentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
         let stepAnnotationSync = StepAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
         let instrumentSync = InstrumentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
-        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync)
+        let projectSync = ProjectSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let instrumentJobSync = InstrumentJobSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync, projectSync: projectSync, instrumentJobSync: instrumentJobSync)
 
         let context = ModelContext(container)
         let localStoredReagent = CachedStoredReagent(serverID: 30, quantity: 100.0, currentQuantity: 100.0)
@@ -879,7 +905,9 @@ struct SyncServiceTests {
         let stepReagentSync = StepReagentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
         let stepAnnotationSync = StepAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
         let instrumentSync = InstrumentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
-        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync)
+        let projectSync = ProjectSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let instrumentJobSync = InstrumentJobSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync, projectSync: projectSync, instrumentJobSync: instrumentJobSync)
 
         let context = ModelContext(container)
         let localStoredReagent = CachedStoredReagent(quantity: 100.0, currentQuantity: 100.0)
@@ -914,7 +942,9 @@ struct SyncServiceTests {
         let stepReagentSync = StepReagentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
         let stepAnnotationSync = StepAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
         let inventorySync = InventorySyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
-        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync)
+        let projectSync = ProjectSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let instrumentJobSync = InstrumentJobSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync, projectSync: projectSync, instrumentJobSync: instrumentJobSync)
 
         let context = ModelContext(container)
         let localUsage = CachedInstrumentUsage(instrumentServerID: 4, instrumentName: "Centrifuge", timeStarted: "2026-01-01T10:00:00Z", usageDescription: "Spin down", approved: false, maintenance: false)
@@ -928,5 +958,120 @@ struct SyncServiceTests {
         #expect(usages.count == 1, "replay should attach a serverID to the existing local record, not insert a duplicate")
         #expect(usages.first?.serverID == 8)
         #expect(try context.fetch(FetchDescriptor<OutboxEntry>()).isEmpty)
+    }
+
+    @Test("OutboxService replays a project then its instrument job in FIFO order, resolving the job's parent dependency")
+    func outboxReplayResolvesInstrumentJobAfterItsProject() async throws {
+        StubURLProtocol.handler = { request in
+            if request.url!.path.hasSuffix("/projects") {
+                let json = Data("""
+                {"id": 12, "project_name": "Proteomics Study", "project_description": null}
+                """.utf8)
+                return (HTTPURLResponse(url: request.url!, statusCode: 201, httpVersion: nil, headerFields: nil)!, json)
+            } else {
+                let json = Data("""
+                {"id": 44, "job_name": "Run 1", "job_type": "analysis", "status": "draft",
+                 "project": 12, "instrument": null, "submitted_at": null, "completed_at": null}
+                """.utf8)
+                return (HTTPURLResponse(url: request.url!, statusCode: 201, httpVersion: nil, headerFields: nil)!, json)
+            }
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedProject.self, CachedInstrumentJob.self, OutboxEntry.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let protocolSync = ProtocolSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let sessionSync = SessionSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let stepReagentSync = StepReagentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let stepAnnotationSync = StepAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let inventorySync = InventorySyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let instrumentSync = InstrumentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let projectSync = ProjectSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let instrumentJobSync = InstrumentJobSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync, projectSync: projectSync, instrumentJobSync: instrumentJobSync)
+
+        let context = ModelContext(container)
+        let localProject = CachedProject(projectName: "Proteomics Study")
+        context.insert(localProject)
+        let localJob = CachedInstrumentJob(jobName: "Run 1", projectClientID: localProject.clientID)
+        context.insert(localJob)
+        try context.save()
+
+        try await outbox.enqueueCreateProject(clientID: localProject.clientID)
+        try await outbox.enqueueCreateInstrumentJob(clientID: localJob.clientID)
+        await outbox.replayPending()
+
+        let projects = try context.fetch(FetchDescriptor<CachedProject>())
+        #expect(projects.first?.serverID == 12)
+
+        let jobs = try context.fetch(FetchDescriptor<CachedInstrumentJob>())
+        #expect(jobs.count == 1, "replay should attach a serverID to the existing local job, not insert a duplicate")
+        #expect(jobs.first?.serverID == 44)
+
+        #expect(try context.fetch(FetchDescriptor<OutboxEntry>()).isEmpty)
+    }
+
+    @Test("OutboxService retries (not fails) an instrument job queued before its project has synced")
+    func outboxReplayRetriesInstrumentJobWhoseProjectIsntSyncedYet() async throws {
+        StubURLProtocol.handler = { _ in
+            throw URLError(.notConnectedToInternet)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedProject.self, CachedInstrumentJob.self, OutboxEntry.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let protocolSync = ProtocolSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let sessionSync = SessionSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let stepReagentSync = StepReagentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let stepAnnotationSync = StepAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let inventorySync = InventorySyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let instrumentSync = InstrumentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let projectSync = ProjectSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let instrumentJobSync = InstrumentJobSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync, projectSync: projectSync, instrumentJobSync: instrumentJobSync)
+
+        let context = ModelContext(container)
+        let localProject = CachedProject(projectName: "Proteomics Study")
+        context.insert(localProject)
+        let localJob = CachedInstrumentJob(jobName: "Run 1", projectClientID: localProject.clientID)
+        context.insert(localJob)
+        try context.save()
+
+        try await outbox.enqueueCreateInstrumentJob(clientID: localJob.clientID)
+        await outbox.replayPending()
+
+        let entries = try context.fetch(FetchDescriptor<OutboxEntry>())
+        #expect(entries.count == 1, "an unmet parent dependency should retry, not be dropped or marked failed")
+        #expect(entries.first?.status == OutboxEntryStatus.pending.rawValue)
+        #expect(entries.first?.retryCount == 1)
+
+        let jobs = try context.fetch(FetchDescriptor<CachedInstrumentJob>())
+        #expect(jobs.first?.serverID == nil)
+    }
+
+    @Test("InstrumentJobSyncService.submit posts to the submit action and updates the cached status")
+    func instrumentJobSubmitUpdatesStatus() async throws {
+        StubURLProtocol.handler = { request in
+            #expect(request.url!.path.hasSuffix("/instrument-jobs/44/submit"))
+            let json = Data("""
+            {"id": 44, "job_name": "Run 1", "job_type": "analysis", "status": "submitted",
+             "project": null, "instrument": null, "submitted_at": "2026-01-01T00:00:00Z", "completed_at": null}
+            """.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedProject.self, CachedInstrumentJob.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let instrumentJobSync = InstrumentJobSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        let context = ModelContext(container)
+        let job = CachedInstrumentJob(serverID: 44, jobName: "Run 1", status: "draft")
+        context.insert(job)
+        try context.save()
+
+        let dto = try await instrumentJobSync.submit(jobServerID: 44)
+        #expect(dto.status == "submitted")
+
+        let jobs = try context.fetch(FetchDescriptor<CachedInstrumentJob>())
+        #expect(jobs.first?.status == "submitted")
+        #expect(jobs.first?.submittedAt != nil)
     }
 }

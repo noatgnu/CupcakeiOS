@@ -126,6 +126,8 @@ struct ProtocolListView: View {
             try await services.inventorySync.refetchReagentActions()
             try await services.instrumentSync.refetchInstruments()
             try await services.instrumentSync.refetchInstrumentUsage()
+            try await services.projectSync.refetchAll()
+            try await services.instrumentJobSync.refetchAll()
         } catch {
             errorMessage = error.localizedDescription
             isShowingError = true

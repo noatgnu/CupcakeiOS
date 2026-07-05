@@ -150,17 +150,83 @@ final class CupcakeOfflineFlowUITests: XCTestCase {
         XCTAssertTrue(continueOfflineButton.waitForExistence(timeout: 5))
         continueOfflineButton.tap()
 
-        // On macOS, TabView items render as RadioButtons in a "Navigation Tab Bar" RadioGroup
-        // (confirmed via the accessibility dump), not as plain Buttons the way iOS exposes them.
-        let storageTab = firstExisting(app.tabBars.buttons["Storage"], app.buttons["Storage"], app.radioButtons["Storage"])
-        XCTAssertTrue(storageTab.waitForExistence(timeout: 5), "Storage tab should exist")
-        storageTab.tap()
+        tapTab("Storage", in: app)
         XCTAssertTrue(app.staticTexts["Empty"].waitForExistence(timeout: 5), "Storage tab should show its empty state with no synced data")
 
-        let instrumentsTab = firstExisting(app.tabBars.buttons["Instruments"], app.buttons["Instruments"], app.radioButtons["Instruments"])
-        XCTAssertTrue(instrumentsTab.waitForExistence(timeout: 5), "Instruments tab should exist")
-        instrumentsTab.tap()
+        tapTab("Instruments", in: app)
         XCTAssertTrue(app.staticTexts["No Instruments"].waitForExistence(timeout: 5), "Instruments tab should show its empty state with no synced data")
+    }
+
+    /// Hits the real, live `noatgnu/cupcake-webgui` GitHub release from inside the actual app
+    /// sandbox — not just the package test target — since network access, temp-file writes, and
+    /// the SQLite C API can all behave differently under the app's entitlements/sandbox than in
+    /// a plain `swift test` process.
+    @MainActor
+    func testOfflineOntologyDataImportsTissueTable() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing-reset-state"]
+        app.launch()
+
+        let continueOfflineButton = app.buttons["continueOfflineButton"]
+        XCTAssertTrue(continueOfflineButton.waitForExistence(timeout: 5))
+        continueOfflineButton.tap()
+
+        tapTab("Settings", in: app)
+
+        let ontologyLink = elementContaining("Offline Ontology Data", in: app)
+        XCTAssertTrue(ontologyLink.waitForExistence(timeout: 5))
+        ontologyLink.tap()
+
+        let tissueImportButton = app.buttons["importOntologyButton_tissue"]
+        XCTAssertTrue(tissueImportButton.waitForExistence(timeout: 15), "The live manifest should load and show a Tissue row")
+        tissueImportButton.tap()
+
+        XCTAssertTrue(elementContaining("Imported", in: app).waitForExistence(timeout: 20), "Tissue import should complete and show an 'Imported' timestamp")
+    }
+
+    /// `submit`/`cancel` require the job to already have a `serverID` (a live-synced job), so
+    /// standalone mode can't exercise those — this covers what standalone mode *can* verify:
+    /// creating a project inline alongside a new job, and both showing up correctly offline.
+    @MainActor
+    func testCreateJobWithNewProjectOffline() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing-reset-state"]
+        app.launch()
+
+        let continueOfflineButton = app.buttons["continueOfflineButton"]
+        XCTAssertTrue(continueOfflineButton.waitForExistence(timeout: 5))
+        continueOfflineButton.tap()
+
+        tapTab("Jobs", in: app)
+
+        tapToolbarButton("newJobButton", label: "New Job", in: app)
+
+        let jobNameField = app.textFields["newJobNameField"]
+        XCTAssertTrue(jobNameField.waitForExistence(timeout: 5))
+        jobNameField.tap()
+        jobNameField.typeText("LC-MS Run 1")
+
+        let createProjectToggle = app.switches["newJobCreateProjectToggle"]
+        XCTAssertTrue(createProjectToggle.waitForExistence(timeout: 5))
+        createProjectToggle.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+
+        let newProjectNameField = app.textFields["newJobNewProjectNameField"]
+        XCTAssertTrue(newProjectNameField.waitForExistence(timeout: 5))
+        newProjectNameField.tap()
+        newProjectNameField.typeText("Proteomics Study")
+
+        app.buttons["createJobButton"].tap()
+
+        let jobRow = elementContaining("LC-MS Run 1", in: app)
+        XCTAssertTrue(jobRow.waitForExistence(timeout: 5), "The newly-created job should appear in the Jobs list")
+        XCTAssertTrue(elementContaining("Proteomics Study", in: app).waitForExistence(timeout: 5), "The job's row should show its new project's name")
+
+        jobRow.tap()
+        XCTAssertTrue(elementContaining("Pending sync", in: app).waitForExistence(timeout: 5), "A standalone-mode job has no serverID, so it should show as pending sync")
+
+        let submitButton = app.buttons["submitJobButton"]
+        XCTAssertTrue(submitButton.waitForExistence(timeout: 5))
+        XCTAssertFalse(submitButton.isEnabled, "Submit should stay disabled until the job has actually synced to the server")
     }
 
     /// `CachedStorageObject`/`CachedInstrument` are read-only server data (never
@@ -281,6 +347,28 @@ final class CupcakeOfflineFlowUITests: XCTestCase {
     private func elementContaining(_ substring: String, in app: XCUIApplication) -> XCUIElement {
         let predicate = NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", substring, substring)
         return firstExisting(app.staticTexts.matching(predicate).firstMatch, app.buttons.matching(predicate).firstMatch)
+    }
+
+    /// Taps a tab by its label, falling back to iOS's "More" overflow tab when there are more
+    /// than 4 tabs (confirmed via the accessibility dump: a 6th tab like "Jobs"/"Settings" pushes
+    /// both into a `TabBar`'s "More" button, exposing the rest in a pushed list) — a different
+    /// overflow mechanism from macOS's toolbar "more toolbar items" popup, and from the
+    /// RadioGroup/Button distinction `firstExisting` already handles for a directly-visible tab.
+    @MainActor
+    private func tapTab(_ label: String, in app: XCUIApplication, timeout: TimeInterval = 5) {
+        let direct = firstExisting(app.tabBars.buttons[label], app.buttons[label], app.radioButtons[label])
+        if direct.waitForExistence(timeout: timeout) {
+            direct.tap()
+            return
+        }
+
+        let more = app.tabBars.buttons["More"]
+        XCTAssertTrue(more.waitForExistence(timeout: timeout), "Neither \"\(label)\" nor a \"More\" tab overflow was found")
+        more.tap()
+
+        let itemInMore = firstExisting(app.staticTexts[label], app.buttons[label], app.cells[label])
+        XCTAssertTrue(itemInMore.waitForExistence(timeout: timeout), "\"\(label)\" was not found inside the tab bar's More list")
+        itemInMore.tap()
     }
 
     /// Selects all existing text in a field and replaces it — used for renaming a

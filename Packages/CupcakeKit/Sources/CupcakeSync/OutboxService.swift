@@ -28,6 +28,8 @@ public actor OutboxService {
     private let stepAnnotationSync: StepAnnotationSyncService
     private let inventorySync: InventorySyncService
     private let instrumentSync: InstrumentSyncService
+    private let projectSync: ProjectSyncService
+    private let instrumentJobSync: InstrumentJobSyncService
     private let store: OutboxStore
 
     public init(
@@ -37,7 +39,9 @@ public actor OutboxService {
         stepReagentSync: StepReagentSyncService,
         stepAnnotationSync: StepAnnotationSyncService,
         inventorySync: InventorySyncService,
-        instrumentSync: InstrumentSyncService
+        instrumentSync: InstrumentSyncService,
+        projectSync: ProjectSyncService,
+        instrumentJobSync: InstrumentJobSyncService
     ) {
         self.protocolSync = protocolSync
         self.sessionSync = sessionSync
@@ -45,6 +49,8 @@ public actor OutboxService {
         self.stepAnnotationSync = stepAnnotationSync
         self.inventorySync = inventorySync
         self.instrumentSync = instrumentSync
+        self.projectSync = projectSync
+        self.instrumentJobSync = instrumentJobSync
         self.store = OutboxStore(modelContainer: modelContainer)
     }
 
@@ -94,6 +100,16 @@ public actor OutboxService {
         try await store.enqueue(OutboxEntry(operationType: OutboxOperationType.createInstrumentUsage.rawValue, payloadJSON: data, relatedClientID: clientID))
     }
 
+    public func enqueueCreateProject(clientID: UUID) async throws {
+        let data = try JSONEncoder().encode(EmptyOutboxPayload())
+        try await store.enqueue(OutboxEntry(operationType: OutboxOperationType.createProject.rawValue, payloadJSON: data, relatedClientID: clientID))
+    }
+
+    public func enqueueCreateInstrumentJob(clientID: UUID) async throws {
+        let data = try JSONEncoder().encode(EmptyOutboxPayload())
+        try await store.enqueue(OutboxEntry(operationType: OutboxOperationType.createInstrumentJob.rawValue, payloadJSON: data, relatedClientID: clientID))
+    }
+
     /// Attempts every pending/failed entry in FIFO (`createdAt`) order. An entry that still
     /// fails due to unreachability (or an unmet ordering dependency, see the type's doc comment)
     /// is left in place with its retry count bumped for next time; one that fails for a real,
@@ -140,6 +156,10 @@ public actor OutboxService {
             try await inventorySync.syncLocallyCreatedReagentAction(clientID: entry.relatedClientID)
         case .createInstrumentUsage:
             try await instrumentSync.syncLocallyCreatedInstrumentUsage(clientID: entry.relatedClientID)
+        case .createProject:
+            try await projectSync.syncLocallyCreatedProject(clientID: entry.relatedClientID)
+        case .createInstrumentJob:
+            try await instrumentJobSync.syncLocallyCreatedInstrumentJob(clientID: entry.relatedClientID)
         }
     }
 }

@@ -76,6 +76,8 @@ public enum OutboxOperationType: String, Sendable {
     case createStoredReagent
     case createReagentAction
     case createInstrumentUsage
+    case createProject
+    case createInstrumentJob
 }
 
 /// `OutboxEntry.payloadJSON` for `OutboxOperationType.createProtocol` — a plain `Codable` twin of

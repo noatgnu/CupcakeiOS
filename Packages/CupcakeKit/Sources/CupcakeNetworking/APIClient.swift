@@ -6,7 +6,9 @@ import Foundation
 /// `Authorization` header value is right for the call (`Bearer <jwt>` during the one-time login/
 /// device-token bootstrap, `DeviceToken <token>` for everything after).
 public actor APIClient {
-    public let baseURL: URL
+    /// Immutable and `Sendable`, so safe to read without `await` — `AuthService.orcidLoginURL()`
+    /// needs this synchronously to build an `ASWebAuthenticationSession` URL.
+    public nonisolated let baseURL: URL
     private let session: URLSession
     private let decoder: JSONDecoder
     private let encoder: JSONEncoder

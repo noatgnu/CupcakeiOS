@@ -35,9 +35,12 @@ let package = Package(
         ),
 
         // GitHub releases manifest fetch, per-table sqlite.gz import, SDRF column list.
+        // Links libsqlite3 explicitly — SwiftPM library targets don't always inherit an app
+        // target's default link set the way `import SQLite3` implicitly does in an Xcode app.
         .target(
             name: "CupcakeOntology",
-            dependencies: ["CupcakeModels"]
+            dependencies: ["CupcakeModels"],
+            linkerSettings: [.linkedLibrary("sqlite3")]
         ),
 
         // Speech/Translation wrappers, WebVTT formatting.

@@ -1,3 +1,4 @@
+import AuthenticationServices
 import CupcakeAuth
 import CupcakeNetworking
 import CupcakeSync
@@ -22,6 +23,8 @@ struct SyncServices {
     /// `stepClientID` by looking up the step's cached `serverID`, which only exists once the
     /// protocol tree has synced.
     let stepReagentSync: StepReagentSyncService
+    let projectSync: ProjectSyncService
+    let instrumentJobSync: InstrumentJobSyncService
     let outboxSync: OutboxService
 }
 
@@ -112,6 +115,63 @@ final class AppSession {
         UserDefaults.standard.set(false, forKey: Self.standaloneDefaultsKey)
     }
 
+    /// Presents ORCID's login page via `ASWebAuthenticationSession`, then completes the same JWT->DeviceToken exchange `signIn` uses.
+    func signInWithORCID(serverURLString: String) async throws {
+        guard let url = URL(string: serverURLString) else {
+            throw AppSessionError.invalidServerURL
+        }
+        configureClient(baseURL: url)
+        guard let authManager else {
+            throw AppSessionError.invalidServerURL
+        }
+
+        let loginURL = authManager.orcidLoginURL()
+        let callbackURL = try await presentORCIDSession(url: loginURL)
+
+        guard
+            let components = URLComponents(url: callbackURL, resolvingAgainstBaseURL: false),
+            let authCode = components.queryItems?.first(where: { $0.name == "auth_code" })?.value
+        else {
+            let errorMessage = URLComponents(url: callbackURL, resolvingAgainstBaseURL: false)?
+                .queryItems?.first(where: { $0.name == "error" })?.value
+            throw AppSessionError.orcidSignInFailed(errorMessage ?? "No auth code returned")
+        }
+
+        try await authManager.completeORCIDSignIn(authCode: authCode, deviceLabel: Self.deviceLabel)
+        UserDefaults.standard.set(serverURLString, forKey: Self.baseURLDefaultsKey)
+        deviceToken = keychain.load()
+        isStandalone = false
+        UserDefaults.standard.set(false, forKey: Self.standaloneDefaultsKey)
+    }
+
+    /// Held strongly so ARC doesn't tear the session down before the user interacts with it.
+    private var activeORCIDSession: ASWebAuthenticationSession?
+    private var activeORCIDContextProvider: ORCIDPresentationContextProvider?
+
+    private func presentORCIDSession(url: URL) async throws -> URL {
+        try await withCheckedThrowingContinuation { continuation in
+            let contextProvider = ORCIDPresentationContextProvider()
+            let session = ASWebAuthenticationSession(url: url, callbackURLScheme: "cupcake") { [weak self] callbackURL, error in
+                self?.activeORCIDSession = nil
+                self?.activeORCIDContextProvider = nil
+                if let callbackURL {
+                    continuation.resume(returning: callbackURL)
+                } else {
+                    continuation.resume(throwing: error ?? AppSessionError.orcidSignInFailed("Cancelled"))
+                }
+            }
+            session.presentationContextProvider = contextProvider
+            activeORCIDSession = session
+            activeORCIDContextProvider = contextProvider
+            let started = session.start()
+            if !started {
+                activeORCIDSession = nil
+                activeORCIDContextProvider = nil
+                continuation.resume(throwing: AppSessionError.orcidSignInFailed("ASWebAuthenticationSession.start() returned false"))
+            }
+        }
+    }
+
     func signOut() async {
         await authManager?.signOut()
         deviceToken = nil
@@ -142,6 +202,8 @@ final class AppSession {
         let stepAnnotationSync = StepAnnotationSyncService(modelContainer: modelContainer, apiClient: client, deviceToken: { tokenSnapshot })
         let inventorySync = InventorySyncService(modelContainer: modelContainer, apiClient: client, deviceToken: { tokenSnapshot })
         let instrumentSync = InstrumentSyncService(modelContainer: modelContainer, apiClient: client, deviceToken: { tokenSnapshot })
+        let projectSync = ProjectSyncService(modelContainer: modelContainer, apiClient: client, deviceToken: { tokenSnapshot })
+        let instrumentJobSync = InstrumentJobSyncService(modelContainer: modelContainer, apiClient: client, deviceToken: { tokenSnapshot })
         return SyncServices(
             protocolSync: protocolSync,
             sessionSync: sessionSync,
@@ -150,6 +212,8 @@ final class AppSession {
             inventorySync: inventorySync,
             instrumentSync: instrumentSync,
             stepReagentSync: stepReagentSync,
+            projectSync: projectSync,
+            instrumentJobSync: instrumentJobSync,
             outboxSync: OutboxService(
                 modelContainer: modelContainer,
                 protocolSync: protocolSync,
@@ -157,7 +221,9 @@ final class AppSession {
                 stepReagentSync: stepReagentSync,
                 stepAnnotationSync: stepAnnotationSync,
                 inventorySync: inventorySync,
-                instrumentSync: instrumentSync
+                instrumentSync: instrumentSync,
+                projectSync: projectSync,
+                instrumentJobSync: instrumentJobSync
             )
         )
     }
@@ -182,6 +248,16 @@ final class AppSession {
     }
 }
 
-enum AppSessionError: Error {
+enum AppSessionError: LocalizedError {
     case invalidServerURL
+    case orcidSignInFailed(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidServerURL:
+            "That server URL doesn't look valid."
+        case .orcidSignInFailed(let reason):
+            reason
+        }
+    }
 }

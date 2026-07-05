@@ -56,6 +56,19 @@ struct LoginView: View {
                 .accessibilityIdentifier("signInButton")
             }
             Section {
+                Button {
+                    signInWithORCID()
+                } label: {
+                    if isSigningIn {
+                        ProgressView()
+                    } else {
+                        Text("Sign in with ORCID")
+                    }
+                }
+                .disabled(isSigningIn || serverURLString.isEmpty)
+                .accessibilityIdentifier("signInWithOrcidButton")
+            }
+            Section {
                 Button("Continue Offline") {
                     appSession.continueOffline()
                 }
@@ -79,6 +92,19 @@ struct LoginView: View {
                 try await appSession.signIn(serverURLString: serverURLString, username: username, password: password)
             } catch {
                 errorMessage = "Sign in failed: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    private func signInWithORCID() {
+        errorMessage = nil
+        isSigningIn = true
+        Task {
+            defer { isSigningIn = false }
+            do {
+                try await appSession.signInWithORCID(serverURLString: serverURLString)
+            } catch {
+                errorMessage = "ORCID sign in failed: \(error.localizedDescription)"
             }
         }
     }
