@@ -28,6 +28,7 @@ struct MetadataValueEditSheet: View {
     @State private var isSaving = false
     @State private var errorMessage: String?
     @State private var isShowingError = false
+    @State private var isShowingFavouritesManagementSheet = false
     @State private var offlineOntologyType: String?
     @State private var offlineCustomFilters: [String: [String: String]]?
 
@@ -132,6 +133,10 @@ struct MetadataValueEditSheet: View {
                     favouritesSection("Global", favourites: globalFavourites) {
                         Task { await addToFavourites(scope: .global) }
                     }
+                    Button("Manage My Favourites…") {
+                        isShowingFavouritesManagementSheet = true
+                    }
+                    .accessibilityIdentifier("manageFavouritesButton")
                 }
                 if !projectHistoryValues.isEmpty {
                     Section("Project History") {
@@ -171,6 +176,11 @@ struct MetadataValueEditSheet: View {
             loadOfflineOntologyConfig()
             await loadFavourites()
             await loadProjectHistory()
+        }
+        .sheet(isPresented: $isShowingFavouritesManagementSheet, onDismiss: {
+            Task { await loadFavourites() }
+        }) {
+            FavouritesManagementSheet()
         }
     }
 

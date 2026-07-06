@@ -1304,6 +1304,32 @@ struct SyncServiceTests {
         #expect(favourites.first?.value == "SN-PERSONAL2")
     }
 
+    @Test("FavouriteMetadataOptionSyncService.fetchPersonalFavourites with no columnName lists every favourite, not scoped to one column")
+    func fetchPersonalFavouritesListsAllWithoutColumnName() async throws {
+        StubURLProtocol.handler = { request in
+            #expect(request.url!.path.hasSuffix("/favourite-options"))
+            #expect(request.url!.query?.contains("user_id=1") == true)
+            #expect(request.url!.query?.contains("name=") != true)
+            let json = Data("""
+            {"count": 2, "next": null, "previous": null, "results": [
+                {"id": 4, "name": "Serial Number", "type": "characteristics", "column_template": null,
+                 "value": "SN-PERSONAL2", "display_value": "SN-PERSONAL2", "user": 1, "user_username": "testuser",
+                 "lab_group": null, "is_global": false},
+                {"id": 5, "name": "Organism", "type": "characteristics", "column_template": null,
+                 "value": "Homo sapiens", "display_value": "Homo sapiens", "user": 1, "user_username": "testuser",
+                 "lab_group": null, "is_global": false}
+            ]}
+            """.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let favouriteSync = FavouriteMetadataOptionSyncService(apiClient: apiClient, deviceToken: { "test-token" })
+
+        let favourites = try await favouriteSync.fetchPersonalFavourites(userID: 1, limit: 100)
+        #expect(favourites.count == 2)
+    }
+
     @Test("FavouriteMetadataOptionSyncService.createFavourite POSTs exactly one scope field per the caller's request")
     func createFavouritePostsScope() async throws {
         StubURLProtocol.handler = { request in
