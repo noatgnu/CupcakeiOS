@@ -1,7 +1,3 @@
-/// Verified against `ccv/models.py:2328-2457` (`BaseMetadataTableTemplate`/`MetadataTableTemplate`)
-/// and `MetadataTableTemplateSerializer` (`ccv/serializers.py:279-310`). Read-only browsing in
-/// this app's v1 slice — column authoring (`add_column`/`remove_column`/etc.) isn't in scope; a
-/// job only ever needs a `template_id` to hand to `create_metadata_from_template`.
 public struct MetadataTableTemplateDTO: Decodable, Sendable {
     public let id: Int64
     public let name: String
@@ -10,4 +6,33 @@ public struct MetadataTableTemplateDTO: Decodable, Sendable {
     public let visibility: String
     public let isDefault: Bool
     public let columnCount: Int
+    public let labGroup: Int64?
+}
+
+public struct CreateMetadataTableTemplateRequest: Encodable, Sendable {
+    public var name: String
+    public var description: String?
+    public var labGroup: Int64?
+    public var visibility: String
+
+    public init(name: String, description: String? = nil, labGroup: Int64? = nil, visibility: String = "private") {
+        self.name = name
+        self.description = description
+        self.labGroup = labGroup
+        self.visibility = visibility
+    }
+}
+
+public struct CreateMetadataTableTemplateFromSchemaRequest: Encodable, Sendable {
+    public var name: String
+    public var schemas: [String]
+    public var description: String?
+    public var labGroup: Int64?
+
+    public init(name: String, schemas: [String], description: String? = nil, labGroup: Int64? = nil) {
+        self.name = name
+        self.schemas = schemas
+        self.description = description
+        self.labGroup = labGroup
+    }
 }

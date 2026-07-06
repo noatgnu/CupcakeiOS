@@ -29,6 +29,8 @@ struct SyncServices {
     let metadataTableTemplateSync: MetadataTableTemplateSyncService
     let instrumentJobAnnotationSync: InstrumentJobAnnotationSyncService
     let metadataColumnSync: MetadataColumnSyncService
+    let metadataColumnTemplateSync: MetadataColumnTemplateSyncService
+    let favouriteMetadataOptionSync: FavouriteMetadataOptionSyncService
     let outboxSync: OutboxService
 }
 
@@ -48,6 +50,7 @@ final class AppSession {
     private(set) var baseURL: URL?
     private(set) var deviceToken: String?
     private(set) var isStandalone: Bool
+    private(set) var currentUserID: Int64?
 
     var isAuthenticated: Bool { deviceToken != nil }
     var canUseApp: Bool { isAuthenticated || isStandalone }
@@ -61,6 +64,7 @@ final class AppSession {
 
     private static let baseURLDefaultsKey = "cupcake.baseURL"
     private static let standaloneDefaultsKey = "cupcake.isStandalone"
+    private static let currentUserIDDefaultsKey = "cupcake.currentUserID"
 
     init(modelContainer: ModelContainer) {
         self.modelContainer = modelContainer
@@ -69,6 +73,9 @@ final class AppSession {
            let url = URL(string: savedURLString) {
             configureClient(baseURL: url)
             deviceToken = keychain.load()
+            if deviceToken != nil, UserDefaults.standard.object(forKey: Self.currentUserIDDefaultsKey) != nil {
+                currentUserID = Int64(UserDefaults.standard.integer(forKey: Self.currentUserIDDefaultsKey))
+            }
         }
         startMonitoringConnectivity()
     }
@@ -112,11 +119,15 @@ final class AppSession {
             throw AppSessionError.invalidServerURL
         }
         configureClient(baseURL: url)
-        try await authManager?.signIn(username: username, password: password, deviceLabel: Self.deviceLabel)
+        let deviceTokenDTO = try await authManager?.signIn(username: username, password: password, deviceLabel: Self.deviceLabel)
         UserDefaults.standard.set(serverURLString, forKey: Self.baseURLDefaultsKey)
         deviceToken = keychain.load()
         isStandalone = false
         UserDefaults.standard.set(false, forKey: Self.standaloneDefaultsKey)
+        if let userID = deviceTokenDTO?.user {
+            currentUserID = Int64(userID)
+            UserDefaults.standard.set(userID, forKey: Self.currentUserIDDefaultsKey)
+        }
     }
 
     /// Presents ORCID's login page via `ASWebAuthenticationSession`, then completes the same JWT->DeviceToken exchange `signIn` uses.
@@ -141,11 +152,13 @@ final class AppSession {
             throw AppSessionError.orcidSignInFailed(errorMessage ?? "No auth code returned")
         }
 
-        try await authManager.completeORCIDSignIn(authCode: authCode, deviceLabel: Self.deviceLabel)
+        let deviceTokenDTO = try await authManager.completeORCIDSignIn(authCode: authCode, deviceLabel: Self.deviceLabel)
         UserDefaults.standard.set(serverURLString, forKey: Self.baseURLDefaultsKey)
         deviceToken = keychain.load()
         isStandalone = false
         UserDefaults.standard.set(false, forKey: Self.standaloneDefaultsKey)
+        currentUserID = Int64(deviceTokenDTO.user)
+        UserDefaults.standard.set(deviceTokenDTO.user, forKey: Self.currentUserIDDefaultsKey)
     }
 
     /// Held strongly so ARC doesn't tear the session down before the user interacts with it.
@@ -179,6 +192,8 @@ final class AppSession {
     func signOut() async {
         await authManager?.signOut()
         deviceToken = nil
+        currentUserID = nil
+        UserDefaults.standard.removeObject(forKey: Self.currentUserIDDefaultsKey)
     }
 
     /// Enters standalone mode: no backend configured, no login, purely local content.
@@ -212,6 +227,8 @@ final class AppSession {
         let metadataTableTemplateSync = MetadataTableTemplateSyncService(modelContainer: modelContainer, apiClient: client, deviceToken: { tokenSnapshot })
         let instrumentJobAnnotationSync = InstrumentJobAnnotationSyncService(modelContainer: modelContainer, apiClient: client, deviceToken: { tokenSnapshot }, instrumentJobSync: instrumentJobSync)
         let metadataColumnSync = MetadataColumnSyncService(modelContainer: modelContainer, apiClient: client, deviceToken: { tokenSnapshot })
+        let metadataColumnTemplateSync = MetadataColumnTemplateSyncService(apiClient: client, deviceToken: { tokenSnapshot })
+        let favouriteMetadataOptionSync = FavouriteMetadataOptionSyncService(apiClient: client, deviceToken: { tokenSnapshot })
         return SyncServices(
             protocolSync: protocolSync,
             sessionSync: sessionSync,
@@ -226,6 +243,8 @@ final class AppSession {
             metadataTableTemplateSync: metadataTableTemplateSync,
             instrumentJobAnnotationSync: instrumentJobAnnotationSync,
             metadataColumnSync: metadataColumnSync,
+            metadataColumnTemplateSync: metadataColumnTemplateSync,
+            favouriteMetadataOptionSync: favouriteMetadataOptionSync,
             outboxSync: OutboxService(
                 modelContainer: modelContainer,
                 protocolSync: protocolSync,

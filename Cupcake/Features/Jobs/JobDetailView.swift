@@ -10,6 +10,7 @@ import SwiftUI
 struct JobDetailView: View {
     @Environment(AppSession.self) private var appSession
     let jobClientID: UUID
+    let ontologyStore: ModelContainer
 
     @Query private var jobs: [CachedInstrumentJob]
     @Query private var projects: [CachedProject]
@@ -28,6 +29,7 @@ struct JobDetailView: View {
     @State private var pendingStaffAssignmentLabGroupServerID: Int64?
     @State private var editingColumn: CachedMetadataColumn?
     @State private var isLoadingBookings = false
+    @State private var isShowingAddColumnSheet = false
 
     private var job: CachedInstrumentJob? {
         jobs.first(where: { $0.clientID == jobClientID })
@@ -46,6 +48,11 @@ struct JobDetailView: View {
     private var projectName: String? {
         guard let projectClientID = job?.projectClientID else { return nil }
         return projects.first(where: { $0.clientID == projectClientID })?.projectName
+    }
+
+    private var projectServerID: Int64? {
+        guard let projectClientID = job?.projectClientID else { return nil }
+        return projects.first(where: { $0.clientID == projectClientID })?.serverID
     }
 
     private var metadataTable: CachedMetadataTable? {
@@ -174,6 +181,15 @@ struct JobDetailView: View {
                             .disabled(column.readonly)
                             .accessibilityIdentifier("metadataColumnRow_\(column.name)")
                         }
+                        .onDelete { offsets in
+                            Task { await removeColumns(at: offsets) }
+                        }
+                        if metadataTable.canEdit {
+                            Button("Add Column") {
+                                isShowingAddColumnSheet = true
+                            }
+                            .accessibilityIdentifier("addMetadataColumnButton")
+                        }
                     } else {
                         Button("Create from Template") {
                             isShowingCreateMetadataSheet = true
@@ -214,7 +230,13 @@ struct JobDetailView: View {
         }
         .sheet(isPresented: $isShowingCreateMetadataSheet) {
             if let job, let serverID = job.serverID {
-                CreateMetadataFromTemplateSheet(jobClientID: job.clientID, jobServerID: serverID, defaultSampleCount: nil)
+                CreateMetadataFromTemplateSheet(
+                    jobClientID: job.clientID,
+                    jobServerID: serverID,
+                    jobLabGroupServerID: job.labGroupServerID,
+                    defaultSampleCount: nil,
+                    ontologyStore: ontologyStore
+                )
             }
         }
         .sheet(isPresented: $isShowingBookInstrumentSheet) {
@@ -233,7 +255,14 @@ struct JobDetailView: View {
             }
         }
         .sheet(item: $editingColumn) { column in
-            MetadataValueEditSheet(column: column)
+            MetadataValueEditSheet(column: column, projectServerID: projectServerID, ontologyStore: ontologyStore)
+        }
+        .sheet(isPresented: $isShowingAddColumnSheet) {
+            if let tableServerID = metadataTable?.serverID {
+                AddMetadataColumnSheet(tableServerID: tableServerID) {
+                    await refreshMetadataTable()
+                }
+            }
         }
         .task(id: job?.serverID) {
             await loadBookings()
@@ -250,6 +279,26 @@ struct JobDetailView: View {
         } catch {
             // Non-fatal — the job detail screen should still render even if the annotation
             // list fails to refresh (e.g. offline); it just shows whatever was last cached.
+        }
+    }
+
+    private func refreshMetadataTable() async {
+        guard let serverID = job?.serverID else { return }
+        try? await appSession.makeSyncServices().instrumentJobSync.refreshMetadataTable(jobServerID: serverID, jobClientID: jobClientID)
+    }
+
+    private func removeColumns(at offsets: IndexSet) async {
+        guard let tableServerID = metadataTable?.serverID else { return }
+        let columnsToRemove = offsets.map { sortedColumns[$0] }
+        do {
+            let services = appSession.makeSyncServices()
+            for column in columnsToRemove {
+                try await services.metadataColumnSync.removeColumn(tableServerID: tableServerID, columnServerID: column.serverID)
+            }
+            await refreshMetadataTable()
+        } catch {
+            errorMessage = error.userFacingMessage
+            isShowingError = true
         }
     }
 

@@ -101,3 +101,92 @@ public struct OntologySuggestionDTO: Decodable, Sendable, Identifiable {
 public struct OntologySuggestionsResponse: Decodable, Sendable {
     public let suggestions: [OntologySuggestionDTO]
 }
+
+public struct MetadataColumnTemplateDTO: Decodable, Sendable, Identifiable {
+    public let id: Int64
+    public let name: String
+    public let description: String?
+    public let columnName: String
+    public let columnType: String
+    public let ontologyType: String?
+    public let defaultValue: String?
+    public let category: String?
+    public let isSystemTemplate: Bool
+    public let visibility: String
+    public let labGroup: Int64?
+    public let canEdit: Bool
+    public let canDelete: Bool
+}
+
+public struct CreateColumnTemplateRequest: Encodable, Sendable {
+    public var name: String
+    public var description: String?
+    public var columnName: String
+    public var columnType: String
+    public var ontologyType: String?
+    public var defaultValue: String?
+    public var visibility: String
+    public var labGroup: Int64?
+    public var category: String?
+
+    public init(
+        name: String,
+        description: String? = nil,
+        columnName: String,
+        columnType: String,
+        ontologyType: String? = nil,
+        defaultValue: String? = nil,
+        visibility: String = "private",
+        labGroup: Int64? = nil,
+        category: String? = nil
+    ) {
+        self.name = name
+        self.description = description
+        self.columnName = columnName
+        self.columnType = columnType
+        self.ontologyType = ontologyType
+        self.defaultValue = defaultValue
+        self.visibility = visibility
+        self.labGroup = labGroup
+        self.category = category
+    }
+}
+
+public struct AddColumnDataRequest: Encodable, Sendable {
+    public var name: String
+    public var type: String
+    public var ontologyType: String?
+    public var value: String?
+
+    public init(name: String, type: String, ontologyType: String? = nil, value: String? = nil) {
+        self.name = name
+        self.type = type
+        self.ontologyType = ontologyType
+        self.value = value
+    }
+}
+
+public struct AddColumnWithAutoReorderRequest: Encodable, Sendable {
+    public var columnData: AddColumnDataRequest
+
+    public init(columnData: AddColumnDataRequest) {
+        self.columnData = columnData
+    }
+}
+
+public struct AddColumnWithAutoReorderResponse: Decodable, Sendable {
+    public let message: String
+    public let column: MetadataColumnDTO
+}
+
+public struct RemoveColumnRequest: Encodable, Sendable {
+    public var columnId: Int64
+
+    public init(columnId: Int64) {
+        self.columnId = columnId
+    }
+}
+
+public struct RemoveColumnResponse: Decodable, Sendable {
+    public let message: String
+}

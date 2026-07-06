@@ -11,23 +11,41 @@ struct CreateMetadataFromTemplateSheet: View {
 
     let jobClientID: UUID
     let jobServerID: Int64
+    let jobLabGroupServerID: Int64?
     let defaultSampleCount: Int?
+    let ontologyStore: ModelContainer
 
     @State private var selectedTemplateID: Int64?
     @State private var sampleCountText: String
     @State private var isSaving = false
     @State private var errorMessage: String?
     @State private var isShowingError = false
+    @State private var isShowingNewTemplateSheet = false
 
-    init(jobClientID: UUID, jobServerID: Int64, defaultSampleCount: Int?) {
+    init(jobClientID: UUID, jobServerID: Int64, jobLabGroupServerID: Int64?, defaultSampleCount: Int?, ontologyStore: ModelContainer) {
         self.jobClientID = jobClientID
         self.jobServerID = jobServerID
+        self.jobLabGroupServerID = jobLabGroupServerID
         self.defaultSampleCount = defaultSampleCount
+        self.ontologyStore = ontologyStore
         _sampleCountText = State(initialValue: defaultSampleCount.map(String.init) ?? "")
     }
 
     private var canSave: Bool {
         selectedTemplateID != nil
+    }
+
+    private var personalTemplates: [CachedMetadataTableTemplate] {
+        templates.filter { $0.visibility == "private" }
+    }
+
+    private var jobLabGroupTemplates: [CachedMetadataTableTemplate] {
+        guard let jobLabGroupServerID else { return [] }
+        return templates.filter { $0.visibility == "group" && $0.labGroupServerID == jobLabGroupServerID }
+    }
+
+    private var otherLabGroupTemplates: [CachedMetadataTableTemplate] {
+        templates.filter { $0.visibility == "group" && $0.labGroupServerID != jobLabGroupServerID }
     }
 
     var body: some View {
@@ -37,15 +55,15 @@ struct CreateMetadataFromTemplateSheet: View {
                     Text("No metadata table templates available.")
                         .foregroundStyle(.secondary)
                 } else {
-                    Section("Template") {
-                        Picker("Template", selection: $selectedTemplateID) {
-                            Text("None").tag(Int64?.none)
-                            ForEach(templates) { template in
-                                Text("\(template.name) (\(template.columnCount) columns)").tag(Optional(template.serverID))
-                            }
-                        }
-                        .accessibilityIdentifier("metadataTemplatePicker")
+                    templateSection("Personal", templates: personalTemplates)
+                    templateSection("Job's Lab Group", templates: jobLabGroupTemplates)
+                    templateSection("Other Lab Groups", templates: otherLabGroupTemplates)
+                }
+                Section {
+                    Button("New Template…") {
+                        isShowingNewTemplateSheet = true
                     }
+                    .accessibilityIdentifier("newMetadataTableTemplateButton")
                 }
                 Section("Sample Count") {
                     TextField("Sample count", text: $sampleCountText)
@@ -70,11 +88,45 @@ struct CreateMetadataFromTemplateSheet: View {
                 }
             }
         }
-        .frame(minWidth: 360, minHeight: 300)
+        .frame(minWidth: 360, minHeight: 400)
         .alert("Couldn't create metadata table", isPresented: $isShowingError) {
             Button("OK") {}
         } message: {
             Text(errorMessage ?? "")
+        }
+        .sheet(isPresented: $isShowingNewTemplateSheet) {
+            NewMetadataTableTemplateSheet(jobLabGroupServerID: jobLabGroupServerID, ontologyStore: ontologyStore) { newTemplateServerID in
+                selectedTemplateID = newTemplateServerID
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func templateSection(_ title: String, templates: [CachedMetadataTableTemplate]) -> some View {
+        if !templates.isEmpty {
+            Section(title) {
+                ForEach(templates) { template in
+                    Button {
+                        selectedTemplateID = template.serverID
+                    } label: {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(template.name)
+                                Text("\(template.columnCount) columns")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            if selectedTemplateID == template.serverID {
+                                Image(systemName: "checkmark")
+                                    .foregroundStyle(.tint)
+                            }
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("metadataTemplateRow_\(template.name)")
+                }
+            }
         }
     }
 

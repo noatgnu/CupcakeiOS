@@ -29,7 +29,7 @@ struct RootNavigationView: View {
                     .tabItem { Label("Protocols", systemImage: "list.bullet.clipboard") }
                 SessionListView()
                     .tabItem { Label("Sessions", systemImage: "clock") }
-                JobListView()
+                JobListView(ontologyStore: ontologyStore)
                     .tabItem { Label("Jobs", systemImage: "list.clipboard") }
                 InventoryView()
                     .tabItem { Label("Inventory", systemImage: "shippingbox") }

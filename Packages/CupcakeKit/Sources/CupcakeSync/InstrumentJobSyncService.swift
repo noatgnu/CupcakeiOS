@@ -194,6 +194,19 @@ public actor InstrumentJobSyncService {
         try await store.upsertMetadataTable(table, instrumentJobClientID: jobClientID)
         return table
     }
+
+    public func fetchProjectColumnValues(projectServerID: Int64, columnName: String) async throws -> [String] {
+        guard let token = deviceToken() else { return [] }
+        let response: ProjectColumnValuesResponse = try await apiClient.get(
+            "instrument-jobs/project_column_values/",
+            query: [
+                URLQueryItem(name: "project_id", value: String(projectServerID)),
+                URLQueryItem(name: "column_name", value: columnName),
+            ],
+            authorizationHeader: "DeviceToken \(token)"
+        )
+        return response.values
+    }
 }
 
 /// `submit`/`cancel` are DRF `@action`s that take no request body — `send(_:method:body:...)`

@@ -77,3 +77,7 @@ public struct CreateInstrumentJobRequest: Encodable, Sendable {
         self.project = project
     }
 }
+
+public struct ProjectColumnValuesResponse: Decodable, Sendable {
+    public let values: [String]
+}

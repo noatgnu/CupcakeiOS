@@ -1,7 +1,6 @@
 import Foundation
 import SwiftData
 
-/// Read-only browsing — no template-authoring path in this app's v1 slice.
 @Model
 public final class CachedMetadataTableTemplate {
     @Attribute(.unique) public var serverID: Int64
@@ -11,6 +10,7 @@ public final class CachedMetadataTableTemplate {
     public var visibility: String
     public var isDefault: Bool
     public var columnCount: Int
+    public var labGroupServerID: Int64?
 
     public init(
         serverID: Int64,
@@ -19,7 +19,8 @@ public final class CachedMetadataTableTemplate {
         ownerUsername: String? = nil,
         visibility: String = "private",
         isDefault: Bool = false,
-        columnCount: Int = 0
+        columnCount: Int = 0,
+        labGroupServerID: Int64? = nil
     ) {
         self.serverID = serverID
         self.name = name
@@ -28,5 +29,6 @@ public final class CachedMetadataTableTemplate {
         self.visibility = visibility
         self.isDefault = isDefault
         self.columnCount = columnCount
+        self.labGroupServerID = labGroupServerID
     }
 }

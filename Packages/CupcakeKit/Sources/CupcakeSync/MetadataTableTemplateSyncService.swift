@@ -32,6 +32,50 @@ public actor MetadataTableTemplateSyncService {
             page = try await apiClient.get(absoluteURL: nextURL, authorizationHeader: authorization)
         }
     }
+
+    @discardableResult
+    public func createBlank(name: String, description: String?, labGroupServerID: Int64?) async throws -> MetadataTableTemplateDTO {
+        guard let token = deviceToken() else {
+            throw MetadataTableTemplateSyncError.noDeviceToken
+        }
+        let dto: MetadataTableTemplateDTO = try await apiClient.send(
+            "metadata-table-templates/",
+            method: .post,
+            body: CreateMetadataTableTemplateRequest(
+                name: name,
+                description: description,
+                labGroup: labGroupServerID,
+                visibility: labGroupServerID == nil ? "private" : "group"
+            ),
+            authorizationHeader: "DeviceToken \(token)"
+        )
+        try await store.upsert([dto])
+        return dto
+    }
+
+    @discardableResult
+    public func createFromSchemas(name: String, schemaNames: [String], description: String?, labGroupServerID: Int64?) async throws -> MetadataTableTemplateDTO {
+        guard let token = deviceToken() else {
+            throw MetadataTableTemplateSyncError.noDeviceToken
+        }
+        let dto: MetadataTableTemplateDTO = try await apiClient.send(
+            "metadata-table-templates/create_from_schema/",
+            method: .post,
+            body: CreateMetadataTableTemplateFromSchemaRequest(
+                name: name,
+                schemas: schemaNames,
+                description: description,
+                labGroup: labGroupServerID
+            ),
+            authorizationHeader: "DeviceToken \(token)"
+        )
+        try await store.upsert([dto])
+        return dto
+    }
+}
+
+public enum MetadataTableTemplateSyncError: Error {
+    case noDeviceToken
 }
 
 @ModelActor
@@ -53,6 +97,7 @@ actor MetadataTableTemplateStore {
             template.visibility = dto.visibility
             template.isDefault = dto.isDefault
             template.columnCount = dto.columnCount
+            template.labGroupServerID = dto.labGroup
         }
         try modelContext.save()
     }

@@ -1,51 +1,105 @@
 import CupcakeModels
 import CupcakeNetworking
+import CupcakeOntology
 import CupcakeSync
+import SwiftData
 import SwiftUI
 
-/// Basic value editing — plain text + ontology typeahead, no favourites/recommendations or
-/// SDRF special-syntax input yet (both deferred to a later slice; see the reference web app's
-/// `MetadataValueEditModal` for the fuller design this will eventually grow toward).
 struct MetadataValueEditSheet: View {
     @Environment(AppSession.self) private var appSession
     @Environment(\.dismiss) private var dismiss
+    @Query private var labGroups: [CachedLabGroup]
 
     let column: CachedMetadataColumn
+    let projectServerID: Int64?
+    let ontologyStore: ModelContainer
 
     @State private var value: String
     @State private var suggestions: [OntologySuggestionDTO] = []
     @State private var searchTask: Task<Void, Never>?
+    @State private var personalFavourites: [FavouriteMetadataOptionDTO] = []
+    @State private var labGroupFavourites: [FavouriteMetadataOptionDTO] = []
+    @State private var globalFavourites: [FavouriteMetadataOptionDTO] = []
+    @State private var projectHistoryValues: [String] = []
+    @State private var keyValueFields: [String: String] = [:]
+    @State private var ageYears = ""
+    @State private var ageMonths = ""
+    @State private var ageDays = ""
     @State private var isSaving = false
     @State private var errorMessage: String?
     @State private var isShowingError = false
+    @State private var offlineOntologyType: String?
+    @State private var offlineCustomFilters: [String: [String: String]]?
 
-    init(column: CachedMetadataColumn) {
+    private let specialSyntaxType: SDRFSpecialSyntaxType?
+
+    init(column: CachedMetadataColumn, projectServerID: Int64?, ontologyStore: ModelContainer) {
         self.column = column
-        _value = State(initialValue: column.value ?? "")
+        self.projectServerID = projectServerID
+        self.ontologyStore = ontologyStore
+        let initialValue = column.value ?? ""
+        _value = State(initialValue: initialValue)
+        let syntaxType = SDRFSyntaxDetector.detect(columnName: column.name, columnType: column.type)
+        specialSyntaxType = syntaxType
+        switch syntaxType {
+        case .modification:
+            _keyValueFields = State(initialValue: SDRFKeyValueSyntax.parse(initialValue, allowedKeys: SDRFModificationKeys.order))
+        case .cleavage:
+            _keyValueFields = State(initialValue: SDRFKeyValueSyntax.parse(initialValue, allowedKeys: SDRFCleavageKeys.order))
+        case .spikedCompound:
+            _keyValueFields = State(initialValue: SDRFKeyValueSyntax.parse(initialValue, allowedKeys: SDRFSpikedCompoundKeys.order))
+        case .age:
+            if let parsed = SDRFAgeSyntax.parse(initialValue) {
+                _ageYears = State(initialValue: parsed.years)
+                _ageMonths = State(initialValue: parsed.months)
+                _ageDays = State(initialValue: parsed.days)
+            }
+        case nil:
+            break
+        }
+    }
+
+    private var resolvedOntologyType: String? {
+        column.ontologyType ?? offlineOntologyType
     }
 
     private var hasOntologyType: Bool {
-        column.ontologyType != nil && !column.readonly
+        resolvedOntologyType != nil && !column.readonly && specialSyntaxType == nil
+    }
+
+    private var firstLabGroupServerID: Int64? {
+        labGroups.first?.serverID
     }
 
     var body: some View {
         NavigationStack {
             Form {
                 Section(column.displayName ?? column.name) {
-                    TextField("Value", text: $value)
-                        .accessibilityIdentifier("metadataValueField")
-                        .onChange(of: value) {
-                            scheduleSearch()
+                    switch specialSyntaxType {
+                    case .modification:
+                        SDRFKeyValueInputView(fieldSpecs: SDRFModificationFieldSpecs.all, fields: $keyValueFields)
+                    case .cleavage:
+                        SDRFKeyValueInputView(fieldSpecs: SDRFCleavageFieldSpecs.all, fields: $keyValueFields)
+                    case .spikedCompound:
+                        SDRFKeyValueInputView(fieldSpecs: SDRFSpikedCompoundFieldSpecs.all, fields: $keyValueFields)
+                    case .age:
+                        SDRFAgeInputView(years: $ageYears, months: $ageMonths, days: $ageDays)
+                    case nil:
+                        TextField("Value", text: $value)
+                            .accessibilityIdentifier("metadataValueField")
+                            .onChange(of: value) {
+                                scheduleSearch()
+                            }
+                        HStack {
+                            Button("Not Applicable") { value = "not applicable" }
+                                .accessibilityIdentifier("metadataValueNotApplicableButton")
+                            Spacer()
+                            Button("Not Available") { value = "not available" }
+                                .accessibilityIdentifier("metadataValueNotAvailableButton")
                         }
-                    HStack {
-                        Button("Not Applicable") { value = "not applicable" }
-                            .accessibilityIdentifier("metadataValueNotApplicableButton")
-                        Spacer()
-                        Button("Not Available") { value = "not available" }
-                            .accessibilityIdentifier("metadataValueNotAvailableButton")
+                        .buttonStyle(.borderless)
+                        .font(.caption)
                     }
-                    .buttonStyle(.borderless)
-                    .font(.caption)
                 }
                 if hasOntologyType, !suggestions.isEmpty {
                     Section("Suggestions") {
@@ -67,6 +121,30 @@ struct MetadataValueEditSheet: View {
                         }
                     }
                 }
+                if !column.readonly {
+                    favouritesSection("Personal", favourites: personalFavourites) {
+                        Task { await addToFavourites(scope: .personal) }
+                    }
+                    favouritesSection("Lab Group", favourites: labGroupFavourites) {
+                        Task { await addToFavourites(scope: .labGroup) }
+                    }
+                    .disabled(firstLabGroupServerID == nil)
+                    favouritesSection("Global", favourites: globalFavourites) {
+                        Task { await addToFavourites(scope: .global) }
+                    }
+                }
+                if !projectHistoryValues.isEmpty {
+                    Section("Project History") {
+                        ForEach(projectHistoryValues, id: \.self) { historyValue in
+                            Button {
+                                value = historyValue
+                            } label: {
+                                Text(historyValue)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
             }
             .formStyle(.grouped)
             .navigationTitle("Edit Value")
@@ -83,11 +161,115 @@ struct MetadataValueEditSheet: View {
                 }
             }
         }
-        .frame(minWidth: 360, minHeight: 320)
+        .frame(minWidth: 360, minHeight: 480)
         .alert("Couldn't save value", isPresented: $isShowingError) {
             Button("OK") {}
         } message: {
             Text(errorMessage ?? "")
+        }
+        .task {
+            loadOfflineOntologyConfig()
+            await loadFavourites()
+            await loadProjectHistory()
+        }
+    }
+
+    private func loadOfflineOntologyConfig() {
+        guard column.ontologyType == nil, specialSyntaxType == nil else { return }
+        let context = ModelContext(ontologyStore)
+        let columnName = column.name
+        guard let template = try? context.fetch(
+            FetchDescriptor<CachedColumnTemplate>(predicate: #Predicate { $0.columnName == columnName })
+        ).first, let ontologyType = template.ontologyType else { return }
+
+        offlineOntologyType = ontologyType
+        if let filtersJSON = template.customOntologyFilters, let data = filtersJSON.data(using: .utf8) {
+            offlineCustomFilters = try? JSONDecoder().decode([String: [String: String]].self, from: data)
+        }
+    }
+
+    @ViewBuilder
+    private func favouritesSection(_ title: String, favourites: [FavouriteMetadataOptionDTO], onAdd: @escaping () -> Void) -> some View {
+        Section(title) {
+            if favourites.isEmpty {
+                Text("None yet")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(favourites) { favourite in
+                    Button {
+                        value = favourite.displayValue ?? favourite.value ?? ""
+                    } label: {
+                        Text(favourite.displayValue ?? favourite.value ?? "")
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            Button("Add Current Value to \(title)", action: onAdd)
+                .font(.caption)
+                .accessibilityIdentifier("addFavourite_\(title)")
+        }
+    }
+
+    private enum FavouriteScope {
+        case personal
+        case labGroup
+        case global
+    }
+
+    private func loadFavourites() async {
+        let services = appSession.makeSyncServices()
+        let columnName = column.name
+        let userID = appSession.currentUserID
+        let labGroupID = firstLabGroupServerID
+
+        async let personal: [FavouriteMetadataOptionDTO] = fetchOrEmpty {
+            guard let userID else { return [] }
+            return try await services.favouriteMetadataOptionSync.fetchPersonalFavourites(columnName: columnName, userID: userID)
+        }
+        async let labGroup: [FavouriteMetadataOptionDTO] = fetchOrEmpty {
+            guard let labGroupID else { return [] }
+            return try await services.favouriteMetadataOptionSync.fetchLabGroupFavourites(columnName: columnName, labGroupID: labGroupID)
+        }
+        async let global: [FavouriteMetadataOptionDTO] = fetchOrEmpty {
+            try await services.favouriteMetadataOptionSync.fetchGlobalFavourites(columnName: columnName)
+        }
+
+        personalFavourites = await personal
+        labGroupFavourites = await labGroup
+        globalFavourites = await global
+    }
+
+    private func fetchOrEmpty(_ body: () async throws -> [FavouriteMetadataOptionDTO]) async -> [FavouriteMetadataOptionDTO] {
+        (try? await body()) ?? []
+    }
+
+    private func loadProjectHistory() async {
+        guard let projectServerID else { return }
+        let services = appSession.makeSyncServices()
+        projectHistoryValues = (try? await services.instrumentJobSync.fetchProjectColumnValues(projectServerID: projectServerID, columnName: column.name)) ?? []
+    }
+
+    private func addToFavourites(scope: FavouriteScope) async {
+        guard !value.isEmpty else { return }
+        let request: CreateFavouriteMetadataOptionRequest
+        switch scope {
+        case .personal:
+            guard let userID = appSession.currentUserID else { return }
+            request = CreateFavouriteMetadataOptionRequest(name: column.name, type: column.type, value: value, user: userID)
+        case .labGroup:
+            guard let labGroupID = firstLabGroupServerID else { return }
+            request = CreateFavouriteMetadataOptionRequest(name: column.name, type: column.type, value: value, labGroup: labGroupID)
+        case .global:
+            request = CreateFavouriteMetadataOptionRequest(name: column.name, type: column.type, value: value, isGlobal: true)
+        }
+        do {
+            let services = appSession.makeSyncServices()
+            try await services.favouriteMetadataOptionSync.createFavourite(request)
+            await loadFavourites()
+        } catch {
+            errorMessage = error.userFacingMessage
+            isShowingError = true
         }
     }
 
@@ -99,12 +281,37 @@ struct MetadataValueEditSheet: View {
             guard !Task.isCancelled else { return }
             do {
                 let services = appSession.makeSyncServices()
-                let results = try await services.metadataColumnSync.fetchOntologySuggestions(columnServerID: column.serverID, search: value)
+                let results: [OntologySuggestionDTO]
+                if column.ontologyType != nil {
+                    results = try await services.metadataColumnSync.fetchOntologySuggestions(columnServerID: column.serverID, search: value)
+                } else if let offlineOntologyType {
+                    results = try await services.metadataColumnSync.fetchOntologySuggestions(
+                        ontologyType: offlineOntologyType,
+                        customFilters: offlineCustomFilters,
+                        search: value
+                    )
+                } else {
+                    results = []
+                }
                 guard !Task.isCancelled else { return }
                 suggestions = results
             } catch {
-                // Non-fatal — a failed typeahead search shouldn't block manual value entry.
             }
+        }
+    }
+
+    private var valueToSave: String {
+        switch specialSyntaxType {
+        case .modification:
+            return SDRFKeyValueSyntax.format(keyValueFields, keyOrder: SDRFModificationKeys.order)
+        case .cleavage:
+            return SDRFKeyValueSyntax.format(keyValueFields, keyOrder: SDRFCleavageKeys.order)
+        case .spikedCompound:
+            return SDRFKeyValueSyntax.format(keyValueFields, keyOrder: SDRFSpikedCompoundKeys.order)
+        case .age:
+            return SDRFAgeSyntax.format(years: ageYears, months: ageMonths, days: ageDays)
+        case nil:
+            return value
         }
     }
 
@@ -113,7 +320,7 @@ struct MetadataValueEditSheet: View {
         defer { isSaving = false }
         do {
             let services = appSession.makeSyncServices()
-            try await services.metadataColumnSync.updateColumnValue(columnServerID: column.serverID, value: value)
+            try await services.metadataColumnSync.updateColumnValue(columnServerID: column.serverID, value: valueToSave)
             dismiss()
         } catch {
             errorMessage = error.userFacingMessage

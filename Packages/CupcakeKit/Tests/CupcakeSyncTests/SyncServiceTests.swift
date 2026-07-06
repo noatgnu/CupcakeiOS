@@ -1279,4 +1279,260 @@ struct SyncServiceTests {
         let suggestions = try await metadataColumnSync.fetchOntologySuggestions(columnServerID: 5, search: "h")
         #expect(suggestions.isEmpty)
     }
+
+    @Test("FavouriteMetadataOptionSyncService.fetchPersonalFavourites filters by user_id and column name")
+    func fetchPersonalFavouritesFiltersByUser() async throws {
+        StubURLProtocol.handler = { request in
+            #expect(request.url!.path.hasSuffix("/favourite-options"))
+            #expect(request.url!.query?.contains("user_id=1") == true)
+            #expect(request.url!.query?.contains("name=Serial") == true)
+            let json = Data("""
+            {"count": 1, "next": null, "previous": null, "results": [
+                {"id": 4, "name": "Serial Number", "type": "characteristics", "column_template": null,
+                 "value": "SN-PERSONAL2", "display_value": "SN-PERSONAL2", "user": 1, "user_username": "testuser",
+                 "lab_group": null, "is_global": false}
+            ]}
+            """.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let favouriteSync = FavouriteMetadataOptionSyncService(apiClient: apiClient, deviceToken: { "test-token" })
+
+        let favourites = try await favouriteSync.fetchPersonalFavourites(columnName: "Serial Number", userID: 1)
+        #expect(favourites.count == 1)
+        #expect(favourites.first?.value == "SN-PERSONAL2")
+    }
+
+    @Test("FavouriteMetadataOptionSyncService.createFavourite POSTs exactly one scope field per the caller's request")
+    func createFavouritePostsScope() async throws {
+        StubURLProtocol.handler = { request in
+            #expect(request.httpMethod == "POST")
+            #expect(request.url!.path.hasSuffix("/favourite-options"))
+            let json = Data("""
+            {"id": 3, "name": "Serial Number", "type": "characteristics", "column_template": null,
+             "value": "SN-GLOBAL", "display_value": "SN-GLOBAL", "user": null, "lab_group": null, "is_global": true}
+            """.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 201, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let favouriteSync = FavouriteMetadataOptionSyncService(apiClient: apiClient, deviceToken: { "test-token" })
+
+        let dto = try await favouriteSync.createFavourite(
+            CreateFavouriteMetadataOptionRequest(name: "Serial Number", type: "characteristics", value: "SN-GLOBAL", isGlobal: true)
+        )
+        #expect(dto.isGlobal)
+        #expect(dto.value == "SN-GLOBAL")
+    }
+
+    @Test("InstrumentJobSyncService.fetchProjectColumnValues requests the project/column-scoped history endpoint")
+    func fetchProjectColumnValuesRequestsCorrectQuery() async throws {
+        StubURLProtocol.handler = { request in
+            #expect(request.url!.path.hasSuffix("/instrument-jobs/project_column_values"))
+            #expect(request.url!.query?.contains("project_id=1") == true)
+            #expect(request.url!.query?.contains("column_name=Serial") == true)
+            let json = Data("""
+            {"values": ["SN-99999", "SN-12345"]}
+            """.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedInstrumentJob.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let instrumentJobSync = InstrumentJobSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        let values = try await instrumentJobSync.fetchProjectColumnValues(projectServerID: 1, columnName: "Serial Number")
+        #expect(values == ["SN-99999", "SN-12345"])
+    }
+
+    @Test("MetadataColumnSyncService.fetchOntologySuggestions(ontologyType:customFilters:) hits the raw suggest endpoint with a JSON-encoded filter")
+    func fetchOntologySuggestionsRawFallback() async throws {
+        StubURLProtocol.handler = { request in
+            #expect(request.url!.path.hasSuffix("/ontology/search/suggest"))
+            #expect(request.url!.query?.contains("type=ms_unique_vocabularies") == true)
+            #expect(request.url!.query?.contains("custom_filters=") == true)
+            let json = Data("""
+            {"ontology_type": "ms_unique_vocabularies", "suggestions": [
+                {"id": "MS:1000449", "value": "MS:1000449", "display_name": "LTQ Orbitrap",
+                 "description": "Finnigan LTQ Orbitrap MS.", "ontology_type": "ms_unique_vocabularies"}
+            ]}
+            """.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedMetadataColumn.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let metadataColumnSync = MetadataColumnSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        let suggestions = try await metadataColumnSync.fetchOntologySuggestions(
+            ontologyType: "ms_unique_vocabularies",
+            customFilters: ["ms_unique_vocabularies": ["term_type": "instrument"]],
+            search: "orbi"
+        )
+        #expect(suggestions.count == 1)
+        #expect(suggestions.first?.displayName == "LTQ Orbitrap")
+    }
+
+    @Test("MetadataColumnSyncService.addColumn posts column_data to add_column_with_auto_reorder")
+    func addColumnPostsColumnData() async throws {
+        StubURLProtocol.handler = { request in
+            #expect(request.url!.path.hasSuffix("/metadata-tables/3/add_column_with_auto_reorder"))
+            let json = Data("""
+            {"message": "Column added", "column": {
+                "id": 6, "name": "comment[acquisition date]", "display_name": "comment[acquisition date]",
+                "type": "comment", "column_position": 1, "value": null, "not_applicable": false,
+                "not_available": false, "mandatory": false, "hidden": false, "readonly": false,
+                "ontology_type": null, "staff_only": false
+            }}
+            """.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedMetadataColumn.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let metadataColumnSync = MetadataColumnSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        let column = try await metadataColumnSync.addColumn(
+            tableServerID: 3,
+            columnData: AddColumnDataRequest(name: "comment[acquisition date]", type: "comment")
+        )
+        #expect(column.id == 6)
+    }
+
+    @Test("MetadataColumnSyncService.removeColumn posts column_id to remove_column")
+    func removeColumnPostsColumnID() async throws {
+        StubURLProtocol.handler = { request in
+            #expect(request.url!.path.hasSuffix("/metadata-tables/3/remove_column"))
+            let json = Data("""
+            {"message": "Column removed successfully"}
+            """.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedMetadataColumn.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let metadataColumnSync = MetadataColumnSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        try await metadataColumnSync.removeColumn(tableServerID: 3, columnServerID: 6)
+    }
+
+    @Test("MetadataColumnTemplateSyncService.search hits column-templates with a search query")
+    func columnTemplateSearchRequestsCorrectQuery() async throws {
+        StubURLProtocol.handler = { request in
+            #expect(request.url!.path.hasSuffix("/column-templates"))
+            #expect(request.url!.query?.contains("search=organism") == true)
+            let json = Data("""
+            {"count": 1, "next": null, "previous": null, "results": [
+                {"id": 300, "name": "organism", "description": null, "column_name": "characteristics[organism]",
+                 "column_type": "characteristics", "ontology_type": "species", "default_value": null,
+                 "category": null, "is_system_template": true, "visibility": "public", "lab_group": null,
+                 "can_edit": false, "can_delete": false}
+            ]}
+            """.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let templateSync = MetadataColumnTemplateSyncService(apiClient: apiClient, deviceToken: { "test-token" })
+
+        let results = try await templateSync.search(query: "organism")
+        #expect(results.count == 1)
+        #expect(results.first?.columnName == "characteristics[organism]")
+    }
+
+    @Test("MetadataTableTemplateSyncService.createBlank posts a private template with no lab group")
+    func createBlankTemplatePostsPrivateVisibility() async throws {
+        StubURLProtocol.handler = { request in
+            #expect(request.url!.path.hasSuffix("/metadata-table-templates"))
+            let json = Data("""
+            {"id": 10, "name": "New Blank", "description": null, "owner_username": "testuser",
+             "visibility": "private", "is_default": false, "column_count": 0, "lab_group": null}
+            """.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 201, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedMetadataTableTemplate.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let templateSync = MetadataTableTemplateSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        let template = try await templateSync.createBlank(name: "New Blank", description: nil, labGroupServerID: nil)
+        #expect(template.id == 10)
+        #expect(template.visibility == "private")
+    }
+
+    @Test("MetadataTableTemplateSyncService.createFromSchemas hits create_from_schema with schema names")
+    func createFromSchemasRequestsCorrectPath() async throws {
+        StubURLProtocol.handler = { request in
+            #expect(request.url!.path.hasSuffix("/metadata-table-templates/create_from_schema"))
+            let json = Data("""
+            {"id": 11, "name": "From Schema", "description": null, "owner_username": "testuser",
+             "visibility": "private", "is_default": false, "column_count": 9, "lab_group": null}
+            """.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 201, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedMetadataTableTemplate.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let templateSync = MetadataTableTemplateSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        let template = try await templateSync.createFromSchemas(name: "From Schema", schemaNames: ["minimum"], description: nil, labGroupServerID: nil)
+        #expect(template.id == 11)
+        #expect(template.columnCount == 9)
+    }
+
+    @Test("MetadataColumnTemplateSyncService.myTemplates decodes a plain array response")
+    func myTemplatesDecodesPlainArray() async throws {
+        StubURLProtocol.handler = { request in
+            #expect(request.url!.path.hasSuffix("/column-templates/my_templates"))
+            let json = Data("""
+            [{"id": 400, "name": "Mine", "description": null, "column_name": "characteristics[mine]",
+              "column_type": "characteristics", "ontology_type": null, "default_value": null,
+              "category": null, "is_system_template": false, "visibility": "private", "lab_group": null,
+              "can_edit": true, "can_delete": true}]
+            """.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let templateSync = MetadataColumnTemplateSyncService(apiClient: apiClient, deviceToken: { "test-token" })
+
+        let templates = try await templateSync.myTemplates()
+        #expect(templates.count == 1)
+        #expect(templates.first?.canEdit == true)
+    }
+
+    @Test("MetadataColumnTemplateSyncService.create posts to column-templates")
+    func createColumnTemplatePostsCorrectPath() async throws {
+        StubURLProtocol.handler = { request in
+            #expect(request.url!.path.hasSuffix("/column-templates"))
+            let json = Data("""
+            {"id": 401, "name": "New Template", "description": null, "column_name": "characteristics[new]",
+             "column_type": "characteristics", "ontology_type": null, "default_value": null,
+             "category": null, "is_system_template": false, "visibility": "private", "lab_group": null,
+             "can_edit": true, "can_delete": true}
+            """.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 201, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let templateSync = MetadataColumnTemplateSyncService(apiClient: apiClient, deviceToken: { "test-token" })
+
+        let template = try await templateSync.create(CreateColumnTemplateRequest(name: "New Template", columnName: "characteristics[new]", columnType: "characteristics"))
+        #expect(template.id == 401)
+    }
+
+    @Test("MetadataColumnTemplateSyncService.delete hits DELETE on the template")
+    func deleteColumnTemplateHitsCorrectPath() async throws {
+        StubURLProtocol.handler = { request in
+            #expect(request.httpMethod == "DELETE")
+            #expect(request.url!.path.hasSuffix("/column-templates/401"))
+            return (HTTPURLResponse(url: request.url!, statusCode: 204, httpVersion: nil, headerFields: nil)!, Data())
+        }
+
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let templateSync = MetadataColumnTemplateSyncService(apiClient: apiClient, deviceToken: { "test-token" })
+
+        try await templateSync.delete(templateServerID: 401)
+    }
 }

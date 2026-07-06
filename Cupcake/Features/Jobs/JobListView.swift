@@ -3,6 +3,8 @@ import SwiftData
 import SwiftUI
 
 struct JobListView: View {
+    let ontologyStore: ModelContainer
+
     @Query(sort: \CachedInstrumentJob.jobName) private var jobs: [CachedInstrumentJob]
     @Query private var projects: [CachedProject]
 
@@ -63,7 +65,7 @@ struct JobListView: View {
                 NewJobSheet()
             }
             .navigationDestination(for: UUID.self) { jobClientID in
-                JobDetailView(jobClientID: jobClientID)
+                JobDetailView(jobClientID: jobClientID, ontologyStore: ontologyStore)
             }
         }
     }
