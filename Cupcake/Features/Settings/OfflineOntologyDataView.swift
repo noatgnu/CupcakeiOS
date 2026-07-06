@@ -1,3 +1,4 @@
+import CupcakeNetworking
 import CupcakeOntology
 import SwiftData
 import SwiftUI
@@ -85,7 +86,7 @@ struct OfflineOntologyDataView: View {
                 importStates[table.name] = try await service.importState(typeKey: table.name)
             }
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage = error.userFacingMessage
             isShowingError = true
         }
     }
@@ -97,7 +98,7 @@ struct OfflineOntologyDataView: View {
             try await OntologyRegistry.importTable(table, using: service)
             importStates[table.name] = try await service.importState(typeKey: table.name)
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage = error.userFacingMessage
             isShowingError = true
         }
     }

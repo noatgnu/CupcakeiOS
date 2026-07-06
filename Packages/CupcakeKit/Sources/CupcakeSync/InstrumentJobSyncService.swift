@@ -139,6 +139,43 @@ public actor InstrumentJobSyncService {
         return dto
     }
 
+    /// Required before booking an instrument for a job — see `UpdateInstrumentJobInstrumentRequest`'s
+    /// doc comment for why this exists at all.
+    @discardableResult
+    public func updateInstrument(jobServerID: Int64, instrumentServerID: Int64) async throws -> InstrumentJobDTO {
+        guard let token = deviceToken() else {
+            throw InstrumentJobSyncError.noDeviceToken
+        }
+        let dto: InstrumentJobDTO = try await apiClient.send(
+            "instrument-jobs/\(jobServerID)/",
+            method: .patch,
+            body: UpdateInstrumentJobInstrumentRequest(instrument: instrumentServerID),
+            authorizationHeader: "DeviceToken \(token)"
+        )
+        try await store.upsertSingle(dto)
+        return dto
+    }
+
+    /// Replaces the job's entire staff list. Requires the job to already have a `lab_group` set
+    /// (server-side validation rule 1) and every listed user to be a direct member of that lab
+    /// group with `can_process_jobs` (rules 2-3) — see `UpdateInstrumentJobStaffRequest`'s doc
+    /// comment. A rejection here is a real validation failure worth surfacing verbatim, not a
+    /// generic "couldn't sync" — callers should inspect `APIError.http`'s body on failure.
+    @discardableResult
+    public func updateStaff(jobServerID: Int64, staffServerIDs: [Int64]) async throws -> InstrumentJobDTO {
+        guard let token = deviceToken() else {
+            throw InstrumentJobSyncError.noDeviceToken
+        }
+        let dto: InstrumentJobDTO = try await apiClient.send(
+            "instrument-jobs/\(jobServerID)/",
+            method: .patch,
+            body: UpdateInstrumentJobStaffRequest(staff: staffServerIDs),
+            authorizationHeader: "DeviceToken \(token)"
+        )
+        try await store.upsertSingle(dto)
+        return dto
+    }
+
     /// Re-fetches the job and its `metadata_table` — the metadata-merge signal
     /// (`ccm/signals.py:175-260`) runs synchronously inside the booking-annotation create
     /// request, so by the time that call returns, this pulls in whatever columns it merged.
@@ -201,7 +238,9 @@ actor InstrumentJobStore {
                 submittedAt: dto.submittedAt,
                 completedAt: dto.completedAt,
                 metadataTableServerID: dto.metadataTable,
-                labGroupServerID: dto.labGroup
+                labGroupServerID: dto.labGroup,
+                staffServerIDs: dto.staff,
+                staffUsernames: dto.staffUsernames
             )
             modelContext.insert(created)
             return created
@@ -215,6 +254,8 @@ actor InstrumentJobStore {
         job.completedAt = dto.completedAt
         job.metadataTableServerID = dto.metadataTable
         job.labGroupServerID = dto.labGroup
+        job.staffServerIDs = dto.staff
+        job.staffUsernames = dto.staffUsernames
     }
 
     func upsertMetadataTable(_ dto: MetadataTableDTO, instrumentJobClientID: UUID) throws {

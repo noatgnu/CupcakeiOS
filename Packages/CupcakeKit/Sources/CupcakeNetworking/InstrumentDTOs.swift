@@ -29,10 +29,16 @@ public struct InstrumentUsageDTO: Decodable, Sendable {
 /// `POST instrument-usage/` body. Field set verified against `InstrumentUsageSerializer`
 /// (`ccm/serializers.py:418-453`) and the reference web app's `instrument-usage-modal.ts`, which
 /// only ever collects `timeStarted`/`timeEnded`/`description`/`maintenance` — `approved` is
-/// deliberately never sent by this app (it's technically writable server-side and defaults to
-/// `false` only when omitted, but a client claiming its own booking is pre-approved would be
-/// wrong to do even though the backend doesn't stop it — see `InstrumentSyncService`'s doc
-/// comment). Both timestamps are ISO 8601 strings; `timeEnded` is nil for an in-progress booking.
+/// deliberately never sent by this app. The server's real behavior when it's omitted (confirmed
+/// live, correcting an earlier, incomplete assumption here) is conditional, not a flat default:
+/// `ccm/serializers.py:532-536` sets `approved = False` only when the booking *requires*
+/// pre-approval; when it doesn't (the common case for an instrument with no
+/// `max_days_ahead_pre_approval`/`max_days_within_usage_pre_approval` restrictions — e.g. every
+/// booking against a real, freshly-seeded test instrument came back `"approved": true` despite
+/// never sending the field), the server auto-approves it. A client claiming its own booking is
+/// pre-approved would still be wrong to do even where the backend doesn't stop it — see
+/// `InstrumentSyncService`'s doc comment). Both timestamps are ISO 8601 strings; `timeEnded` is
+/// nil for an in-progress booking.
 public struct CreateInstrumentUsageRequest: Encodable, Sendable {
     public var instrument: Int64
     public var timeStarted: String

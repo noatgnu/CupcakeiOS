@@ -205,11 +205,11 @@ struct ProtocolDetailView: View {
             if case .transport = error {
                 try? await services.outboxSync.enqueueCreateSection(clientID: clientID)
             } else {
-                errorMessage = "Saved locally, but couldn't sync: \(error.localizedDescription)"
+                errorMessage = "Saved locally, but couldn't sync: \(error.userFacingMessage)"
                 isShowingError = true
             }
         } catch {
-            errorMessage = "Saved locally, but couldn't sync: \(error.localizedDescription)"
+            errorMessage = "Saved locally, but couldn't sync: \(error.userFacingMessage)"
             isShowingError = true
         }
     }
@@ -231,11 +231,11 @@ struct ProtocolDetailView: View {
             if case .transport = error {
                 try? await services.outboxSync.enqueueCreateStep(clientID: clientID)
             } else {
-                errorMessage = "Saved locally, but couldn't sync: \(error.localizedDescription)"
+                errorMessage = "Saved locally, but couldn't sync: \(error.userFacingMessage)"
                 isShowingError = true
             }
         } catch {
-            errorMessage = "Saved locally, but couldn't sync: \(error.localizedDescription)"
+            errorMessage = "Saved locally, but couldn't sync: \(error.userFacingMessage)"
             isShowingError = true
         }
     }
@@ -280,11 +280,11 @@ struct ProtocolDetailView: View {
             if case .transport = error {
                 try? await services.outboxSync.enqueueCreateSession(clientID: clientID)
             } else {
-                errorMessage = "Saved locally, but couldn't sync: \(error.localizedDescription)"
+                errorMessage = "Saved locally, but couldn't sync: \(error.userFacingMessage)"
                 isShowingError = true
             }
         } catch {
-            errorMessage = "Saved locally, but couldn't sync: \(error.localizedDescription)"
+            errorMessage = "Saved locally, but couldn't sync: \(error.userFacingMessage)"
             isShowingError = true
         }
     }

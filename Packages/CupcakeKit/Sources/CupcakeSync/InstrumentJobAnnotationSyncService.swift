@@ -41,11 +41,18 @@ public actor InstrumentJobAnnotationSyncService {
         }
     }
 
-    /// The full 3-call booking sequence (`POST instrument-usage/` -> `POST
-    /// instrument-job-annotations/` with `annotation_type: "booking"` -> `POST
-    /// instrument-usage-job-annotations/` to link them), then refreshes the job's metadata table
-    /// to pick up whatever the server-side merge signal added. Requires the job to already have
-    /// a `metadata_table` (via `createMetadataFromTemplate`) — the merge signal no-ops otherwise.
+    /// Sets the job's `instrument` FK, then the full 3-call booking sequence (`POST
+    /// instrument-usage/` -> `POST instrument-job-annotations/` with `annotation_type: "booking"`
+    /// -> `POST instrument-usage-job-annotations/` to link them), then refreshes the job's
+    /// metadata table to pick up whatever the server-side merge signal added. Requires the job to
+    /// already have a `metadata_table` (via `createMetadataFromTemplate`) — the merge signal
+    /// no-ops otherwise.
+    ///
+    /// The `instrument` PATCH is not optional — confirmed live that the merge signal
+    /// (`ccm/signals.py:175-260`) bails out immediately if `instrument_job.instrument` is unset,
+    /// regardless of whether the usage/annotation/link calls below all succeed. Without it, this
+    /// whole method silently does nothing but create bookkeeping records — no error, no merged
+    /// columns, and no indication anything is wrong.
     @discardableResult
     public func createBookingAnnotation(
         jobServerID: Int64,
@@ -60,6 +67,8 @@ public actor InstrumentJobAnnotationSyncService {
             throw InstrumentJobAnnotationSyncError.noDeviceToken
         }
         let authorization = "DeviceToken \(token)"
+
+        try await instrumentJobSync.updateInstrument(jobServerID: jobServerID, instrumentServerID: instrumentServerID)
 
         let usage: InstrumentUsageDTO = try await apiClient.send(
             "instrument-usage/",

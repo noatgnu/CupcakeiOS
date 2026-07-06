@@ -1,4 +1,5 @@
 import CupcakeModels
+import CupcakeNetworking
 import CupcakeSync
 import SwiftData
 import SwiftUI
@@ -23,10 +24,23 @@ struct JobDetailView: View {
     @State private var isShowingError = false
     @State private var isShowingCreateMetadataSheet = false
     @State private var isShowingBookInstrumentSheet = false
+    @State private var isShowingStaffAssignmentSheet = false
+    @State private var pendingStaffAssignmentLabGroupServerID: Int64?
+    @State private var editingColumn: CachedMetadataColumn?
     @State private var isLoadingBookings = false
 
     private var job: CachedInstrumentJob? {
         jobs.first(where: { $0.clientID == jobClientID })
+    }
+
+    /// Only lab groups with `allowProcessJobs` are offered for job assignment — a deliberate
+    /// divergence from the reference web app, which shows every one of the user's lab groups
+    /// with no such filter. `allowProcessJobs` only governs whether *new* members automatically
+    /// get `can_process_jobs` (the actual per-user permission enforced server-side when staff are
+    /// assigned), so this filter is a coarser, intentional narrowing — not a literal mirror of a
+    /// server-side eligibility rule for the group itself, which doesn't exist.
+    private var jobAssignableLabGroups: [CachedLabGroup] {
+        labGroups.filter(\.allowProcessJobs)
     }
 
     private var projectName: String? {
@@ -101,11 +115,28 @@ struct JobDetailView: View {
                             }
                         )) {
                             Text("None").tag(Int64?.none)
-                            ForEach(labGroups) { group in
+                            ForEach(jobAssignableLabGroups) { group in
                                 Text(group.name).tag(Optional(group.serverID))
                             }
                         }
                         .accessibilityIdentifier("jobLabGroupPicker")
+                    }
+                    if let labGroupServerID = job.labGroupServerID {
+                        Section("Staff") {
+                            if job.staffUsernames.isEmpty {
+                                Text("No staff assigned")
+                                    .foregroundStyle(.secondary)
+                            } else {
+                                ForEach(job.staffUsernames, id: \.self) { username in
+                                    Text(username)
+                                }
+                            }
+                            Button("Assign Staff") {
+                                pendingStaffAssignmentLabGroupServerID = labGroupServerID
+                                isShowingStaffAssignmentSheet = true
+                            }
+                            .accessibilityIdentifier("assignStaffButton")
+                        }
                     }
                 }
                 Section {
@@ -126,14 +157,22 @@ struct JobDetailView: View {
                         LabeledContent("Name", value: metadataTable.name)
                         LabeledContent("Samples", value: "\(metadataTable.sampleCount)")
                         ForEach(sortedColumns) { column in
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(column.displayName ?? column.name)
-                                if let value = column.value, !value.isEmpty {
-                                    Text(value)
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
+                            Button {
+                                editingColumn = column
+                            } label: {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(column.displayName ?? column.name)
+                                        .foregroundStyle(.primary)
+                                    if let value = column.value, !value.isEmpty {
+                                        Text(value)
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
                                 }
                             }
+                            .buttonStyle(.plain)
+                            .disabled(column.readonly)
+                            .accessibilityIdentifier("metadataColumnRow_\(column.name)")
                         }
                     } else {
                         Button("Create from Template") {
@@ -183,6 +222,19 @@ struct JobDetailView: View {
                 BookInstrumentForJobSheet(jobClientID: job.clientID, jobServerID: serverID)
             }
         }
+        .sheet(isPresented: $isShowingStaffAssignmentSheet) {
+            if let job, let serverID = job.serverID, let labGroupServerID = pendingStaffAssignmentLabGroupServerID {
+                StaffAssignmentSheet(
+                    jobClientID: job.clientID,
+                    jobServerID: serverID,
+                    labGroupServerID: labGroupServerID,
+                    initiallySelectedStaffIDs: Set(job.staffServerIDs)
+                )
+            }
+        }
+        .sheet(item: $editingColumn) { column in
+            MetadataValueEditSheet(column: column)
+        }
         .task(id: job?.serverID) {
             await loadBookings()
         }
@@ -219,7 +271,7 @@ struct JobDetailView: View {
                 try await services.instrumentJobSync.cancel(jobServerID: serverID)
             }
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage = error.userFacingMessage
             isShowingError = true
         }
     }
@@ -229,7 +281,7 @@ struct JobDetailView: View {
             let services = appSession.makeSyncServices()
             try await services.instrumentJobSync.updateLabGroup(jobServerID: jobServerID, labGroupServerID: labGroupServerID)
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage = error.userFacingMessage
             isShowingError = true
         }
     }

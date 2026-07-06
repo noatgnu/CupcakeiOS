@@ -94,11 +94,11 @@ struct NewProtocolView: View {
                 try? await services.outboxSync.enqueueCreateProtocol(clientID: clientID, title: title, description: description, enabled: enabled)
                 dismiss()
             } else {
-                errorMessage = "Saved locally, but couldn't sync: \(error.localizedDescription)"
+                errorMessage = "Saved locally, but couldn't sync: \(error.userFacingMessage)"
                 isShowingError = true
             }
         } catch {
-            errorMessage = "Saved locally, but couldn't sync: \(error.localizedDescription)"
+            errorMessage = "Saved locally, but couldn't sync: \(error.userFacingMessage)"
             isShowingError = true
         }
     }

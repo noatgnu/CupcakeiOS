@@ -92,8 +92,122 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         XCTAssertFalse(elementContaining("Local only", in: app).exists, "\"Local only\" is standalone-mode-only phrasing — shouldn't appear when signed in")
     }
 
+    /// Exercises the new `MetadataValueEditSheet` against a real job's real metadata column
+    /// (both set up ahead of time via direct API calls during this feature's development — this
+    /// test just needs *some* job with a metadata table and at least one column to already exist
+    /// on the backend, not a specific one, so it signs in and edits whatever the first job's
+    /// first metadata column happens to be).
+    @MainActor
+    func testEditMetadataColumnValueSyncsImmediately() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing-reset-state"]
+        app.launch()
+
+        let serverURLField = app.textFields["serverURLField"]
+        XCTAssertTrue(serverURLField.waitForExistence(timeout: 5))
+        serverURLField.tap()
+        replaceText(in: serverURLField, withPasted: "http://127.0.0.1:8002/api/v1/")
+
+        let usernameField = app.textFields["usernameField"]
+        usernameField.tap()
+        usernameField.typeText("testuser")
+
+        let passwordField = app.secureTextFields["passwordField"]
+        passwordField.tap()
+        passwordField.typeText("testuser123")
+
+        app.buttons["signInButton"].tap()
+
+        // The tab bar itself (unlike its content) doesn't depend on the initial sync completing,
+        // but confirmed live it can still take longer than `tapTab`'s 5s default to actually
+        // settle in this shared/contended local environment — a generous explicit timeout here
+        // rather than waiting on unrelated protocol content first.
+        tapTab("Jobs", in: app, timeout: 30)
+
+        let jobRow = waitForMatch(NSPredicate(format: "label CONTAINS %@", "test job"), in: app.staticTexts, timeout: 60)
+        XCTAssertTrue(jobRow.exists, "The existing 'test job' should appear once synced")
+        jobRow.tap()
+
+        let columnRow = app.buttons["metadataColumnRow_Serial Number"]
+        XCTAssertTrue(columnRow.waitForExistence(timeout: 10), "The job's 'Serial Number' metadata column should be listed")
+        columnRow.tap()
+
+        let valueField = app.textFields["metadataValueField"]
+        XCTAssertTrue(valueField.waitForExistence(timeout: 5))
+        let newValue = "SN-\(Int(Date().timeIntervalSince1970))"
+        replaceText(in: valueField, withPasted: newValue)
+
+        app.buttons["saveMetadataValueButton"].tap()
+
+        let errorAlert = app.alerts["Couldn't save value"]
+        XCTAssertFalse(errorAlert.waitForExistence(timeout: 3), "Saving a metadata value against a reachable backend shouldn't show an error")
+
+        let updatedValueElement = waitForMatch(NSPredicate(format: "label CONTAINS %@", newValue), in: app.staticTexts, timeout: 10)
+        XCTAssertTrue(updatedValueElement.exists, "The updated value should appear in the column list after saving")
+    }
+
     // MARK: - Helpers (mirrors CupcakeOfflineFlowUITests's private helpers, duplicated rather
     // than shared across test targets/files for simplicity)
+
+    /// Unlike `CupcakeOfflineFlowUITests`'s identifier-based `tapTab`, this matches by **label**
+    /// explicitly via an `NSPredicate` — confirmed live via an accessibility-hierarchy dump that
+    /// on macOS, a `.tabItem { Label(name, systemImage:) }` radio button's `identifier` is the SF
+    /// Symbol name (e.g. `"list.clipboard"`), not the label text, so the plain `app.radioButtons[
+    /// "Jobs"]` subscript (which matches by identifier) silently never finds it.
+    ///
+    /// Polls manually with a fresh query each iteration rather than a single
+    /// `.matching(predicate).firstMatch.waitForExistence(...)` — confirmed live that the element
+    /// is genuinely present (per accessibility-hierarchy dumps taken during the exact failure),
+    /// yet `waitForExistence` on that compound query form never detects it appearing, even with
+    /// a 30s timeout; re-issuing the query fresh each poll avoids whatever staleness that form
+    /// has.
+    private func tapTab(_ label: String, in app: XCUIApplication, timeout: TimeInterval = 5) {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            let predicate = NSPredicate(format: "label == %@", label)
+            let match = firstExisting(
+                app.tabBars.buttons.matching(predicate).firstMatch,
+                app.buttons.matching(predicate).firstMatch,
+                app.radioButtons.matching(predicate).firstMatch
+            )
+            if match.exists {
+                match.tap()
+                return
+            }
+            Thread.sleep(forTimeInterval: 0.5)
+        }
+
+        let more = app.tabBars.buttons["More"]
+        XCTAssertTrue(more.waitForExistence(timeout: timeout), "Neither \"\(label)\" nor a \"More\" tab overflow was found")
+        more.tap()
+
+        let itemInMore = firstExisting(app.staticTexts[label], app.buttons[label], app.cells[label])
+        XCTAssertTrue(itemInMore.waitForExistence(timeout: timeout), "\"\(label)\" was not found inside the tab bar's More list")
+        itemInMore.tap()
+    }
+
+    /// Same manual re-query-each-poll workaround as `tapTab`, generalized for any
+    /// `.matching(predicate)` query — `.firstMatch.waitForExistence(...)` on a compound predicate
+    /// query is confirmed live to sometimes never detect an element appearing even when it's
+    /// genuinely present (per accessibility-hierarchy dumps taken during the exact failure),
+    /// while a fresh query issued each poll does.
+    private func waitForMatch(_ predicate: NSPredicate, in query: XCUIElementQuery, timeout: TimeInterval) -> XCUIElement {
+        let deadline = Date().addingTimeInterval(timeout)
+        var match = query.matching(predicate).firstMatch
+        while Date() < deadline {
+            match = query.matching(predicate).firstMatch
+            if match.exists { return match }
+            Thread.sleep(forTimeInterval: 0.5)
+        }
+        return match
+    }
+
+    private func firstExisting(_ candidates: XCUIElement...) -> XCUIElement {
+        for candidate in candidates where candidate.exists {
+            return candidate
+        }
+        return candidates[0]
+    }
 
     /// Paste-based text entry, bypassing `typeText`'s per-character key-event synthesis (which
     /// silently drops `:` — confirmed live, not a theoretical risk).

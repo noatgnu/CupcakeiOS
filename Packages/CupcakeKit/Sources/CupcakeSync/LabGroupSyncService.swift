@@ -30,6 +30,22 @@ public actor LabGroupSyncService {
             page = try await apiClient.get(absoluteURL: nextURL, authorizationHeader: authorization)
         }
     }
+
+    /// `direct_only=true` — matches the reference web app's own `getLabGroupMembers` call for
+    /// job-submission staff candidates (`job-submission-state.ts`): direct membership only, not
+    /// bubbled-up sub-group members, since staff assignment itself requires direct membership
+    /// server-side (`InstrumentJobSerializer.validate` rule 2). Only the first page — matching
+    /// the reference app's own `limit: 10` for this exact picker, not a general limitation.
+    public func fetchMembers(labGroupServerID: Int64) async throws -> [UserDTO] {
+        guard let token = deviceToken() else { return [] }
+        let authorization = "DeviceToken \(token)"
+        let page: PaginatedResponse<UserDTO> = try await apiClient.get(
+            "lab-groups/\(labGroupServerID)/members/",
+            query: [URLQueryItem(name: "direct_only", value: "true")],
+            authorizationHeader: authorization
+        )
+        return page.results
+    }
 }
 
 @ModelActor

@@ -1,3 +1,4 @@
+import CupcakeNetworking
 import SwiftUI
 
 /// The reference web app's login form also has a "Remember Me" checkbox (extends the JWT
@@ -91,7 +92,7 @@ struct LoginView: View {
             do {
                 try await appSession.signIn(serverURLString: serverURLString, username: username, password: password)
             } catch {
-                errorMessage = "Sign in failed: \(error.localizedDescription)"
+                errorMessage = "Sign in failed: \(error.userFacingMessage)"
             }
         }
     }
@@ -104,7 +105,7 @@ struct LoginView: View {
             do {
                 try await appSession.signInWithORCID(serverURLString: serverURLString)
             } catch {
-                errorMessage = "ORCID sign in failed: \(error.localizedDescription)"
+                errorMessage = "ORCID sign in failed: \(error.userFacingMessage)"
             }
         }
     }

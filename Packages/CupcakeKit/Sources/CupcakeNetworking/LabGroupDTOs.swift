@@ -8,3 +8,13 @@ public struct LabGroupDTO: Decodable, Sendable {
     public let description: String?
     public let allowProcessJobs: Bool
 }
+
+/// `GET lab-groups/{id}/members/?direct_only=true` response entry. Verified against
+/// `UserSerializer` (`ccc/serializers.py`) and the real response body directly — only the
+/// fields this app's staff-picker actually needs are modeled.
+public struct UserDTO: Decodable, Sendable, Identifiable {
+    public let id: Int64
+    public let username: String
+    public let firstName: String?
+    public let lastName: String?
+}

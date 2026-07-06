@@ -105,14 +105,14 @@ struct RecordReagentActionSheet: View {
                 try? await services.outboxSync.enqueueCreateReagentAction(clientID: clientID)
                 dismiss()
             } else {
-                errorMessage = "Saved locally, but couldn't sync: \(error.localizedDescription)"
+                errorMessage = "Saved locally, but couldn't sync: \(error.userFacingMessage)"
                 isShowingError = true
             }
         } catch SyncDependencyError.parentNotSynced {
             try? await services.outboxSync.enqueueCreateReagentAction(clientID: clientID)
             dismiss()
         } catch {
-            errorMessage = "Saved locally, but couldn't sync: \(error.localizedDescription)"
+            errorMessage = "Saved locally, but couldn't sync: \(error.userFacingMessage)"
             isShowingError = true
         }
     }

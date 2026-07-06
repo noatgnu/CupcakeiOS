@@ -1,4 +1,5 @@
 import CupcakeModels
+import CupcakeNetworking
 import CupcakeSync
 import SwiftData
 import SwiftUI
@@ -91,7 +92,7 @@ struct CreateMetadataFromTemplateSheet: View {
             )
             dismiss()
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage = error.userFacingMessage
             isShowingError = true
         }
     }

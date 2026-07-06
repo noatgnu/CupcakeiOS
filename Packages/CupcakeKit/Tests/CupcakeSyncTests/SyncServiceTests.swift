@@ -971,7 +971,8 @@ struct SyncServiceTests {
             } else {
                 let json = Data("""
                 {"id": 44, "job_name": "Run 1", "job_type": "analysis", "status": "draft",
-                 "project": 12, "instrument": null, "submitted_at": null, "completed_at": null}
+                 "project": 12, "instrument": null, "submitted_at": null, "completed_at": null,
+                 "staff": [], "staff_usernames": []}
                 """.utf8)
                 return (HTTPURLResponse(url: request.url!, statusCode: 201, httpVersion: nil, headerFields: nil)!, json)
             }
@@ -1053,7 +1054,8 @@ struct SyncServiceTests {
             #expect(request.url!.path.hasSuffix("/instrument-jobs/44/submit"))
             let json = Data("""
             {"id": 44, "job_name": "Run 1", "job_type": "analysis", "status": "submitted",
-             "project": null, "instrument": null, "submitted_at": "2026-01-01T00:00:00Z", "completed_at": null}
+             "project": null, "instrument": null, "submitted_at": "2026-01-01T00:00:00Z", "completed_at": null,
+             "staff": [], "staff_usernames": []}
             """.utf8)
             return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
         }
@@ -1073,5 +1075,208 @@ struct SyncServiceTests {
         let jobs = try context.fetch(FetchDescriptor<CachedInstrumentJob>())
         #expect(jobs.first?.status == "submitted")
         #expect(jobs.first?.submittedAt != nil)
+    }
+
+    @Test("InstrumentJobAnnotationSyncService.createBookingAnnotation sets the job's instrument before booking, or the server-side merge signal silently never fires")
+    func createBookingAnnotationSetsInstrumentFirst() async throws {
+        // Confirmed live against a real backend: `merge_instrument_metadata_on_booking`
+        // (`ccm/signals.py`) bails out immediately if `instrument_job.instrument` is unset — and
+        // nothing else in the booking sequence ever sets it. Every other call in this sequence
+        // succeeds regardless, making this the one call whose absence is a silent no-op, not an
+        // error — this test exists specifically to make that ordering a regression, not just a
+        // one-off manual finding.
+        nonisolated(unsafe) var sawInstrumentPatchBeforeUsagePost = false
+        nonisolated(unsafe) var patchedInstrumentJobPath: String?
+
+        StubURLProtocol.handler = { request in
+            let path = request.url!.path
+            if request.httpMethod == "PATCH", path.hasSuffix("/instrument-jobs/77") {
+                patchedInstrumentJobPath = path
+                let json = Data("""
+                {"id": 77, "job_name": "Run 1", "job_type": "analysis", "status": "draft",
+                 "project": 1, "instrument": 5, "submitted_at": null, "completed_at": null,
+                 "staff": [], "staff_usernames": []}
+                """.utf8)
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+            } else if request.httpMethod == "POST", path.hasSuffix("/instrument-usage") {
+                sawInstrumentPatchBeforeUsagePost = patchedInstrumentJobPath != nil
+                let json = Data("""
+                {"id": 9, "instrument": 5, "instrument_name": "Test Centrifuge",
+                 "time_started": "2026-07-06T10:00:00Z", "time_ended": "2026-07-06T11:00:00Z",
+                 "description": "test booking", "approved": true, "maintenance": false}
+                """.utf8)
+                return (HTTPURLResponse(url: request.url!, statusCode: 201, httpVersion: nil, headerFields: nil)!, json)
+            } else if request.httpMethod == "POST", path.hasSuffix("/instrument-job-annotations") {
+                let json = Data("""
+                {"id": 3, "instrument_job": 77, "annotation_text": "Instrument booking for Test Centrifuge",
+                 "annotation_type": "booking", "role": "staff", "order": 0}
+                """.utf8)
+                return (HTTPURLResponse(url: request.url!, statusCode: 201, httpVersion: nil, headerFields: nil)!, json)
+            } else if request.httpMethod == "POST", path.hasSuffix("/instrument-usage-job-annotations") {
+                let json = Data("""
+                {"id": 1, "instrument_job_annotation": 3, "instrument_usage": 9}
+                """.utf8)
+                return (HTTPURLResponse(url: request.url!, statusCode: 201, httpVersion: nil, headerFields: nil)!, json)
+            } else if request.httpMethod == "GET", path.hasSuffix("/instrument-jobs/77") {
+                let json = Data("""
+                {"id": 77, "job_name": "Run 1", "job_type": "analysis", "status": "draft",
+                 "project": 1, "instrument": 5, "submitted_at": null, "completed_at": null, "metadata_table": 12,
+                 "staff": [], "staff_usernames": []}
+                """.utf8)
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+            } else {
+                let json = Data("""
+                {"id": 12, "name": "Run 1 - Metadata", "description": null, "sample_count": 1,
+                 "version": "1.0", "owner_username": "testuser", "lab_group_name": null,
+                 "is_published": false, "can_edit": true,
+                 "columns": [{"id": 1, "name": "Serial Number", "display_name": "Serial Number",
+                              "type": "characteristics", "column_position": 0, "value": "SN-12345",
+                              "not_applicable": false, "not_available": false, "mandatory": false, "hidden": false,
+                              "readonly": false, "ontology_type": null, "staff_only": false}]}
+                """.utf8)
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+            }
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedInstrumentJob.self, CachedInstrumentJobAnnotation.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let instrumentJobSync = InstrumentJobSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let instrumentJobAnnotationSync = InstrumentJobAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" }, instrumentJobSync: instrumentJobSync)
+
+        let mergedTable = try await instrumentJobAnnotationSync.createBookingAnnotation(
+            jobServerID: 77,
+            jobClientID: UUID(),
+            instrumentServerID: 5,
+            instrumentName: "Test Centrifuge",
+            timeStarted: "2026-07-06T10:00:00Z",
+            timeEnded: "2026-07-06T11:00:00Z",
+            usageDescription: "test booking"
+        )
+
+        #expect(patchedInstrumentJobPath != nil, "the job's instrument must be PATCHed as part of booking, or the merge signal never fires")
+        #expect(sawInstrumentPatchBeforeUsagePost, "the instrument PATCH must happen before the booking sequence, not after")
+        #expect(mergedTable?.columns.first?.name == "Serial Number")
+    }
+
+    @Test("LabGroupSyncService.fetchMembers requests direct members only")
+    func fetchMembersRequestsDirectOnly() async throws {
+        StubURLProtocol.handler = { request in
+            #expect(request.url!.path.hasSuffix("/lab-groups/1/members"))
+            #expect(request.url!.query?.contains("direct_only=true") == true)
+            let json = Data("""
+            {"count": 1, "next": null, "previous": null, "results": [
+                {"id": 1, "username": "testuser", "first_name": "", "last_name": ""}
+            ]}
+            """.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedLabGroup.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let labGroupSync = LabGroupSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        let members = try await labGroupSync.fetchMembers(labGroupServerID: 1)
+        #expect(members.count == 1)
+        #expect(members.first?.username == "testuser")
+    }
+
+    @Test("InstrumentJobSyncService.updateStaff PATCHes the job's staff list and updates the cache")
+    func updateStaffPatchesJob() async throws {
+        StubURLProtocol.handler = { request in
+            #expect(request.httpMethod == "PATCH")
+            #expect(request.url!.path.hasSuffix("/instrument-jobs/88"))
+            let json = Data("""
+            {"id": 88, "job_name": "Run 2", "job_type": "analysis", "status": "draft",
+             "project": null, "instrument": null, "submitted_at": null, "completed_at": null,
+             "lab_group": 1, "staff": [1], "staff_usernames": ["testuser"]}
+            """.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedInstrumentJob.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let instrumentJobSync = InstrumentJobSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        let context = ModelContext(container)
+        let job = CachedInstrumentJob(serverID: 88, jobName: "Run 2", status: "draft")
+        context.insert(job)
+        try context.save()
+
+        let dto = try await instrumentJobSync.updateStaff(jobServerID: 88, staffServerIDs: [1])
+        #expect(dto.staffUsernames == ["testuser"])
+
+        let jobs = try context.fetch(FetchDescriptor<CachedInstrumentJob>())
+        #expect(jobs.first?.staffServerIDs == [1])
+        #expect(jobs.first?.staffUsernames == ["testuser"])
+    }
+
+    @Test("MetadataColumnSyncService.updateColumnValue POSTs the value and updates the cached column in place")
+    func updateColumnValueUpdatesCache() async throws {
+        StubURLProtocol.handler = { request in
+            #expect(request.httpMethod == "POST")
+            #expect(request.url!.path.hasSuffix("/metadata-columns/5/update_column_value"))
+            let json = Data("""
+            {"message": "Column value updated successfully", "value_type": "default",
+             "changes": {}, "column": {"id": 5, "name": "Serial Number", "display_name": "Serial Number",
+             "type": "characteristics", "column_position": 0, "value": "SN-99999",
+             "not_applicable": false, "not_available": false, "mandatory": false, "hidden": false,
+             "readonly": false, "ontology_type": null, "staff_only": false}}
+            """.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedMetadataColumn.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let metadataColumnSync = MetadataColumnSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        let context = ModelContext(container)
+        let column = CachedMetadataColumn(serverID: 5, metadataTableServerID: 3, name: "Serial Number", type: "characteristics", value: "SN-12345")
+        context.insert(column)
+        try context.save()
+
+        let dto = try await metadataColumnSync.updateColumnValue(columnServerID: 5, value: "SN-99999")
+        #expect(dto.value == "SN-99999")
+
+        let columns = try context.fetch(FetchDescriptor<CachedMetadataColumn>())
+        #expect(columns.first?.value == "SN-99999")
+    }
+
+    @Test("MetadataColumnSyncService.fetchOntologySuggestions requests suggestions scoped to the column")
+    func fetchOntologySuggestionsScopesToColumn() async throws {
+        StubURLProtocol.handler = { request in
+            #expect(request.url!.path.hasSuffix("/metadata-columns/ontology_suggestions"))
+            #expect(request.url!.query?.contains("column_id=5") == true)
+            let json = Data("""
+            {"ontology_type": "species", "suggestions": [
+                {"id": "9606", "value": "Homo sapiens", "display_name": "Homo sapiens",
+                 "description": "Homo sapiens", "ontology_type": "species"}
+            ], "search_term": "homo", "search_type": "icontains", "limit": 10, "count": 1,
+             "custom_filters": {}, "has_more": false}
+            """.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedMetadataColumn.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let metadataColumnSync = MetadataColumnSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        let suggestions = try await metadataColumnSync.fetchOntologySuggestions(columnServerID: 5, search: "homo")
+        #expect(suggestions.count == 1)
+        #expect(suggestions.first?.displayName == "Homo sapiens")
+    }
+
+    @Test("MetadataColumnSyncService.fetchOntologySuggestions returns empty for a search under 2 characters, without a network call")
+    func fetchOntologySuggestionsSkipsShortSearch() async throws {
+        StubURLProtocol.handler = { _ in
+            Issue.record("should not make a network call for a search under 2 characters")
+            throw URLError(.badServerResponse)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedMetadataColumn.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let metadataColumnSync = MetadataColumnSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        let suggestions = try await metadataColumnSync.fetchOntologySuggestions(columnServerID: 5, search: "h")
+        #expect(suggestions.isEmpty)
     }
 }

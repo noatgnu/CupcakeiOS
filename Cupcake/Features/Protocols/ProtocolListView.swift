@@ -1,4 +1,5 @@
 import CupcakeModels
+import CupcakeNetworking
 import CupcakeSync
 import SwiftData
 import SwiftUI
@@ -149,7 +150,7 @@ struct ProtocolListView: View {
             try await services.labGroupSync.refetchAll()
             try await services.metadataTableTemplateSync.refetchAll()
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage = error.userFacingMessage
             isShowingError = true
         }
     }

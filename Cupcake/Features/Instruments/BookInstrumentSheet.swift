@@ -108,11 +108,11 @@ struct BookInstrumentSheet: View {
                 try? await services.outboxSync.enqueueCreateInstrumentUsage(clientID: clientID)
                 dismiss()
             } else {
-                errorMessage = "Saved locally, but couldn't sync: \(error.localizedDescription)"
+                errorMessage = "Saved locally, but couldn't sync: \(error.userFacingMessage)"
                 isShowingError = true
             }
         } catch {
-            errorMessage = "Saved locally, but couldn't sync: \(error.localizedDescription)"
+            errorMessage = "Saved locally, but couldn't sync: \(error.userFacingMessage)"
             isShowingError = true
         }
     }

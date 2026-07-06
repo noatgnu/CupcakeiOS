@@ -100,13 +100,13 @@ struct SessionDetailView: View {
             if case .transport = error {
                 try? await services.outboxSync.enqueueCreateTextAnnotation(clientID: clientID)
             } else {
-                errorMessage = "Saved locally, but couldn't sync: \(error.localizedDescription)"
+                errorMessage = "Saved locally, but couldn't sync: \(error.userFacingMessage)"
                 isShowingError = true
             }
         } catch SyncDependencyError.parentNotSynced {
             try? await services.outboxSync.enqueueCreateTextAnnotation(clientID: clientID)
         } catch {
-            errorMessage = "Saved locally, but couldn't sync: \(error.localizedDescription)"
+            errorMessage = "Saved locally, but couldn't sync: \(error.userFacingMessage)"
             isShowingError = true
         }
     }
