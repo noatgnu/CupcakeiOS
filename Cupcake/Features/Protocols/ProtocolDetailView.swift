@@ -59,22 +59,18 @@ struct ProtocolDetailView: View {
         return "\(base) — ×\(entry.stepReagent.scalableFactor.formatted()) = \(scaled.formatted()) \(entry.reagent.unit)"
     }
 
-    /// Stored durations are seconds (see `CachedProtocolStep.stepDuration`'s doc comment) —
-    /// displayed here in minutes, rounded up, since sub-minute precision isn't meaningful for a
-    /// lab protocol's step timing.
-    private func minutes(fromSeconds seconds: Int) -> Int {
-        Int((Double(seconds) / 60.0).rounded(.up))
-    }
-
+    /// Descriptions authored via the reference web app's rich-text editor are stored as HTML —
+    /// `Section`'s title has to be a plain `String`, so this strips markup rather than rendering
+    /// it (the step list below renders the same field richly via `HTMLText` instead).
     private func sectionTitle(_ section: CachedProtocolSection) -> String {
-        let base = section.sectionDescription ?? "Untitled Section"
+        let base = section.sectionDescription.map(HTMLText.plainText(from:)) ?? "Untitled Section"
         guard let duration = section.sectionDuration else { return base }
-        return "\(base) (\(minutes(fromSeconds: duration)) min)"
+        return "\(base) (\(HumanReadableDuration.format(seconds: duration)))"
     }
 
-    private func stepTitle(_ step: CachedProtocolStep) -> String {
-        guard let duration = step.stepDuration else { return step.stepDescription }
-        return "\(step.stepDescription) (\(minutes(fromSeconds: duration)) min)"
+    private func stepDurationLabel(_ step: CachedProtocolStep) -> String? {
+        guard let duration = step.stepDuration else { return nil }
+        return HumanReadableDuration.format(seconds: duration)
     }
 
     var body: some View {
@@ -83,7 +79,12 @@ struct ProtocolDetailView: View {
                 Section(sectionTitle(section)) {
                     ForEach(section.steps.sorted(by: { $0.order < $1.order })) { step in
                         VStack(alignment: .leading, spacing: 4) {
-                            Text(stepTitle(step))
+                            HTMLText(html: step.stepDescription)
+                            if let durationLabel = stepDurationLabel(step) {
+                                Text(durationLabel)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
                             ForEach(stepReagents(for: step), id: \.stepReagent.clientID) { entry in
                                 Text(reagentDisplayText(entry))
                                     .font(.caption)

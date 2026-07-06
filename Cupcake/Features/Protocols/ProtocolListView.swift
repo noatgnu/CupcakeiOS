@@ -9,12 +9,15 @@ struct ProtocolListView: View {
     @Query(sort: \CachedProtocol.protocolTitle) private var protocols: [CachedProtocol]
     @Query private var outboxEntries: [OutboxEntry]
 
+    let ontologyStore: ModelContainer
+
     @State private var selectedProtocolID: UUID?
     @State private var isSyncing = false
     @State private var errorMessage: String?
     @State private var isShowingError = false
     @State private var isShowingNewProtocolSheet = false
     @State private var isShowingSyncIssues = false
+    @State private var isShowingSettings = false
 
     /// A protocol authored by this app that hasn't reached the server yet, while signed in, is
     /// either queued in the outbox (will sync automatically on reconnect) or the sync attempt
@@ -82,6 +85,14 @@ struct ProtocolListView: View {
                         }
                     }
                 }
+                ToolbarItem {
+                    Button {
+                        isShowingSettings = true
+                    } label: {
+                        Label("Settings", systemImage: "gearshape")
+                    }
+                    .accessibilityIdentifier("settingsButton")
+                }
             }
             .task { await sync() }
             .sheet(isPresented: $isShowingNewProtocolSheet) {
@@ -89,6 +100,13 @@ struct ProtocolListView: View {
             }
             .sheet(isPresented: $isShowingSyncIssues) {
                 SyncIssuesView()
+            }
+            .sheet(isPresented: $isShowingSettings) {
+                NavigationStack {
+                    SettingsView()
+                }
+                .modelContainer(ontologyStore)
+                .frame(minWidth: 400, minHeight: 500)
             }
             .alert("Sync failed", isPresented: $isShowingError) {
                 Button("OK") {}
@@ -128,6 +146,8 @@ struct ProtocolListView: View {
             try await services.instrumentSync.refetchInstrumentUsage()
             try await services.projectSync.refetchAll()
             try await services.instrumentJobSync.refetchAll()
+            try await services.labGroupSync.refetchAll()
+            try await services.metadataTableTemplateSync.refetchAll()
         } catch {
             errorMessage = error.localizedDescription
             isShowingError = true

@@ -25,14 +25,9 @@ struct InstrumentDetailView: View {
     }
 
     private func timeRangeText(_ booking: CachedInstrumentUsage) -> String {
-        let start = booking.timeStarted.map(formatted) ?? "…"
-        let end = booking.timeEnded.map(formatted) ?? "In Progress"
+        let start = HumanReadableTime.formatAbsolute(booking.timeStarted) ?? "…"
+        let end = booking.timeEnded.flatMap(HumanReadableTime.formatAbsolute) ?? "In Progress"
         return "\(start) – \(end)"
-    }
-
-    private func formatted(_ isoString: String) -> String {
-        guard let date = ISO8601DateFormatter().date(from: isoString) else { return isoString }
-        return date.formatted(date: .abbreviated, time: .shortened)
     }
 
     var body: some View {

@@ -13,6 +13,18 @@ public struct InstrumentJobDTO: Decodable, Sendable {
     public let instrument: Int64?
     public let submittedAt: String?
     public let completedAt: String?
+    public let metadataTable: Int64?
+    public let labGroup: Int64?
+}
+
+/// `PATCH instrument-jobs/{id}/` body for lab group assignment — writable at the serializer
+/// level (`ccm/serializers.py`), just not part of the initial create call.
+public struct UpdateInstrumentJobLabGroupRequest: Encodable, Sendable {
+    public var labGroup: Int64
+
+    public init(labGroup: Int64) {
+        self.labGroup = labGroup
+    }
 }
 
 /// `POST instrument-jobs/` body. Matches the reference web app's own minimal create payload

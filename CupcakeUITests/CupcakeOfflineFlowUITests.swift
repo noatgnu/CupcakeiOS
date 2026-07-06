@@ -87,9 +87,14 @@ final class CupcakeOfflineFlowUITests: XCTestCase {
 
         app.buttons["addTextSheetSaveButton"].tap()
 
-        let newStepRow = app.staticTexts["Run the assay (15 min)"]
-        XCTAssertTrue(newStepRow.waitForExistence(timeout: 5), "The manually-added step should show its entered duration")
-        XCTAssertTrue(app.staticTexts["Analysis (15 min)"].waitForExistence(timeout: 5), "The section's duration should auto-update to the sum of its steps' durations")
+        // The step's description (`HTMLText`, a styled view) and its duration are now two
+        // separate `Text` elements rather than one concatenated string (`HTMLText` renders an
+        // `AttributedString`, which can't be string-interpolated with a plain duration suffix
+        // the way the section title's plain-`String` duration display still can) — match each
+        // independently rather than expecting one combined label.
+        XCTAssertTrue(elementContaining("Run the assay", in: app).waitForExistence(timeout: 5), "The manually-added step should show its description")
+        XCTAssertTrue(elementContaining("15m", in: app).waitForExistence(timeout: 5), "The manually-added step should show its entered duration")
+        XCTAssertTrue(app.staticTexts["Analysis (15m)"].waitForExistence(timeout: 5), "The section's duration should auto-update to the sum of its steps' durations")
 
         // 7. Attach a (newly-created) reagent to that step — completes the
         // Protocol -> Section -> Step -> StepReagent authoring hierarchy. Name is a typeahead
@@ -150,11 +155,11 @@ final class CupcakeOfflineFlowUITests: XCTestCase {
         XCTAssertTrue(continueOfflineButton.waitForExistence(timeout: 5))
         continueOfflineButton.tap()
 
-        tapTab("Storage", in: app)
-        XCTAssertTrue(app.staticTexts["Empty"].waitForExistence(timeout: 5), "Storage tab should show its empty state with no synced data")
+        tapTab("Inventory", in: app)
+        XCTAssertTrue(app.staticTexts["Empty"].waitForExistence(timeout: 5), "Storage section should show its empty state with no synced data")
 
-        tapTab("Instruments", in: app)
-        XCTAssertTrue(app.staticTexts["No Instruments"].waitForExistence(timeout: 5), "Instruments tab should show its empty state with no synced data")
+        tapSegment("Instruments", in: app)
+        XCTAssertTrue(app.staticTexts["No Instruments"].waitForExistence(timeout: 5), "Instruments section should show its empty state with no synced data")
     }
 
     /// Hits the real, live `noatgnu/cupcake-webgui` GitHub release from inside the actual app
@@ -171,7 +176,8 @@ final class CupcakeOfflineFlowUITests: XCTestCase {
         XCTAssertTrue(continueOfflineButton.waitForExistence(timeout: 5))
         continueOfflineButton.tap()
 
-        tapTab("Settings", in: app)
+        tapTab("Protocols", in: app)
+        tapToolbarButton("settingsButton", label: "Settings", in: app)
 
         let ontologyLink = elementContaining("Offline Ontology Data", in: app)
         XCTAssertTrue(ontologyLink.waitForExistence(timeout: 5))
@@ -184,11 +190,11 @@ final class CupcakeOfflineFlowUITests: XCTestCase {
         XCTAssertTrue(elementContaining("Imported", in: app).waitForExistence(timeout: 20), "Tissue import should complete and show an 'Imported' timestamp")
     }
 
-    /// `submit`/`cancel` require the job to already have a `serverID` (a live-synced job), so
-    /// standalone mode can't exercise those — this covers what standalone mode *can* verify:
-    /// creating a project inline alongside a new job, and both showing up correctly offline.
+    /// Projects are managed on their own standalone screen, matching the reference web app's
+    /// separate Projects page — not created inline as part of job creation (see `NewJobSheet`'s
+    /// doc comment for why that inline flow was removed).
     @MainActor
-    func testCreateJobWithNewProjectOffline() throws {
+    func testCreateProjectOffline() throws {
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing-reset-state"]
         app.launch()
@@ -198,7 +204,33 @@ final class CupcakeOfflineFlowUITests: XCTestCase {
         continueOfflineButton.tap()
 
         tapTab("Jobs", in: app)
+        tapToolbarButton("projectsLink", label: "Projects", in: app)
+        tapToolbarButton("newProjectButton", label: "New Project", in: app)
 
+        let projectNameField = app.textFields["newProjectNameField"]
+        XCTAssertTrue(projectNameField.waitForExistence(timeout: 5))
+        projectNameField.tap()
+        projectNameField.typeText("Proteomics Study")
+        app.buttons["createProjectButton"].tap()
+
+        XCTAssertTrue(elementContaining("Proteomics Study", in: app).waitForExistence(timeout: 5), "The new project should appear in the Projects list")
+    }
+
+    /// `submit`/`cancel` require the job to already have a `serverID` (a live-synced job), so
+    /// standalone mode can't exercise those — this covers what standalone mode *can* verify: a
+    /// job created with no project picked (there's nothing to pick from on a fresh install,
+    /// since project creation is a separate flow — see `testCreateProjectOffline`).
+    @MainActor
+    func testCreateJobOffline() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing-reset-state"]
+        app.launch()
+
+        let continueOfflineButton = app.buttons["continueOfflineButton"]
+        XCTAssertTrue(continueOfflineButton.waitForExistence(timeout: 5))
+        continueOfflineButton.tap()
+
+        tapTab("Jobs", in: app)
         tapToolbarButton("newJobButton", label: "New Job", in: app)
 
         let jobNameField = app.textFields["newJobNameField"]
@@ -206,20 +238,10 @@ final class CupcakeOfflineFlowUITests: XCTestCase {
         jobNameField.tap()
         jobNameField.typeText("LC-MS Run 1")
 
-        let createProjectToggle = app.switches["newJobCreateProjectToggle"]
-        XCTAssertTrue(createProjectToggle.waitForExistence(timeout: 5))
-        createProjectToggle.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
-
-        let newProjectNameField = app.textFields["newJobNewProjectNameField"]
-        XCTAssertTrue(newProjectNameField.waitForExistence(timeout: 5))
-        newProjectNameField.tap()
-        newProjectNameField.typeText("Proteomics Study")
-
         app.buttons["createJobButton"].tap()
 
         let jobRow = elementContaining("LC-MS Run 1", in: app)
         XCTAssertTrue(jobRow.waitForExistence(timeout: 5), "The newly-created job should appear in the Jobs list")
-        XCTAssertTrue(elementContaining("Proteomics Study", in: app).waitForExistence(timeout: 5), "The job's row should show its new project's name")
 
         jobRow.tap()
         XCTAssertTrue(elementContaining("Pending sync", in: app).waitForExistence(timeout: 5), "A standalone-mode job has no serverID, so it should show as pending sync")
@@ -227,6 +249,16 @@ final class CupcakeOfflineFlowUITests: XCTestCase {
         let submitButton = app.buttons["submitJobButton"]
         XCTAssertTrue(submitButton.waitForExistence(timeout: 5))
         XCTAssertFalse(submitButton.isEnabled, "Submit should stay disabled until the job has actually synced to the server")
+
+        let createMetadataButton = app.buttons["createMetadataFromTemplateButton"]
+        XCTAssertTrue(createMetadataButton.waitForExistence(timeout: 5))
+        XCTAssertFalse(createMetadataButton.isEnabled, "Creating a metadata table needs a synced job serverID too")
+
+        XCTAssertFalse(app.descendants(matching: .any)["jobLabGroupPicker"].exists, "Lab group assignment needs a serverID, so its whole section shouldn't render for an unsynced job")
+
+        let bookInstrumentButton = app.buttons["bookInstrumentForJobButton"]
+        XCTAssertTrue(bookInstrumentButton.waitForExistence(timeout: 5))
+        XCTAssertFalse(bookInstrumentButton.isEnabled, "Booking an instrument needs both a synced job serverID and an existing metadata table")
     }
 
     /// `CachedStorageObject`/`CachedInstrument` are read-only server data (never
@@ -244,9 +276,7 @@ final class CupcakeOfflineFlowUITests: XCTestCase {
         continueOfflineButton.tap()
 
         // 1. Drill into the seeded storage location and add a reagent.
-        let storageTab = firstExisting(app.tabBars.buttons["Storage"], app.buttons["Storage"], app.radioButtons["Storage"])
-        XCTAssertTrue(storageTab.waitForExistence(timeout: 5))
-        storageTab.tap()
+        tapTab("Inventory", in: app)
 
         // NavigationLink rows can expose as a single Button (macOS) or nested StaticTexts (iOS)
         // depending on their content — matches the earlier tab-bar discovery, same reasoning.
@@ -298,9 +328,10 @@ final class CupcakeOfflineFlowUITests: XCTestCase {
         XCTAssertTrue(elementContaining("Reserve 50", in: app).waitForExistence(timeout: 5), "The recorded action should appear in the reagent's history")
         XCTAssertTrue(elementContaining("450", in: app).waitForExistence(timeout: 5), "Current Quantity should reflect the reserve action immediately, offline")
 
-        // 3. Book the seeded instrument.
-        let instrumentsTab = firstExisting(app.tabBars.buttons["Instruments"], app.buttons["Instruments"], app.radioButtons["Instruments"])
-        instrumentsTab.tap()
+        // 3. Book the seeded instrument — the segmented control stays visible/tappable
+        // regardless of how deep the Storage side's own NavigationStack is pushed, since it's a
+        // sibling of that stack, not nested inside it.
+        tapSegment("Instruments", in: app)
 
         let instrumentRow = elementContaining("Test Centrifuge", in: app)
         XCTAssertTrue(instrumentRow.waitForExistence(timeout: 5))
@@ -369,6 +400,15 @@ final class CupcakeOfflineFlowUITests: XCTestCase {
         let itemInMore = firstExisting(app.staticTexts[label], app.buttons[label], app.cells[label])
         XCTAssertTrue(itemInMore.waitForExistence(timeout: timeout), "\"\(label)\" was not found inside the tab bar's More list")
         itemInMore.tap()
+    }
+
+    /// `.pickerStyle(.segmented)` exposes as a RadioGroup of RadioButtons on macOS, and as plain
+    /// Buttons in an OtherElement group on iOS — matches the reasoning already established for
+    /// the Add/Reserve segmented control in the reagent-action flow.
+    private func tapSegment(_ label: String, in app: XCUIApplication, timeout: TimeInterval = 5) {
+        let segment = firstExisting(app.radioButtons[label], app.buttons[label])
+        XCTAssertTrue(segment.waitForExistence(timeout: timeout), "\"\(label)\" segment not found")
+        segment.tap()
     }
 
     /// Selects all existing text in a field and replaces it — used for renaming a

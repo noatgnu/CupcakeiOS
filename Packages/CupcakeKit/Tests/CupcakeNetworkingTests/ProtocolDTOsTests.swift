@@ -39,4 +39,43 @@ struct ProtocolDTOsTests {
         #expect(dto.sections.count == 1)
         #expect(dto.sections[0].steps.map(\.stepDescription) == ["Put on gloves", "Label tubes"])
     }
+
+    @Test("decodes a real POST protocols/ create response, which omits `sections` entirely")
+    func decodesCreateResponseMissingSections() throws {
+        // Confirmed live against a real backend: `ProtocolModelCreateSerializer`'s response
+        // (unlike the list/retrieve serializer) has no `sections` key at all — decoding this
+        // with `sections` as a plain required field threw `DecodingError.keyNotFound` on every
+        // single protocol creation, the client never learning its own already-succeeded create
+        // actually worked. Captured verbatim from a real 201 response body.
+        let json = Data("""
+        {
+            "id": 16,
+            "protocol_id": null,
+            "protocol_created_on": "2026-07-05T22:24:11.419052Z",
+            "protocol_doi": null,
+            "protocol_title": "Live Backend Test Protocol",
+            "protocol_url": null,
+            "protocol_version_uri": null,
+            "protocol_description": "",
+            "enabled": false,
+            "model_hash": null,
+            "owner": 1,
+            "editors": [],
+            "viewers": [],
+            "remote_id": null,
+            "remote_host": null,
+            "is_vaulted": false,
+            "created_at": "2026-07-05T22:24:11.419022Z",
+            "updated_at": "2026-07-05T22:24:11.419037Z"
+        }
+        """.utf8)
+
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let dto = try decoder.decode(ProtocolDTO.self, from: json)
+
+        #expect(dto.id == 16)
+        #expect(dto.protocolTitle == "Live Backend Test Protocol")
+        #expect(dto.sections.isEmpty)
+    }
 }

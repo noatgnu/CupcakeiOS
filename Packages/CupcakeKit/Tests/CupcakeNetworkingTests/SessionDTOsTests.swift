@@ -32,4 +32,36 @@ struct SessionDTOsTests {
         #expect(dto.status == "ready")
         #expect(dto.protocols == [42])
     }
+
+    @Test("decodes a real POST sessions/ create response, which omits `status` (and every other field beyond the bare essentials)")
+    func decodesCreateResponseMissingStatus() throws {
+        // Confirmed live against a real backend, same bug shape as `ProtocolDTO.sections`:
+        // `SessionCreateSerializer`'s response has no `status`/`processing`/`started_at`/
+        // `ended_at`/`is_running` at all — only the list/retrieve serializer includes them.
+        // Captured verbatim from a real 201 response body.
+        let json = Data("""
+        {
+            "id": 1,
+            "unique_id": "32b50500-618f-4e7e-bdaa-d5d7aac3baab",
+            "name": "test session",
+            "enabled": false,
+            "owner": 1,
+            "protocols": [],
+            "editors": [],
+            "viewers": [],
+            "remote_id": null,
+            "remote_host": null,
+            "created_at": "2026-07-05T22:51:18.030503Z",
+            "updated_at": "2026-07-05T22:51:18.030508Z"
+        }
+        """.utf8)
+
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let dto = try decoder.decode(SessionDTO.self, from: json)
+
+        #expect(dto.id == 1)
+        #expect(dto.status == nil)
+        #expect(dto.protocols.isEmpty)
+    }
 }

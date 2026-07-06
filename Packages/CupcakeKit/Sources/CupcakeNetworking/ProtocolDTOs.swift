@@ -22,12 +22,32 @@ public struct ProtocolSectionDTO: Decodable, Sendable {
     public let steps: [ProtocolStepDTO]
 }
 
+/// `sections` is absent entirely from `POST protocols/`'s create response (`ProtocolModelCreateSerializer`
+/// doesn't include it — only the list/retrieve serializer does) — confirmed live: decoding a real
+/// create response with `sections` declared non-optional threw `DecodingError.keyNotFound` on
+/// every single protocol creation, the create call never actually completing as far as the client
+/// was concerned even though the server had already made it. Defaults to `[]` when absent rather
+/// than being `Optional`, since "no sections yet" and "sections not decoded" mean the same thing
+/// here — every caller already treats an empty array as "no sections."
 public struct ProtocolDTO: Decodable, Sendable {
     public let id: Int64
     public let protocolTitle: String
     public let protocolDescription: String?
     public let enabled: Bool
     public let sections: [ProtocolSectionDTO]
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(Int64.self, forKey: .id)
+        protocolTitle = try container.decode(String.self, forKey: .protocolTitle)
+        protocolDescription = try container.decodeIfPresent(String.self, forKey: .protocolDescription)
+        enabled = try container.decode(Bool.self, forKey: .enabled)
+        sections = try container.decodeIfPresent([ProtocolSectionDTO].self, forKey: .sections) ?? []
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, protocolTitle, protocolDescription, enabled, sections
+    }
 }
 
 /// `POST protocols/` body. Field set verified against `ProtocolModelCreateSerializer`

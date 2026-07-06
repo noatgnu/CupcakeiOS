@@ -7,7 +7,19 @@ import SwiftData
 public enum CupcakeOntologyStore {
     public static func makeContainer(inMemoryOnly: Bool = false) throws -> ModelContainer {
         let schema = Schema(OntologyRegistry.allModelTypes + [OntologyImportState.self])
-        let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: inMemoryOnly)
+        let configuration: ModelConfiguration
+        if inMemoryOnly {
+            configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
+        } else {
+            // Must not default to the unconfigured `Application Support/default.store` path —
+            // the main `CupcakeStore` in `CupcakeApp.swift` used to default there too, and the
+            // two silently collided on the same physical file (a real bug caught live: whichever
+            // container wrote its schema first made the file unreadable to the other).
+            let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            try? FileManager.default.createDirectory(at: appSupport, withIntermediateDirectories: true)
+            let storeURL = appSupport.appendingPathComponent("CupcakeOntologyStore.store")
+            configuration = ModelConfiguration(schema: schema, url: storeURL)
+        }
         return try ModelContainer(for: schema, configurations: [configuration])
     }
 }

@@ -30,14 +30,16 @@ struct SessionDetailView: View {
     var body: some View {
         List {
             ForEach(steps) { step in
-                Section(step.stepDescription) {
+                Section {
                     ForEach(annotations(for: step)) { annotation in
-                        Text(annotation.annotationText)
+                        HTMLText(html: annotation.annotationText)
                     }
                     Button("Add note…") {
                         selectedStep = step
                     }
                     .accessibilityIdentifier("addNoteButton")
+                } header: {
+                    HTMLText(html: step.stepDescription)
                 }
             }
         }
@@ -48,7 +50,7 @@ struct SessionDetailView: View {
                     TextField("Note", text: $annotationText, axis: .vertical)
                         .accessibilityIdentifier("noteTextField")
                 }
-                .navigationTitle(step.stepDescription)
+                .navigationTitle(HTMLText.plainText(from: step.stepDescription))
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
                         Button("Cancel") {

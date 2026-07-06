@@ -43,6 +43,14 @@ struct JobListView: View {
             .navigationTitle("Jobs")
             .toolbar {
                 ToolbarItem {
+                    NavigationLink {
+                        ProjectListView()
+                    } label: {
+                        Label("Projects", systemImage: "folder")
+                    }
+                    .accessibilityIdentifier("projectsLink")
+                }
+                ToolbarItem {
                     Button {
                         isShowingNewJobSheet = true
                     } label: {

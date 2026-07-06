@@ -132,7 +132,9 @@ actor SessionStore {
         session.name = dto.name
         session.enabled = dto.enabled
         session.isRunning = dto.isRunning
-        session.status = dto.status
+        if let status = dto.status {
+            session.status = status
+        }
         session.protocolServerIDs = dto.protocols
         try modelContext.save()
     }
@@ -151,7 +153,7 @@ actor SessionStore {
                 name: dto.name,
                 enabled: dto.enabled,
                 isRunning: dto.isRunning,
-                status: dto.status,
+                status: dto.status ?? "draft",
                 protocolServerIDs: dto.protocols,
                 primaryProtocolClientID: primaryProtocolClientID
             )
@@ -162,7 +164,9 @@ actor SessionStore {
         cachedSession.name = dto.name
         cachedSession.enabled = dto.enabled
         cachedSession.isRunning = dto.isRunning
-        cachedSession.status = dto.status
+        if let status = dto.status {
+            cachedSession.status = status
+        }
         cachedSession.protocolServerIDs = dto.protocols
         if cachedSession.primaryProtocolClientID == nil {
             cachedSession.primaryProtocolClientID = primaryProtocolClientID

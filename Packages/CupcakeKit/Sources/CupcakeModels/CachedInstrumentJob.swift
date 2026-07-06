@@ -19,6 +19,8 @@ public final class CachedInstrumentJob {
     public var instrumentServerID: Int64?
     public var submittedAt: String?
     public var completedAt: String?
+    public var metadataTableServerID: Int64?
+    public var labGroupServerID: Int64?
 
     public init(
         clientID: UUID = UUID(),
@@ -29,7 +31,9 @@ public final class CachedInstrumentJob {
         projectClientID: UUID? = nil,
         instrumentServerID: Int64? = nil,
         submittedAt: String? = nil,
-        completedAt: String? = nil
+        completedAt: String? = nil,
+        metadataTableServerID: Int64? = nil,
+        labGroupServerID: Int64? = nil
     ) {
         self.clientID = clientID
         self.serverID = serverID
@@ -40,5 +44,7 @@ public final class CachedInstrumentJob {
         self.instrumentServerID = instrumentServerID
         self.submittedAt = submittedAt
         self.completedAt = completedAt
+        self.metadataTableServerID = metadataTableServerID
+        self.labGroupServerID = labGroupServerID
     }
 }

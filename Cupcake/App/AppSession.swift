@@ -25,6 +25,9 @@ struct SyncServices {
     let stepReagentSync: StepReagentSyncService
     let projectSync: ProjectSyncService
     let instrumentJobSync: InstrumentJobSyncService
+    let labGroupSync: LabGroupSyncService
+    let metadataTableTemplateSync: MetadataTableTemplateSyncService
+    let instrumentJobAnnotationSync: InstrumentJobAnnotationSyncService
     let outboxSync: OutboxService
 }
 
@@ -204,6 +207,9 @@ final class AppSession {
         let instrumentSync = InstrumentSyncService(modelContainer: modelContainer, apiClient: client, deviceToken: { tokenSnapshot })
         let projectSync = ProjectSyncService(modelContainer: modelContainer, apiClient: client, deviceToken: { tokenSnapshot })
         let instrumentJobSync = InstrumentJobSyncService(modelContainer: modelContainer, apiClient: client, deviceToken: { tokenSnapshot })
+        let labGroupSync = LabGroupSyncService(modelContainer: modelContainer, apiClient: client, deviceToken: { tokenSnapshot })
+        let metadataTableTemplateSync = MetadataTableTemplateSyncService(modelContainer: modelContainer, apiClient: client, deviceToken: { tokenSnapshot })
+        let instrumentJobAnnotationSync = InstrumentJobAnnotationSyncService(modelContainer: modelContainer, apiClient: client, deviceToken: { tokenSnapshot }, instrumentJobSync: instrumentJobSync)
         return SyncServices(
             protocolSync: protocolSync,
             sessionSync: sessionSync,
@@ -214,6 +220,9 @@ final class AppSession {
             stepReagentSync: stepReagentSync,
             projectSync: projectSync,
             instrumentJobSync: instrumentJobSync,
+            labGroupSync: labGroupSync,
+            metadataTableTemplateSync: metadataTableTemplateSync,
+            instrumentJobAnnotationSync: instrumentJobAnnotationSync,
             outboxSync: OutboxService(
                 modelContainer: modelContainer,
                 protocolSync: protocolSync,

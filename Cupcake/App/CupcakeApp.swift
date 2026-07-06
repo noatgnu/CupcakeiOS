@@ -5,6 +5,7 @@
 
 import CupcakeModels
 import CupcakeOntology
+import Foundation
 import SwiftData
 import SwiftUI
 
@@ -91,13 +92,36 @@ struct CupcakeApp: App {
             CachedInstrumentUsage.self,
             CachedProject.self,
             CachedInstrumentJob.self,
+            CachedLabGroup.self,
+            CachedMetadataTable.self,
+            CachedMetadataColumn.self,
+            CachedMetadataTableTemplate.self,
+            CachedInstrumentJobAnnotation.self,
             OutboxEntry.self,
         ])
-        let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: inMemoryOnly)
+        let configuration: ModelConfiguration
+        if inMemoryOnly {
+            configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
+        } else {
+            // Both this container and `CupcakeOntologyStore` previously omitted an explicit
+            // `url:`, so both defaulted to the exact same `Application Support/default.store`
+            // path and silently collided — whichever container initialized its schema there
+            // first made the file unreadable to the other ("no such table: ..."), a real bug
+            // caught live, not in any test (every test uses `isStoredInMemoryOnly: true`,
+            // which never touches this path at all).
+            let storeURL = Self.applicationSupportDirectory.appendingPathComponent("CupcakeStore.store")
+            configuration = ModelConfiguration(schema: schema, url: storeURL)
+        }
         do {
             return try ModelContainer(for: schema, configurations: [configuration])
         } catch {
             fatalError("Could not create CupcakeStore ModelContainer: \(error)")
         }
+    }
+
+    private static var applicationSupportDirectory: URL {
+        let url = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
     }
 }
