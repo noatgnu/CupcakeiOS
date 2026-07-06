@@ -6,6 +6,10 @@
 	<array>
 		<string>remote-notification</string>
 	</array>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Cupcake records audio annotations for sessions and steps.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Cupcake transcribes audio annotations on-device.</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>

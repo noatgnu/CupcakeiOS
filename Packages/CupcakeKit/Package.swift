@@ -65,5 +65,9 @@ let package = Package(
             name: "CupcakeOntologyTests",
             dependencies: ["CupcakeOntology"]
         ),
+        .testTarget(
+            name: "CupcakeTranscriptionTests",
+            dependencies: ["CupcakeTranscription"]
+        ),
     ]
 )

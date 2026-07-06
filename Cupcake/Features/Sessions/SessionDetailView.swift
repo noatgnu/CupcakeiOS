@@ -1,6 +1,7 @@
 import CupcakeModels
 import CupcakeNetworking
 import CupcakeSync
+import CupcakeTranscription
 import SwiftData
 import SwiftUI
 
@@ -10,12 +11,18 @@ struct SessionDetailView: View {
     let protocolModel: CachedProtocol
 
     @Query private var allStepAnnotations: [CachedStepAnnotation]
+    @Query private var sessions: [CachedSession]
 
     @State private var selectedStep: CachedProtocolStep?
     @State private var annotationText = ""
+    @State private var recordingStep: CachedProtocolStep?
     @State private var isSaving = false
     @State private var errorMessage: String?
     @State private var isShowingError = false
+
+    private var sessionServerID: Int64? {
+        sessions.first(where: { $0.clientID == sessionClientID })?.serverID
+    }
 
     private var steps: [CachedProtocolStep] {
         protocolModel.sections
@@ -32,12 +39,32 @@ struct SessionDetailView: View {
             ForEach(steps) { step in
                 Section {
                     ForEach(annotations(for: step)) { annotation in
-                        HTMLText(html: annotation.annotationText)
+                        if annotation.annotationType == "audio" {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Label(annotation.transcription.map(WebVTTFormatter.extractPlainText) ?? "Audio note", systemImage: "waveform")
+                                if let translation = annotation.translation {
+                                    Text(WebVTTFormatter.extractPlainText(from: translation))
+                                        .font(.caption)
+                                } else if let language = annotation.language {
+                                    Text(language)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                        } else {
+                            HTMLText(html: annotation.annotationText)
+                        }
                     }
                     Button("Add note…") {
                         selectedStep = step
                     }
                     .accessibilityIdentifier("addNoteButton")
+                    if sessionServerID != nil, step.serverID != nil {
+                        Button("Record Audio Note…") {
+                            recordingStep = step
+                        }
+                        .accessibilityIdentifier("recordAudioNoteButton")
+                    }
                 } header: {
                     HTMLText(html: step.stepDescription)
                 }
@@ -68,6 +95,18 @@ struct SessionDetailView: View {
                 }
             }
             .frame(minWidth: 320, minHeight: 240)
+        }
+        .sheet(item: $recordingStep) { step in
+            if let sessionServerID, let stepServerID = step.serverID {
+                RecordAudioAnnotationSheet(
+                    sessionClientID: sessionClientID,
+                    sessionServerID: sessionServerID,
+                    stepClientID: step.clientID,
+                    stepServerID: stepServerID
+                ) {
+                    recordingStep = nil
+                }
+            }
         }
         .alert("Couldn't save annotation", isPresented: $isShowingError) {
             Button("OK") {}

@@ -65,6 +65,17 @@ public actor APIClient {
         return try await execute(request)
     }
 
+    public func sendMultipart<Response: Decodable & Sendable>(
+        _ path: String,
+        body: MultipartFormBuilder,
+        authorizationHeader: String? = nil
+    ) async throws -> Response {
+        var request = try makeRequest(path: path, method: .post, query: [], authorizationHeader: authorizationHeader)
+        request.httpBody = body.finalize()
+        request.setValue("multipart/form-data; boundary=\(body.boundary)", forHTTPHeaderField: "Content-Type")
+        return try await execute(request)
+    }
+
     /// DELETE (or any call where the server's response body isn't needed).
     public func sendNoContent(
         _ path: String,

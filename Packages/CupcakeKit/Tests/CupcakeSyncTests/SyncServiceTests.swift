@@ -177,6 +177,50 @@ struct SyncServiceTests {
         #expect(annotations.first?.stepClientID == step.clientID)
     }
 
+    @Test("uploadAudioAnnotation posts a multipart chunked upload then PATCHes the on-device transcription")
+    func uploadAudioAnnotationUploadsThenPatches() async throws {
+        StubURLProtocol.handler = { request in
+            if request.url!.path.hasSuffix("/upload/step-annotation-chunks") {
+                #expect(request.value(forHTTPHeaderField: "Content-Type")?.hasPrefix("multipart/form-data") == true)
+                let json = Data("""
+                {"annotation_id": 200, "step_annotation_id": 300, "message": "ok"}
+                """.utf8)
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+            }
+            #expect(request.url!.path.hasSuffix("/step-annotations/300"))
+            #expect(request.httpMethod == "PATCH")
+            let json = Data("""
+            {"id": 300, "session": 7, "step": 10, "annotation": 200,
+             "annotation_text": "", "annotation_type": "audio", "order": 0,
+             "transcribed": true, "transcription": "Gloves are on.", "language": "en-US", "translation": null}
+            """.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedSession.self, CachedProtocolStep.self, CachedStepAnnotation.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let service = StepAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        let tempFile = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).m4a")
+        try Data([0x00, 0x01, 0x02]).write(to: tempFile)
+        defer { try? FileManager.default.removeItem(at: tempFile) }
+
+        let clientID = try await service.uploadAudioAnnotation(
+            sessionServerID: 7,
+            stepServerID: 10,
+            sessionClientID: UUID(),
+            stepClientID: UUID(),
+            fileURL: tempFile,
+            transcription: "Gloves are on.",
+            language: "en-US",
+            translation: nil
+        )
+
+        let inserted = try ModelContext(container).fetch(FetchDescriptor<CachedStepAnnotation>(predicate: #Predicate { $0.clientID == clientID }))
+        #expect(inserted.first?.serverID == 300)
+        #expect(inserted.first?.transcription == "Gloves are on.")
+    }
+
     @Test("InventorySyncService refetches storage objects, reagents, and stored reagents")
     func inventorySyncRefetchesAllThree() async throws {
         StubURLProtocol.handler = { request in

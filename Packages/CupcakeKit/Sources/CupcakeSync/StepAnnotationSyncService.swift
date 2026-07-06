@@ -58,11 +58,72 @@ public actor StepAnnotationSyncService {
         try await store.attachServerID(clientID: clientID, dto: dto)
         return dto.id
     }
+
+    public func uploadAudioAnnotation(
+        sessionServerID: Int64,
+        stepServerID: Int64,
+        sessionClientID: UUID,
+        stepClientID: UUID,
+        fileURL: URL,
+        transcription: String?,
+        language: String?,
+        translation: String?
+    ) async throws -> UUID {
+        guard let token = deviceToken() else {
+            throw StepAnnotationSyncError.noDeviceToken
+        }
+        let authorization = "DeviceToken \(token)"
+        let fileData = try Data(contentsOf: fileURL)
+        let checksum = SHA256Checksum.hexDigest(of: fileData)
+
+        var form = MultipartFormBuilder()
+        form.addField(name: "session_id", value: String(sessionServerID))
+        form.addField(name: "step_id", value: String(stepServerID))
+        form.addField(name: "annotation_type", value: "audio")
+        form.addField(name: "auto_transcribe", value: transcription == nil ? "true" : "false")
+        form.addField(name: "sha256", value: checksum)
+        form.addField(name: "filename", value: fileURL.lastPathComponent)
+        form.addFile(name: "file", filename: fileURL.lastPathComponent, mimeType: "audio/m4a", data: fileData)
+
+        let response: AnnotationChunkedUploadResponse = try await apiClient.sendMultipart(
+            "upload/step-annotation-chunks/",
+            body: form,
+            authorizationHeader: authorization
+        )
+        if let warning = response.warning {
+            throw StepAnnotationSyncError.uploadFailed(warning)
+        }
+        guard let stepAnnotationID = response.stepAnnotationId else {
+            throw StepAnnotationSyncError.uploadFailed(response.message ?? "Upload did not return a step annotation id")
+        }
+
+        if transcription != nil || translation != nil {
+            let _: StepAnnotationDTO = try await apiClient.send(
+                "step-annotations/\(stepAnnotationID)/",
+                method: .patch,
+                body: UpdateStepAnnotationTranscriptionRequest(transcription: transcription, language: language, translation: translation),
+                authorizationHeader: authorization
+            )
+        }
+
+        return try await store.insertSynced(
+            clientID: UUID(),
+            serverID: stepAnnotationID,
+            sessionClientID: sessionClientID,
+            stepClientID: stepClientID,
+            annotationText: transcription ?? "",
+            annotationType: "audio",
+            transcription: transcription,
+            language: language,
+            translation: translation
+        )
+    }
 }
 
 public enum StepAnnotationSyncError: Error {
     case noDeviceToken
     case annotationNotCached
+    case uploadFailed(String)
 }
 
 /// SwiftData access is isolated to this `@ModelActor` — see `ProtocolStore`'s doc comment for why.
@@ -112,5 +173,33 @@ actor StepAnnotationStore {
         annotation.annotationType = dto.annotationType
         annotation.order = dto.order
         try modelContext.save()
+    }
+
+    func insertSynced(
+        clientID: UUID,
+        serverID: Int64,
+        sessionClientID: UUID,
+        stepClientID: UUID,
+        annotationText: String,
+        annotationType: String,
+        transcription: String?,
+        language: String?,
+        translation: String?
+    ) throws -> UUID {
+        let cached = CachedStepAnnotation(
+            clientID: clientID,
+            serverID: serverID,
+            sessionClientID: sessionClientID,
+            stepClientID: stepClientID,
+            annotationText: annotationText,
+            annotationType: annotationType,
+            order: 0,
+            transcription: transcription,
+            language: language,
+            translation: translation
+        )
+        modelContext.insert(cached)
+        try modelContext.save()
+        return cached.clientID
     }
 }

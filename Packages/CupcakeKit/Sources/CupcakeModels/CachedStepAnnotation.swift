@@ -16,6 +16,9 @@ public final class CachedStepAnnotation {
     public var annotationText: String
     public var annotationType: String
     public var order: Int
+    public var transcription: String?
+    public var language: String?
+    public var translation: String?
 
     public init(
         clientID: UUID = UUID(),
@@ -24,7 +27,10 @@ public final class CachedStepAnnotation {
         stepClientID: UUID,
         annotationText: String,
         annotationType: String = "text",
-        order: Int = 0
+        order: Int = 0,
+        transcription: String? = nil,
+        language: String? = nil,
+        translation: String? = nil
     ) {
         self.clientID = clientID
         self.serverID = serverID
@@ -33,5 +39,8 @@ public final class CachedStepAnnotation {
         self.annotationText = annotationText
         self.annotationType = annotationType
         self.order = order
+        self.transcription = transcription
+        self.language = language
+        self.translation = translation
     }
 }

@@ -38,3 +38,22 @@ public struct CreateStepAnnotationRequest: Encodable, Sendable {
         self.annotationData = annotationData
     }
 }
+
+public struct AnnotationChunkedUploadResponse: Decodable, Sendable {
+    public let annotationId: Int64?
+    public let stepAnnotationId: Int64?
+    public let message: String?
+    public let warning: String?
+}
+
+public struct UpdateStepAnnotationTranscriptionRequest: Encodable, Sendable {
+    public var transcription: String?
+    public var language: String?
+    public var translation: String?
+
+    public init(transcription: String?, language: String?, translation: String?) {
+        self.transcription = transcription
+        self.language = language
+        self.translation = translation
+    }
+}
