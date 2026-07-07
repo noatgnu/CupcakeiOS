@@ -3,13 +3,7 @@ import CupcakeNetworking
 import CupcakeSync
 import SwiftUI
 
-/// Staff candidates are the job's already-assigned lab group's own direct members — not a global
-/// user search (there's no such endpoint the reference web app uses for this; confirmed against
-/// `job-submission-state.ts`, which populates its own staff list from `getLabGroupMembers`, not a
-/// `/users/` search). Selecting a member who lacks `can_process_jobs` for that lab group is a
-/// real, expected rejection, not a bug — the server validates this at save time
-/// (`InstrumentJobSerializer.validate`) and this sheet surfaces that message verbatim rather than
-/// a generic "couldn't sync", since it names exactly which users are the problem.
+/// Assigns staff from the job's lab group's direct members, surfacing the server's rejection message verbatim.
 struct StaffAssignmentSheet: View {
     @Environment(AppSession.self) private var appSession
     @Environment(\.dismiss) private var dismiss
@@ -25,6 +19,7 @@ struct StaffAssignmentSheet: View {
     @State private var isSaving = false
     @State private var errorMessage: String?
     @State private var isShowingError = false
+    @State private var isShowingPermissions = false
 
     init(jobClientID: UUID, jobServerID: Int64, labGroupServerID: Int64, initiallySelectedStaffIDs: Set<Int64>) {
         self.jobClientID = jobClientID
@@ -68,6 +63,12 @@ struct StaffAssignmentSheet: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
                 }
+                ToolbarItem {
+                    Button("Manage Permissions…") {
+                        isShowingPermissions = true
+                    }
+                    .accessibilityIdentifier("managePermissionsButton")
+                }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
                         Task { await save() }
@@ -80,6 +81,9 @@ struct StaffAssignmentSheet: View {
                 Button("OK") {}
             } message: {
                 Text(errorMessage ?? "")
+            }
+            .sheet(isPresented: $isShowingPermissions) {
+                LabGroupPermissionsView(labGroupServerID: labGroupServerID)
             }
             .task {
                 await loadMembers()
@@ -118,9 +122,6 @@ struct StaffAssignmentSheet: View {
             try await services.instrumentJobSync.updateStaff(jobServerID: jobServerID, staffServerIDs: Array(selectedStaffIDs))
             dismiss()
         } catch {
-            // A validation rejection here names exactly which users lack direct membership or
-            // `can_process_jobs` — `userFacingMessage` surfaces that verbatim rather than a
-            // generic "couldn't sync" message.
             errorMessage = error.userFacingMessage
             isShowingError = true
         }

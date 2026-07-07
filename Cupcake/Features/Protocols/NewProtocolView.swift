@@ -4,21 +4,7 @@ import CupcakeSync
 import SwiftData
 import SwiftUI
 
-/// Matches the reference web app's own creation flow exactly (`protocol-create-modal.ts`):
-/// title, description, and an "enabled" checkbox (public/accessible-to-everyone — defaults to
-/// `false`, matching the web form's own default and the Django serializer's default) are the
-/// only fields; no section or step is created alongside it. Content always gets added
-/// afterward, and always in that order — a section must exist before a step can be added to it
-/// (`ProtocolDetailView`'s "Add Section" then "Add Step" — there is no path that creates a step
-/// without an owning section).
-///
-/// When signed in, the protocol is created **locally first** — so nothing is lost or blocked on
-/// the network — then synced to the server immediately. If that sync fails because the server
-/// is genuinely unreachable (`APIError.transport`), the sync is queued in the outbox for later
-/// automatic retry (`OutboxService`) instead of just erroring out. A real server-side rejection
-/// (`APIError.http` — an actual validation/auth problem) surfaces immediately instead, since
-/// retrying it later would never succeed. In standalone mode, it's local-only forever, with no
-/// outbox entry at all.
+/// Creates a protocol (title, description, "enabled"/public flag), created locally then synced or queued.
 struct NewProtocolView: View {
     @Environment(AppSession.self) private var appSession
     @Environment(\.dismiss) private var dismiss

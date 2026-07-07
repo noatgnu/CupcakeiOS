@@ -1,9 +1,7 @@
 import CupcakeNetworking
 import Foundation
 
-/// Raw calls for the two bootstrap requests. Kept separate from `AuthManager` so the
-/// login→device-token exchange sequencing (and Keychain persistence) can be tested independently
-/// of the actual HTTP round-trip.
+/// Raw calls for the two bootstrap requests, kept separate from `AuthManager`'s Keychain persistence.
 public actor AuthService {
     private let apiClient: APIClient
 
@@ -35,8 +33,7 @@ public actor AuthService {
         )
     }
 
-    /// Must be called with the JWT access token from `login(...)` — `device-tokens/` also
-    /// accepts an existing `DeviceToken` with write permission, but that's not this bootstrap path.
+    /// Must be called with the JWT access token from `login(...)`.
     public func createDeviceToken(
         accessToken: String,
         label: String,

@@ -3,9 +3,7 @@ import CupcakeNetworking
 import Foundation
 import SwiftData
 
-/// Phase 1: full-refetch population only (no `updated_at__gte` delta cursor yet — that lands in
-/// Phase 2 alongside the outbox). Protocols/sections/steps are read-only reference data, so this
-/// service only ever upserts; it never has to reconcile a locally-created record.
+/// Full-refetch population plus create-locally-then-sync-or-queue for protocols/sections/steps.
 public actor ProtocolSyncService {
     private let apiClient: APIClient
     private let deviceToken: @Sendable () -> String?
@@ -21,8 +19,7 @@ public actor ProtocolSyncService {
         self.store = ProtocolStore(modelContainer: modelContainer)
     }
 
-    /// Fetches every protocol the user can see and upserts it (and its sections/steps) into
-    /// the local store. Silently does nothing if there's no stored `DeviceToken` yet.
+    /// Fetches every protocol the user can see and upserts it (and its sections/steps) into the local store.
     public func refetchAll() async throws {
         guard let token = deviceToken() else { return }
         let authorization = "DeviceToken \(token)"
@@ -35,10 +32,53 @@ public actor ProtocolSyncService {
         }
     }
 
-    /// Pushes an *already locally-created* protocol to the server, attaching the new `serverID`
-    /// to that same local record instead of creating a duplicate — the create-locally-then-sync
-    /// path used when signed in (see `NewProtocolView`), and what `OutboxService.replay(_:)`
-    /// calls to retry a queued `createProtocol` entry.
+    /// Returns which subset of already-cached protocol server IDs belongs to a filter. Live only, no offline story.
+    public func fetchProtocolIDs(filter: ProtocolListFilter) async throws -> [Int64] {
+        guard let token = deviceToken() else { return [] }
+        let dtos: [ProtocolDTO] = try await apiClient.get("protocols/\(filter.rawValue)/", authorizationHeader: "DeviceToken \(token)")
+        return dtos.map(\.id)
+    }
+
+    /// Imports a protocol from a protocols.io URL, then caches the result like any other protocol.
+    @discardableResult
+    public func importFromProtocolsIO(url: String) async throws -> UUID {
+        guard let token = deviceToken() else {
+            throw ProtocolSyncError.noDeviceToken
+        }
+        let dto: ProtocolDTO = try await apiClient.send(
+            "protocols/import_from_protocols_io/",
+            method: .post,
+            body: ImportProtocolFromURLRequest(url: url),
+            authorizationHeader: "DeviceToken \(token)"
+        )
+        try await store.upsert([dto])
+        guard let clientID = try await store.clientID(serverID: dto.id) else {
+            throw ProtocolSyncError.importFailed
+        }
+        return clientID
+    }
+
+    /// A signed, time-limited URL for the protocol's HTML export, optionally including a session's annotations.
+    public func fetchExportURL(protocolServerID: Int64, sessionServerID: Int64?) async throws -> URL {
+        guard let token = deviceToken() else {
+            throw ProtocolSyncError.noDeviceToken
+        }
+        var query: [URLQueryItem] = []
+        if let sessionServerID {
+            query.append(URLQueryItem(name: "session", value: String(sessionServerID)))
+        }
+        let response: ExportURLResponse = try await apiClient.get(
+            "protocols/\(protocolServerID)/get_export_url/",
+            query: query,
+            authorizationHeader: "DeviceToken \(token)"
+        )
+        guard let url = URL(string: response.downloadUrl) else {
+            throw ProtocolSyncError.importFailed
+        }
+        return url
+    }
+
+    /// Pushes an already locally-created protocol to the server, attaching the new `serverID`.
     @discardableResult
     public func syncLocallyCreatedProtocol(clientID: UUID) async throws -> Int64 {
         guard let token = deviceToken() else {
@@ -55,19 +95,14 @@ public actor ProtocolSyncService {
         return dto.id
     }
 
-    /// Same "sync the existing local record in place" shape as `syncLocallyCreatedProtocol`, for
-    /// a section. If the parent protocol hasn't synced yet (queued in the outbox behind it, or
-    /// simply hasn't been attempted yet), throws `SyncDependencyError.parentNotSynced` —
-    /// `OutboxService` treats that the same as a connectivity failure (retry later), not a
-    /// terminal error, since it's purely an ordering issue that resolves itself once the
-    /// protocol's own entry replays.
+    /// Same shape as `syncLocallyCreatedProtocol`, for a section. Throws `SyncDependencyError.parentNotSynced` if the parent protocol hasn't synced yet.
     @discardableResult
-    public func syncLocallyCreatedSection(clientID: UUID) async throws -> Int64 {
+    public func syncLocallyCreatedSection(clientID: UUID, knownProtocolServerID: Int64? = nil) async throws -> Int64 {
         guard let token = deviceToken() else {
             throw ProtocolSyncError.noDeviceToken
         }
         let fields = try await store.sectionFields(clientID: clientID)
-        guard let protocolServerID = fields.protocolServerID else {
+        guard let protocolServerID = knownProtocolServerID ?? fields.protocolServerID else {
             throw SyncDependencyError.parentNotSynced
         }
         let dto: ProtocolSectionDTO = try await apiClient.send(
@@ -80,15 +115,15 @@ public actor ProtocolSyncService {
         return dto.id
     }
 
-    /// Same shape again, for a step — needs both its parent protocol's and its own section's
-    /// `serverID`, either of which might not exist yet if they're still queued ahead of it.
+    /// Same shape again, for a step. `known*ServerID` lets a caller skip this store's own background lookup, which can lag behind a sibling actor's recent write.
     @discardableResult
-    public func syncLocallyCreatedStep(clientID: UUID) async throws -> Int64 {
+    public func syncLocallyCreatedStep(clientID: UUID, knownSectionServerID: Int64? = nil, knownProtocolServerID: Int64? = nil) async throws -> Int64 {
         guard let token = deviceToken() else {
             throw ProtocolSyncError.noDeviceToken
         }
         let fields = try await store.stepFields(clientID: clientID)
-        guard let protocolServerID = fields.protocolServerID, let sectionServerID = fields.sectionServerID else {
+        guard let protocolServerID = knownProtocolServerID ?? fields.protocolServerID,
+              let sectionServerID = knownSectionServerID ?? fields.sectionServerID else {
             throw SyncDependencyError.parentNotSynced
         }
         let dto: ProtocolStepDTO = try await apiClient.send(
@@ -100,6 +135,87 @@ public actor ProtocolSyncService {
         try await store.attachServerID(stepClientID: clientID, dto: dto)
         return dto.id
     }
+
+    @discardableResult
+    public func update(serverID: Int64, protocolTitle: String, protocolDescription: String?, enabled: Bool) async throws -> ProtocolDTO {
+        guard let token = deviceToken() else {
+            throw ProtocolSyncError.noDeviceToken
+        }
+        let dto: ProtocolDTO = try await apiClient.send(
+            "protocols/\(serverID)/",
+            method: .patch,
+            body: UpdateProtocolRequest(protocolTitle: protocolTitle, protocolDescription: protocolDescription, enabled: enabled),
+            authorizationHeader: "DeviceToken \(token)"
+        )
+        try await store.upsert([dto])
+        return dto
+    }
+
+    public func delete(serverID: Int64) async throws {
+        guard let token = deviceToken() else {
+            throw ProtocolSyncError.noDeviceToken
+        }
+        try await apiClient.sendNoContent(
+            "protocols/\(serverID)/",
+            method: .delete,
+            authorizationHeader: "DeviceToken \(token)"
+        )
+        try await store.removeLocal(serverID: serverID)
+    }
+
+    @discardableResult
+    public func updateSection(serverID: Int64, sectionDescription: String?, sectionDuration: Int?) async throws -> ProtocolSectionDTO {
+        guard let token = deviceToken() else {
+            throw ProtocolSyncError.noDeviceToken
+        }
+        let dto: ProtocolSectionDTO = try await apiClient.send(
+            "sections/\(serverID)/",
+            method: .patch,
+            body: UpdateProtocolSectionRequest(sectionDescription: sectionDescription, sectionDuration: sectionDuration),
+            authorizationHeader: "DeviceToken \(token)"
+        )
+        try await store.updateSectionLocally(serverID: serverID, dto: dto)
+        return dto
+    }
+
+    public func deleteSection(serverID: Int64) async throws {
+        guard let token = deviceToken() else {
+            throw ProtocolSyncError.noDeviceToken
+        }
+        try await apiClient.sendNoContent(
+            "sections/\(serverID)/",
+            method: .delete,
+            authorizationHeader: "DeviceToken \(token)"
+        )
+        try await store.removeSectionLocally(serverID: serverID)
+    }
+
+    @discardableResult
+    public func updateStep(serverID: Int64, stepDescription: String, stepDuration: Int?) async throws -> ProtocolStepDTO {
+        guard let token = deviceToken() else {
+            throw ProtocolSyncError.noDeviceToken
+        }
+        let dto: ProtocolStepDTO = try await apiClient.send(
+            "steps/\(serverID)/",
+            method: .patch,
+            body: UpdateProtocolStepRequest(stepDescription: stepDescription, stepDuration: stepDuration),
+            authorizationHeader: "DeviceToken \(token)"
+        )
+        try await store.updateStepLocally(serverID: serverID, dto: dto)
+        return dto
+    }
+
+    public func deleteStep(serverID: Int64) async throws {
+        guard let token = deviceToken() else {
+            throw ProtocolSyncError.noDeviceToken
+        }
+        try await apiClient.sendNoContent(
+            "steps/\(serverID)/",
+            method: .delete,
+            authorizationHeader: "DeviceToken \(token)"
+        )
+        try await store.removeStepLocally(serverID: serverID)
+    }
 }
 
 public enum ProtocolSyncError: Error {
@@ -107,12 +223,18 @@ public enum ProtocolSyncError: Error {
     case protocolNotCached
     case sectionNotCached
     case stepNotCached
+    case importFailed
 }
 
-/// SwiftData access is isolated to this `@ModelActor` — the `@ModelActor` macro synthesizes its
-/// own initializer that only knows about `modelContainer`, so it can't hold extra stored
-/// properties like `APIClient` alongside it. `ProtocolSyncService` owns the network/orchestration
-/// side; this owns persistence only.
+/// Matches the reference web app's dedicated filtered-browsing endpoints.
+public enum ProtocolListFilter: String, Sendable {
+    case myProtocols = "my_protocols"
+    case sharedWithMe = "shared_with_me"
+    case publicProtocols = "public_protocols"
+    case vaultedProtocols = "vaulted_protocols"
+}
+
+/// SwiftData access is isolated to this `@ModelActor`; `ProtocolSyncService` owns network/orchestration.
 @ModelActor
 actor ProtocolStore {
     func upsert(_ dtos: [ProtocolDTO]) throws {
@@ -120,6 +242,10 @@ actor ProtocolStore {
             upsert(dto)
         }
         try modelContext.save()
+    }
+
+    func clientID(serverID: Int64) throws -> UUID? {
+        try modelContext.fetch(FetchDescriptor<CachedProtocol>(predicate: #Predicate { $0.serverID == serverID })).first?.clientID
     }
 
     func protocolFields(clientID: UUID) throws -> (title: String, description: String?, enabled: Bool) {
@@ -131,9 +257,7 @@ actor ProtocolStore {
         return (cachedProtocol.protocolTitle, cachedProtocol.protocolDescription, cachedProtocol.enabled)
     }
 
-    /// Attaches a newly-assigned `serverID` to the existing local record matched by `clientID` —
-    /// the record already exists (created locally first), so this updates it in place rather
-    /// than inserting a second copy the way the read-sync `upsert` methods do.
+    /// Attaches a newly-assigned `serverID` to the existing local record matched by `clientID`.
     func attachServerID(clientID: UUID, dto: ProtocolDTO) throws {
         guard let cachedProtocol = try modelContext.fetch(
             FetchDescriptor<CachedProtocol>(predicate: #Predicate { $0.clientID == clientID })
@@ -145,6 +269,14 @@ actor ProtocolStore {
         cachedProtocol.protocolTitle = dto.protocolTitle
         cachedProtocol.protocolDescription = dto.protocolDescription
         cachedProtocol.enabled = dto.enabled
+        try modelContext.save()
+    }
+
+    func removeLocal(serverID: Int64) throws {
+        guard let cachedProtocol = try modelContext.fetch(
+            FetchDescriptor<CachedProtocol>(predicate: #Predicate { $0.serverID == serverID })
+        ).first else { return }
+        modelContext.delete(cachedProtocol)
         try modelContext.save()
     }
 
@@ -191,6 +323,40 @@ actor ProtocolStore {
         step.stepDescription = dto.stepDescription
         step.stepDuration = dto.stepDuration
         step.order = dto.order
+        try modelContext.save()
+    }
+
+    func updateSectionLocally(serverID: Int64, dto: ProtocolSectionDTO) throws {
+        guard let section = try modelContext.fetch(
+            FetchDescriptor<CachedProtocolSection>(predicate: #Predicate { $0.serverID == serverID })
+        ).first else { return }
+        section.sectionDescription = dto.sectionDescription
+        section.sectionDuration = dto.sectionDuration
+        try modelContext.save()
+    }
+
+    func removeSectionLocally(serverID: Int64) throws {
+        guard let section = try modelContext.fetch(
+            FetchDescriptor<CachedProtocolSection>(predicate: #Predicate { $0.serverID == serverID })
+        ).first else { return }
+        modelContext.delete(section)
+        try modelContext.save()
+    }
+
+    func updateStepLocally(serverID: Int64, dto: ProtocolStepDTO) throws {
+        guard let step = try modelContext.fetch(
+            FetchDescriptor<CachedProtocolStep>(predicate: #Predicate { $0.serverID == serverID })
+        ).first else { return }
+        step.stepDescription = dto.stepDescription
+        step.stepDuration = dto.stepDuration
+        try modelContext.save()
+    }
+
+    func removeStepLocally(serverID: Int64) throws {
+        guard let step = try modelContext.fetch(
+            FetchDescriptor<CachedProtocolStep>(predicate: #Predicate { $0.serverID == serverID })
+        ).first else { return }
+        modelContext.delete(step)
         try modelContext.save()
     }
 

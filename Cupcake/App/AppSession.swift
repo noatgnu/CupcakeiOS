@@ -1,5 +1,6 @@
 import AuthenticationServices
 import CupcakeAuth
+import CupcakeModels
 import CupcakeNetworking
 import CupcakeSync
 import Foundation
@@ -7,11 +8,13 @@ import Network
 import SwiftData
 import SwiftUI
 
-/// Bundles the sync-service actors a view needs for one screen. Constructed fresh on demand
-/// (see `AppSession.makeSyncServices()`) rather than held long-lived, since the device token it
-/// captures is a plain value snapshot, not a live reference. In standalone mode (or before any
-/// server has been configured) every service still constructs successfully — their online calls
-/// just no-op or fall back to a local-only path, since none of them have a real `DeviceToken`.
+/// Parsed from a `cupcake://annotation?...` share link.
+struct DeepLinkTarget: Equatable {
+    let sessionClientID: UUID
+    let annotationServerID: Int64?
+}
+
+/// Bundles the sync-service actors a view needs for one screen.
 struct SyncServices {
     let protocolSync: ProtocolSyncService
     let sessionSync: SessionSyncService
@@ -19,9 +22,6 @@ struct SyncServices {
     let sessionAnnotationSync: SessionAnnotationSyncService
     let inventorySync: InventorySyncService
     let instrumentSync: InstrumentSyncService
-    /// Run `stepReagentSync` after `protocolSync.refetchAll()` — it resolves each step-reagent's
-    /// `stepClientID` by looking up the step's cached `serverID`, which only exists once the
-    /// protocol tree has synced.
     let stepReagentSync: StepReagentSyncService
     let projectSync: ProjectSyncService
     let instrumentJobSync: InstrumentJobSyncService
@@ -31,19 +31,19 @@ struct SyncServices {
     let metadataColumnSync: MetadataColumnSyncService
     let metadataColumnTemplateSync: MetadataColumnTemplateSyncService
     let favouriteMetadataOptionSync: FavouriteMetadataOptionSyncService
+    let annotationFolderSync: AnnotationFolderSyncService
     let outboxSync: OutboxService
+    let localNotebookImportSync: LocalNotebookImportService
+    let timeKeeperSync: TimeKeeperSyncService
+    let maintenanceLogSync: MaintenanceLogSyncService
+    let stepVariationSync: StepVariationSyncService
+    let protocolRatingSync: ProtocolRatingSyncService
+    let storedReagentAnnotationSync: StoredReagentAnnotationSyncService
+    let reagentSubscriptionSync: ReagentSubscriptionSyncService
+    let samplePoolSync: SamplePoolSyncService
 }
 
-/// Owns the server connection + auth state for the whole app. A fresh `APIClient`/`AuthManager`
-/// pair is (re)built whenever the configured server URL changes — there's exactly one backend
-/// this app talks to at a time in v1.
-///
-/// Standalone mode (§4.3 of the design doc) is a distinct state from "online but signed out" —
-/// entered explicitly via `continueOffline()` when the user has never configured a backend at
-/// all. It's the state that makes the app testable without any live server or credentials: the
-/// local protocol/session/annotation creation flows work identically whether or not a server was
-/// ever configured, since every cached model's real identity is a client-generated UUID, not a
-/// server-assigned one (see the `Cached*` model docs).
+/// Owns the server connection + auth state for the whole app.
 @Observable
 @MainActor
 final class AppSession {
@@ -51,6 +51,9 @@ final class AppSession {
     private(set) var deviceToken: String?
     private(set) var isStandalone: Bool
     private(set) var currentUserID: Int64?
+    private(set) var pendingLocalImportCount: Int?
+    private(set) var isImportingLocalNotebook = false
+    private(set) var pendingDeepLink: DeepLinkTarget?
 
     var isAuthenticated: Bool { deviceToken != nil }
     var canUseApp: Bool { isAuthenticated || isStandalone }
@@ -61,6 +64,8 @@ final class AppSession {
     private var authManager: AuthManager?
     private var pathMonitor: NWPathMonitor?
     private var lastPathStatus: NWPath.Status?
+    private var transcriptionNotificationService: TranscriptionNotificationService?
+    private var timeKeeperNotificationService: TimeKeeperNotificationService?
 
     private static let baseURLDefaultsKey = "cupcake.baseURL"
     private static let standaloneDefaultsKey = "cupcake.isStandalone"
@@ -68,6 +73,7 @@ final class AppSession {
 
     init(modelContainer: ModelContainer) {
         self.modelContainer = modelContainer
+        CachedSession.backfillProtocolClientIDsIfNeeded(in: modelContainer)
         isStandalone = UserDefaults.standard.bool(forKey: Self.standaloneDefaultsKey)
         if let savedURLString = UserDefaults.standard.string(forKey: Self.baseURLDefaultsKey),
            let url = URL(string: savedURLString) {
@@ -80,10 +86,7 @@ final class AppSession {
         startMonitoringConnectivity()
     }
 
-    /// Cross-platform as-is (`NWPathMonitor` isn't iOS-only) — replays any queued outbox entries
-    /// the moment connectivity comes back, rather than making the user remember to retry
-    /// manually. Also fires once at launch if the network is already up, to catch anything left
-    /// queued from a previous offline session.
+    /// Replays queued outbox entries whenever connectivity comes back.
     private func startMonitoringConnectivity() {
         let monitor = NWPathMonitor()
         monitor.pathUpdateHandler = { [weak self] path in
@@ -100,11 +103,30 @@ final class AppSession {
         pathMonitor = monitor
     }
 
-    /// Also callable directly for a manual "Retry Sync" action, not just the automatic
-    /// reconnect trigger.
+    /// Replays every queued outbox entry.
     func replayOutbox() async {
         guard isAuthenticated else { return }
         await makeSyncServices().outboxSync.replayPending()
+    }
+
+    /// Refetches every syncable entity type from the server.
+    func syncAll() async throws {
+        guard isAuthenticated else { return }
+        let services = makeSyncServices()
+        await replayOutbox()
+        try await services.protocolSync.refetchAll()
+        try await services.sessionSync.refetchAll()
+        try await services.stepReagentSync.refetchAll()
+        try await services.inventorySync.refetchStorageObjects()
+        try await services.inventorySync.refetchReagents()
+        try await services.inventorySync.refetchStoredReagents()
+        try await services.inventorySync.refetchReagentActions()
+        try await services.instrumentSync.refetchInstruments()
+        try await services.instrumentSync.refetchInstrumentUsage()
+        try await services.projectSync.refetchAll()
+        try await services.instrumentJobSync.refetchAll()
+        try await services.labGroupSync.refetchAll()
+        try await services.metadataTableTemplateSync.refetchAll()
     }
 
     private func configureClient(baseURL: URL) {
@@ -112,6 +134,30 @@ final class AppSession {
         let client = APIClient(baseURL: baseURL)
         apiClient = client
         authManager = AuthManager(authService: AuthService(apiClient: client), keychain: keychain)
+        transcriptionNotificationService = nil
+        timeKeeperNotificationService = nil
+    }
+
+    /// Subscribes to live server-side transcription progress events.
+    func transcriptionEvents() async -> AsyncStream<TranscriptionNotificationService.Event> {
+        guard let client = apiClient else {
+            return AsyncStream { $0.finish() }
+        }
+        let tokenSnapshot = deviceToken
+        let service = transcriptionNotificationService ?? TranscriptionNotificationService(apiClient: client, deviceToken: { tokenSnapshot })
+        transcriptionNotificationService = service
+        return await service.subscribe()
+    }
+
+    /// Subscribes to live cross-device `TimeKeeper` start/stop/reset events.
+    func timeKeeperEvents() async -> AsyncStream<TimeKeeperNotificationService.Event> {
+        guard let client = apiClient else {
+            return AsyncStream { $0.finish() }
+        }
+        let tokenSnapshot = deviceToken
+        let service = timeKeeperNotificationService ?? TimeKeeperNotificationService(apiClient: client, deviceToken: { tokenSnapshot })
+        timeKeeperNotificationService = service
+        return await service.subscribe()
     }
 
     func signIn(serverURLString: String, username: String, password: String) async throws {
@@ -130,7 +176,52 @@ final class AppSession {
         }
     }
 
-    /// Presents ORCID's login page via `ASWebAuthenticationSession`, then completes the same JWT->DeviceToken exchange `signIn` uses.
+    /// Checks for local-only records left over from standalone mode, offering to import them if any exist.
+    func checkForLocalRecordsToImport() async {
+        let count = (try? await makeSyncServices().localNotebookImportSync.countLocalOnlyRecords()) ?? 0
+        if count > 0 {
+            pendingLocalImportCount = count
+        }
+    }
+
+    /// Enqueues and syncs every local-only record left over from standalone mode.
+    func importLocalNotebook() async {
+        isImportingLocalNotebook = true
+        defer {
+            isImportingLocalNotebook = false
+            pendingLocalImportCount = nil
+        }
+        await makeSyncServices().localNotebookImportSync.importAll()
+    }
+
+    /// Dismisses the local-import prompt without importing anything.
+    func dismissLocalImportPrompt() {
+        pendingLocalImportCount = nil
+    }
+
+    /// Parses a `cupcake://annotation?session=&id=` URL and publishes it as a pending deep link.
+    func handleDeepLink(_ url: URL) {
+        guard url.scheme == "cupcake", url.host == "annotation",
+              let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              let sessionServerIDString = components.queryItems?.first(where: { $0.name == "session" })?.value,
+              let sessionServerID = Int64(sessionServerIDString) else { return }
+        let annotationServerID = components.queryItems?.first(where: { $0.name == "id" })?.value.flatMap(Int64.init)
+
+        let context = ModelContext(modelContainer)
+        guard let session = try? context.fetch(
+            FetchDescriptor<CachedSession>(predicate: #Predicate { $0.serverID == sessionServerID })
+        ).first else { return }
+
+        pendingDeepLink = DeepLinkTarget(sessionClientID: session.clientID, annotationServerID: annotationServerID)
+    }
+
+    /// Consumes the pending deep link so it's only acted on once.
+    func consumeDeepLink() -> DeepLinkTarget? {
+        defer { pendingDeepLink = nil }
+        return pendingDeepLink
+    }
+
+    /// Signs in via ORCID, presenting its login page in an `ASWebAuthenticationSession`.
     func signInWithORCID(serverURLString: String) async throws {
         guard let url = URL(string: serverURLString) else {
             throw AppSessionError.invalidServerURL
@@ -161,7 +252,6 @@ final class AppSession {
         UserDefaults.standard.set(deviceTokenDTO.user, forKey: Self.currentUserIDDefaultsKey)
     }
 
-    /// Held strongly so ARC doesn't tear the session down before the user interacts with it.
     private var activeORCIDSession: ASWebAuthenticationSession?
     private var activeORCIDContextProvider: ORCIDPresentationContextProvider?
 
@@ -202,16 +292,13 @@ final class AppSession {
         UserDefaults.standard.set(true, forKey: Self.standaloneDefaultsKey)
     }
 
-    /// Leaves standalone mode to return to the login screen — the local content created while
-    /// standalone isn't deleted (§4.3's "import my local notebook" flow reconciles it later,
-    /// once that phase exists); this just stops treating the app as usable without a server.
+    /// Leaves standalone mode to return to the login screen; local content is not deleted.
     func exitStandalone() {
         isStandalone = false
         UserDefaults.standard.set(false, forKey: Self.standaloneDefaultsKey)
     }
 
-    /// Always succeeds — see the type's doc comment for why a missing server/token doesn't
-    /// prevent constructing these.
+    /// Constructs the set of sync services for the current server/token, or a placeholder client if none is configured.
     func makeSyncServices() -> SyncServices {
         let client = apiClient ?? APIClient(baseURL: Self.placeholderBaseURL)
         let tokenSnapshot = deviceToken
@@ -229,11 +316,33 @@ final class AppSession {
         let metadataColumnSync = MetadataColumnSyncService(modelContainer: modelContainer, apiClient: client, deviceToken: { tokenSnapshot })
         let metadataColumnTemplateSync = MetadataColumnTemplateSyncService(apiClient: client, deviceToken: { tokenSnapshot })
         let favouriteMetadataOptionSync = FavouriteMetadataOptionSyncService(apiClient: client, deviceToken: { tokenSnapshot })
+        let annotationFolderSync = AnnotationFolderSyncService(modelContainer: modelContainer, apiClient: client, deviceToken: { tokenSnapshot })
+        let sessionAnnotationSync = SessionAnnotationSyncService(modelContainer: modelContainer, apiClient: client, deviceToken: { tokenSnapshot })
+        let outboxSync = OutboxService(
+            modelContainer: modelContainer,
+            protocolSync: protocolSync,
+            sessionSync: sessionSync,
+            stepReagentSync: stepReagentSync,
+            stepAnnotationSync: stepAnnotationSync,
+            sessionAnnotationSync: sessionAnnotationSync,
+            inventorySync: inventorySync,
+            instrumentSync: instrumentSync,
+            projectSync: projectSync,
+            instrumentJobSync: instrumentJobSync
+        )
+        let localNotebookImportSync = LocalNotebookImportService(modelContainer: modelContainer, outboxSync: outboxSync)
+        let timeKeeperSync = TimeKeeperSyncService(modelContainer: modelContainer, apiClient: client, deviceToken: { tokenSnapshot })
+        let maintenanceLogSync = MaintenanceLogSyncService(modelContainer: modelContainer, apiClient: client, deviceToken: { tokenSnapshot })
+        let stepVariationSync = StepVariationSyncService(modelContainer: modelContainer, apiClient: client, deviceToken: { tokenSnapshot })
+        let protocolRatingSync = ProtocolRatingSyncService(modelContainer: modelContainer, apiClient: client, deviceToken: { tokenSnapshot })
+        let storedReagentAnnotationSync = StoredReagentAnnotationSyncService(modelContainer: modelContainer, apiClient: client, deviceToken: { tokenSnapshot })
+        let reagentSubscriptionSync = ReagentSubscriptionSyncService(modelContainer: modelContainer, apiClient: client, deviceToken: { tokenSnapshot })
+        let samplePoolSync = SamplePoolSyncService(modelContainer: modelContainer, apiClient: client, deviceToken: { tokenSnapshot })
         return SyncServices(
             protocolSync: protocolSync,
             sessionSync: sessionSync,
             stepAnnotationSync: stepAnnotationSync,
-            sessionAnnotationSync: SessionAnnotationSyncService(modelContainer: modelContainer, apiClient: client, deviceToken: { tokenSnapshot }),
+            sessionAnnotationSync: sessionAnnotationSync,
             inventorySync: inventorySync,
             instrumentSync: instrumentSync,
             stepReagentSync: stepReagentSync,
@@ -245,25 +354,22 @@ final class AppSession {
             metadataColumnSync: metadataColumnSync,
             metadataColumnTemplateSync: metadataColumnTemplateSync,
             favouriteMetadataOptionSync: favouriteMetadataOptionSync,
-            outboxSync: OutboxService(
-                modelContainer: modelContainer,
-                protocolSync: protocolSync,
-                sessionSync: sessionSync,
-                stepReagentSync: stepReagentSync,
-                stepAnnotationSync: stepAnnotationSync,
-                inventorySync: inventorySync,
-                instrumentSync: instrumentSync,
-                projectSync: projectSync,
-                instrumentJobSync: instrumentJobSync
-            )
+            annotationFolderSync: annotationFolderSync,
+            outboxSync: outboxSync,
+            localNotebookImportSync: localNotebookImportSync,
+            timeKeeperSync: timeKeeperSync,
+            maintenanceLogSync: maintenanceLogSync,
+            stepVariationSync: stepVariationSync,
+            protocolRatingSync: protocolRatingSync,
+            storedReagentAnnotationSync: storedReagentAnnotationSync,
+            reagentSubscriptionSync: reagentSubscriptionSync,
+            samplePoolSync: samplePoolSync
         )
     }
 
     private static let placeholderBaseURL = URL(string: "https://cupcake.invalid/api/v1/")!
 
-    /// Called only from `CupcakeApp.init()` when launched with `--ui-testing-reset-state`, so
-    /// UI tests get a deterministic, signed-out/non-standalone starting state regardless of
-    /// whatever a previous run (or manual testing) left behind.
+    /// Resets persisted auth/standalone state to a signed-out, non-standalone starting point.
     static func resetPersistedStateForUITesting() {
         UserDefaults.standard.removeObject(forKey: baseURLDefaultsKey)
         UserDefaults.standard.removeObject(forKey: standaloneDefaultsKey)

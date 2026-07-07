@@ -1,60 +1,137 @@
 import CupcakeModels
+import CupcakeNetworking
+import CupcakeSync
 import SwiftData
 import SwiftUI
 
-/// A flat, all-protocols list of every session — matches the reference web app's separate
-/// "My Sessions" nav tab (`protocols-navbar.html`), which lists sessions globally rather than
-/// per-protocol. Every "Start Session" always creates a brand-new, independent session (no
-/// "resume" concept there or here), so this is the only way back to a session once you've
-/// navigated away from it.
+/// A flat, all-protocols list of every session.
 struct SessionListView: View {
+    @Environment(AppSession.self) private var appSession
+    @Environment(\.modelContext) private var modelContext
     @Query(sort: \CachedSession.createdAt, order: .reverse) private var sessions: [CachedSession]
     @Query private var allProtocols: [CachedProtocol]
 
-    private func protocolTitle(for session: CachedSession) -> String? {
-        guard let protocolClientID = session.primaryProtocolClientID else { return nil }
-        return allProtocols.first(where: { $0.clientID == protocolClientID })?.protocolTitle
+    @State private var selectedSessionID: UUID?
+    @State private var pathStack: [BreadcrumbSegment] = [BreadcrumbSegment(id: nil, name: "All Sessions")]
+    @State private var highlightedAnnotationServerID: Int64?
+    @State private var isShowingNewSessionSheet = false
+    @State private var errorMessage: String?
+    @State private var isShowingError = false
+
+    private func protocolTitles(for session: CachedSession) -> [String] {
+        session.protocolClientIDs.compactMap { clientID in
+            allProtocols.first(where: { $0.clientID == clientID })?.protocolTitle
+        }
+    }
+
+    private func protocols(for session: CachedSession) -> [CachedProtocol] {
+        session.protocolClientIDs.compactMap { clientID in
+            allProtocols.first(where: { $0.clientID == clientID })
+        }
     }
 
     var body: some View {
-        NavigationStack {
-            Group {
-                if sessions.isEmpty {
-                    ContentUnavailableView(
-                        "No Sessions Yet",
-                        systemImage: "clock",
-                        description: Text("Start a session from a protocol to see it here.")
-                    )
-                } else {
-                    List(sessions) { session in
-                        NavigationLink(value: session.clientID) {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(session.name ?? "Untitled Session")
-                                HStack(spacing: 4) {
-                                    Text(session.status)
-                                    if let title = protocolTitle(for: session) {
-                                        Text("· \(title)")
-                                    }
-                                }
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+        TwoPanelExplorerView(pathStack: $pathStack, pushesDetailOnCompact: true) {
+            SelectableExplorerList(
+                selection: $selectedSessionID,
+                isEmpty: sessions.isEmpty,
+                emptyTitle: "No Sessions Yet",
+                emptySystemImage: "clock",
+                emptyMessage: "Start a session from a protocol, or create one here."
+            ) {
+                ForEach(sessions) { session in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(session.name ?? "Untitled Session")
+                        HStack(spacing: 4) {
+                            Text(session.status)
+                            let titles = protocolTitles(for: session)
+                            if !titles.isEmpty {
+                                Text("· \(titles.joined(separator: ", "))")
                             }
                         }
-                        .accessibilityIdentifier("sessionRow")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                     }
+                    .tag(session.clientID)
+                    .accessibilityIdentifier("sessionRow")
                 }
             }
             .navigationTitle("Sessions")
-            .navigationDestination(for: UUID.self) { sessionClientID in
-                if let session = sessions.first(where: { $0.clientID == sessionClientID }),
-                   let protocolClientID = session.primaryProtocolClientID,
-                   let protocolModel = allProtocols.first(where: { $0.clientID == protocolClientID }) {
-                    SessionDetailView(sessionClientID: sessionClientID, protocolModel: protocolModel)
-                } else {
-                    Text("This session's protocol is no longer available.")
-                        .foregroundStyle(.secondary)
+            .toolbar {
+                ToolbarItem {
+                    Button {
+                        isShowingNewSessionSheet = true
+                    } label: {
+                        Label("New Session", systemImage: "plus")
+                    }
+                    .accessibilityIdentifier("newSessionButton")
                 }
             }
+        } detail: {
+            if let selectedSessionID, let session = sessions.first(where: { $0.clientID == selectedSessionID }) {
+                // `.id()` keeps mode-toggle `@State` from leaking between sessions.
+                SessionDetailView(sessionClientID: selectedSessionID, protocols: protocols(for: session), highlightAnnotationServerID: highlightedAnnotationServerID)
+                    .id(selectedSessionID)
+            } else {
+                ExplorerList(
+                    isEmpty: true,
+                    emptyTitle: "No Session Selected",
+                    emptySystemImage: "clock",
+                    emptyMessage: "Select a session to see its details."
+                ) { EmptyView() }
+            }
+        }
+        .sheet(isPresented: $isShowingNewSessionSheet) {
+            NewSessionSheet { name, enabled, protocolClientIDs in
+                Task { await createSession(name: name, enabled: enabled, protocolClientIDs: protocolClientIDs) }
+            }
+        }
+        .alert("Couldn't create session", isPresented: $isShowingError) {
+            Button("OK") {}
+        } message: {
+            Text(errorMessage ?? "")
+        }
+        .onChange(of: selectedSessionID) { _, newValue in
+            guard let newValue, let session = sessions.first(where: { $0.clientID == newValue }) else {
+                pathStack = [pathStack[0]]
+                return
+            }
+            pathStack = [pathStack[0], BreadcrumbSegment(id: nil, name: session.name ?? "Untitled Session")]
+        }
+        .onChange(of: pathStack) { _, newValue in
+            if newValue.count == 1 {
+                selectedSessionID = nil
+            }
+        }
+        .onChange(of: appSession.pendingDeepLink) { _, newValue in
+            applyDeepLink(newValue)
+        }
+        .onAppear {
+            applyDeepLink(appSession.pendingDeepLink)
+        }
+    }
+
+    /// Consumes a pending deep link by selecting its session and highlighting its annotation.
+    private func applyDeepLink(_ target: DeepLinkTarget?) {
+        guard let target, sessions.contains(where: { $0.clientID == target.sessionClientID }) else { return }
+        _ = appSession.consumeDeepLink()
+        selectedSessionID = target.sessionClientID
+        highlightedAnnotationServerID = target.annotationServerID
+    }
+
+    private func createSession(name: String, enabled: Bool, protocolClientIDs: [UUID]) async {
+        let (clientID, outcome) = await SessionCreation.createSession(
+            name: name,
+            enabled: enabled,
+            protocolClientIDs: protocolClientIDs,
+            canAuthorOnline: appSession.isAuthenticated,
+            modelContext: modelContext,
+            appSession: appSession
+        )
+        selectedSessionID = clientID
+        if case .failed(let message) = outcome {
+            errorMessage = "Saved locally, but couldn't sync: \(message)"
+            isShowingError = true
         }
     }
 }

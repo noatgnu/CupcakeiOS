@@ -3,12 +3,7 @@ import CupcakeNetworking
 import Foundation
 import SwiftData
 
-/// Phase 1: full-refetch, read-only population of server-side step-reagent recipe data —
-/// completes the read side of the Protocol -> Section -> Step -> StepReagent hierarchy for
-/// protocols fetched from the server. Local authoring of `StepReagent`s (attaching a reagent to
-/// a step you're writing yourself, online or in standalone mode) is a separate, always-local
-/// path — see `CachedStepReagent`'s doc comment — this service never creates one, only mirrors
-/// what the server already has.
+/// Full-refetch, read-only population of server-side step-reagent recipe data, plus create-locally-then-sync.
 public actor StepReagentSyncService {
     private let apiClient: APIClient
     private let deviceToken: @Sendable () -> String?
@@ -24,8 +19,7 @@ public actor StepReagentSyncService {
         self.store = StepReagentStore(modelContainer: modelContainer)
     }
 
-    /// Run this after `ProtocolSyncService.refetchAll()` — resolving a step-reagent's `stepClientID`
-    /// depends on its step already being cached.
+    /// Run this after `ProtocolSyncService.refetchAll()`, since resolving `stepClientID` depends on the step already being cached.
     public func refetchAll() async throws {
         guard let token = deviceToken() else { return }
         let authorization = "DeviceToken \(token)"
@@ -38,17 +32,7 @@ public actor StepReagentSyncService {
         }
     }
 
-    /// Same "sync the existing local record in place" shape as
-    /// `ProtocolSyncService.syncLocallyCreatedProtocol` — the create-locally-then-sync path used
-    /// when signed in, and what `OutboxService.replay(_:)` calls to retry a queued
-    /// `createStepReagent` entry. Handles the reagent itself inline: if the attached reagent
-    /// doesn't have a `serverID` yet (a brand-new reagent, or one only ever created locally
-    /// before), it's created on the server first and its `serverID` attached, all within this
-    /// one call — a step-reagent's reagent has no independent existence in this app's UI outside
-    /// this attachment flow, so there's no separate `createReagent` outbox entry type to manage.
-    ///
-    /// Throws `SyncDependencyError.parentNotSynced` if the step itself hasn't synced yet — an
-    /// ordering issue, retried like a connectivity failure, not a terminal error.
+    /// Syncs the local record in place, syncing its reagent inline if it has no `serverID` yet. Throws `SyncDependencyError.parentNotSynced` if the step hasn't synced.
     @discardableResult
     public func syncLocallyCreatedStepReagent(clientID: UUID) async throws -> Int64 {
         guard let token = deviceToken() else {
@@ -82,6 +66,33 @@ public actor StepReagentSyncService {
         try await store.attachServerID(stepReagentClientID: clientID, dto: dto)
         return dto.id
     }
+
+    @discardableResult
+    public func update(serverID: Int64, quantity: Double, scalable: Bool, scalableFactor: Double) async throws -> StepReagentDTO {
+        guard let token = deviceToken() else {
+            throw StepReagentSyncError.noDeviceToken
+        }
+        let dto: StepReagentDTO = try await apiClient.send(
+            "step-reagents/\(serverID)/",
+            method: .patch,
+            body: UpdateStepReagentRequest(quantity: quantity, scalable: scalable, scalableFactor: scalableFactor),
+            authorizationHeader: "DeviceToken \(token)"
+        )
+        try await store.updateLocally(serverID: serverID, dto: dto)
+        return dto
+    }
+
+    public func delete(serverID: Int64) async throws {
+        guard let token = deviceToken() else {
+            throw StepReagentSyncError.noDeviceToken
+        }
+        try await apiClient.sendNoContent(
+            "step-reagents/\(serverID)/",
+            method: .delete,
+            authorizationHeader: "DeviceToken \(token)"
+        )
+        try await store.removeLocal(serverID: serverID)
+    }
 }
 
 public enum StepReagentSyncError: Error {
@@ -101,9 +112,7 @@ actor StepReagentStore {
     }
 
     private func upsert(_ dto: StepReagentDTO) {
-        // A step-reagent whose step isn't cached yet (not owned/visible to this device, or not
-        // synced yet this cycle) can't be resolved to a local clientID — skip it, same pattern
-        // as SessionAnnotationStore's unresolved-session case; it'll resolve once the step syncs.
+        // Skip a step-reagent whose step isn't cached yet; it'll resolve once the step syncs.
         let stepServerID = dto.step
         guard let step = try? modelContext.fetch(
             FetchDescriptor<CachedProtocolStep>(predicate: #Predicate { $0.serverID == stepServerID })
@@ -186,9 +195,7 @@ actor StepReagentStore {
         try modelContext.save()
     }
 
-    /// Attaches a newly-assigned `serverID` to the existing local step-reagent matched by
-    /// `clientID` — the record already exists (created locally first), so this updates it in
-    /// place rather than inserting a second copy.
+    /// Attaches a newly-assigned `serverID` to the existing local step-reagent matched by `clientID`.
     func attachServerID(stepReagentClientID: UUID, dto: StepReagentDTO) throws {
         guard let stepReagent = try modelContext.fetch(
             FetchDescriptor<CachedStepReagent>(predicate: #Predicate { $0.clientID == stepReagentClientID })
@@ -199,6 +206,24 @@ actor StepReagentStore {
         stepReagent.quantity = dto.quantity
         stepReagent.scalable = dto.scalable
         stepReagent.scalableFactor = dto.scalableFactor
+        try modelContext.save()
+    }
+
+    func updateLocally(serverID: Int64, dto: StepReagentDTO) throws {
+        guard let stepReagent = try modelContext.fetch(
+            FetchDescriptor<CachedStepReagent>(predicate: #Predicate { $0.serverID == serverID })
+        ).first else { return }
+        stepReagent.quantity = dto.quantity
+        stepReagent.scalable = dto.scalable
+        stepReagent.scalableFactor = dto.scalableFactor
+        try modelContext.save()
+    }
+
+    func removeLocal(serverID: Int64) throws {
+        guard let stepReagent = try modelContext.fetch(
+            FetchDescriptor<CachedStepReagent>(predicate: #Predicate { $0.serverID == serverID })
+        ).first else { return }
+        modelContext.delete(stepReagent)
         try modelContext.save()
     }
 

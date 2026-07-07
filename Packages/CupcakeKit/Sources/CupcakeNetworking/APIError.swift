@@ -9,17 +9,7 @@ public enum APIError: Error {
 }
 
 extension APIError {
-    /// Extracts DRF's actual rejection message from an `.http` error's body, rather than the
-    /// generic "The operation couldn't be completed (CupcakeNetworking.APIError error N.)" that
-    /// `localizedDescription` gives by default — confirmed live that this generic message was
-    /// genuinely shown to users for real, informative rejections (e.g. a staff-assignment
-    /// permission error, an instrument-booking overlap rejection) that name exactly what's wrong
-    /// and would otherwise be silently discarded. Two real DRF shapes confirmed live, not assumed
-    /// from documentation: field/`non_field_errors` validation errors are `{"field": ["msg",
-    /// ...]}` (values are always arrays, even for a single message); permission errors and custom
-    /// `@action` responses are `{"detail": "msg"}` or `{"error": "msg"}` (plain strings). Falls
-    /// back to `localizedDescription` for anything else (a non-JSON body, a `.transport`/
-    /// `.decoding` error, or an unrecognized shape).
+    /// Extracts DRF's actual rejection message from an `.http` error's body, falling back to `localizedDescription`.
     public var userFacingMessage: String {
         guard case let .http(_, body) = self else {
             return (self as Error).localizedDescription
@@ -44,11 +34,7 @@ extension APIError {
 }
 
 extension Error {
-    /// Lets every catch site use one call regardless of whether it narrowed to `APIError`
-    /// (`catch let error as APIError`) or stayed generic (`catch`) — most of this app's ~16
-    /// call sites use the latter, and restructuring every one of them into a narrowed catch
-    /// purely to reach `APIError.userFacingMessage` would be needless churn for what's really a
-    /// one-line improvement at each site.
+    /// Lets any catch site use one call regardless of whether it narrowed to `APIError`.
     public var userFacingMessage: String {
         (self as? APIError)?.userFacingMessage ?? localizedDescription
     }

@@ -1,10 +1,7 @@
 import Foundation
 import SwiftData
 
-/// Offline-createable, same client-generated-identity pattern as everything else authored by
-/// this app. Part of the `InstrumentJob` subsystem (Phase 4.5) — independent of Session/Protocol,
-/// the only cross-app link is `projectClientID`/`projectServerID`. Only the fields this app's v1
-/// Job-slice needs are modeled (see `InstrumentJobDTO`'s doc comment for what's deferred).
+/// Offline-createable job, independent of Session/Protocol except for its `projectClientID` link.
 @Model
 public final class CachedInstrumentJob {
     @Attribute(.unique) public var clientID: UUID
@@ -12,9 +9,7 @@ public final class CachedInstrumentJob {
     public var jobName: String?
     public var jobType: String
     public var status: String
-    /// The parent project's `clientID` — not its `serverID`, since a locally-created project
-    /// may not have one yet (same reasoning as every other not-yet-synced-parent reference in
-    /// this app, e.g. `CachedStepReagent.reagentClientID`). `nil` if the job has no project.
+    /// The parent project's `clientID`, since a locally-created project may not have a `serverID` yet.
     public var projectClientID: UUID?
     public var instrumentServerID: Int64?
     public var submittedAt: String?
@@ -23,6 +18,9 @@ public final class CachedInstrumentJob {
     public var labGroupServerID: Int64?
     public var staffServerIDs: [Int64]
     public var staffUsernames: [String]
+    public var canEditStaffOnlyColumns: Bool
+    public var funder: String?
+    public var costCenter: String?
 
     public init(
         clientID: UUID = UUID(),
@@ -37,7 +35,10 @@ public final class CachedInstrumentJob {
         metadataTableServerID: Int64? = nil,
         labGroupServerID: Int64? = nil,
         staffServerIDs: [Int64] = [],
-        staffUsernames: [String] = []
+        staffUsernames: [String] = [],
+        canEditStaffOnlyColumns: Bool = false,
+        funder: String? = nil,
+        costCenter: String? = nil
     ) {
         self.clientID = clientID
         self.serverID = serverID
@@ -52,5 +53,8 @@ public final class CachedInstrumentJob {
         self.labGroupServerID = labGroupServerID
         self.staffServerIDs = staffServerIDs
         self.staffUsernames = staffUsernames
+        self.canEditStaffOnlyColumns = canEditStaffOnlyColumns
+        self.funder = funder
+        self.costCenter = costCenter
     }
 }

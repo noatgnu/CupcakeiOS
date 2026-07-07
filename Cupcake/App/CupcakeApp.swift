@@ -11,12 +11,18 @@ import SwiftUI
 
 @main
 struct CupcakeApp: App {
+    #if os(macOS)
+    @NSApplicationDelegateAdaptor(MacWindowPlacementFixer.self) private var windowPlacementFixer
+    #endif
+
     let cupcakeStore: ModelContainer
-    // Independent lifecycle from `cupcakeStore` — read-only after import, safe to blow away/
-    // rebuild per table, no sync/outbox involvement. Scoped to just the Settings tab's subtree
-    // via its own `.modelContainer()` modifier below, not merged into the main store's schema.
     let cupcakeOntologyStore: ModelContainer
     @State private var appSession: AppSession
+    @AppStorage("appAppearance") private var appearanceRawValue: String = AppAppearance.system.rawValue
+
+    private var resolvedColorScheme: ColorScheme? {
+        (AppAppearance(rawValue: appearanceRawValue) ?? .system).colorScheme
+    }
 
     init() {
         let isUITesting = ProcessInfo.processInfo.arguments.contains("--ui-testing-reset-state")
@@ -28,12 +34,6 @@ struct CupcakeApp: App {
         cupcakeOntologyStore = Self.makeOntologyStore(inMemoryOnly: isUITesting)
         _appSession = State(initialValue: AppSession(modelContainer: store))
 
-        // `CachedStorageObject`/`CachedInstrument` are read-only server data (never
-        // offline-createable) — in standalone mode there's genuinely no way to reach the
-        // Storage/Instruments create flows without this, since neither the location nor the
-        // instrument itself can ever be created locally. Seeds one fake "already synced" record
-        // of each so the UI test suite can exercise `AddStoredReagentSheet`/`BookInstrumentSheet`
-        // without a live backend.
         if ProcessInfo.processInfo.arguments.contains("--ui-testing-seed-storage-instrument") {
             let context = ModelContext(store)
             let location = CachedStorageObject(serverID: 9001, objectType: "shelf", objectName: "Test Shelf")
@@ -53,17 +53,104 @@ struct CupcakeApp: App {
 
     var body: some Scene {
         WindowGroup {
-            // The ontology store is only attached to the Settings tab's subtree (inside
-            // `RootNavigationView`, via its own nested `.modelContainer()`), not merged into the
-            // main store's schema — `@Query` resolves against whichever container is nearest in
-            // the view hierarchy, and `ModelContext.container` recovers the raw `ModelContainer`
-            // wherever `OntologyImportService` needs to be constructed from it.
             RootNavigationView(ontologyStore: cupcakeOntologyStore)
                 .environment(appSession)
+                .preferredColorScheme(resolvedColorScheme)
+                .onOpenURL { url in
+                    appSession.handleDeepLink(url)
+                }
         }
         .modelContainer(cupcakeStore)
         #if os(macOS)
         .defaultSize(width: 1200, height: 700)
+        #endif
+
+        WindowGroup("Metadata Table Templates", id: "table-template-manager") {
+            NavigationStack {
+                TableTemplateManagementView()
+            }
+            .environment(appSession)
+            .preferredColorScheme(resolvedColorScheme)
+        }
+        .modelContainer(cupcakeStore)
+        .defaultSize(width: 480, height: 520)
+
+        WindowGroup("Column Templates", id: "column-template-manager") {
+            NavigationStack {
+                ColumnTemplateManagementSheet()
+            }
+            .environment(appSession)
+            .preferredColorScheme(resolvedColorScheme)
+        }
+        .modelContainer(cupcakeStore)
+        .defaultSize(width: 380, height: 420)
+
+        WindowGroup("My Favourites", id: "favourites-manager") {
+            NavigationStack {
+                FavouritesManagementSheet()
+            }
+            .environment(appSession)
+            .preferredColorScheme(resolvedColorScheme)
+        }
+        .modelContainer(cupcakeStore)
+        .defaultSize(width: 380, height: 440)
+
+        WindowGroup("Sync Issues", id: "sync-issues") {
+            NavigationStack {
+                SyncIssuesView()
+            }
+            .environment(appSession)
+            .preferredColorScheme(resolvedColorScheme)
+        }
+        .modelContainer(cupcakeStore)
+        .defaultSize(width: 360, height: 400)
+
+        WindowGroup("Edit Value", id: "metadata-value-editor", for: MetadataValueEditWindowID.self) { $windowID in
+            MetadataValueEditWindowContent(windowID: windowID, ontologyStore: cupcakeOntologyStore)
+                .environment(appSession)
+                .preferredColorScheme(resolvedColorScheme)
+        }
+        .modelContainer(cupcakeStore)
+        .defaultSize(width: 360, height: 480)
+
+        WindowGroup("Protocol", id: "protocol-detail-window", for: ProtocolDetailWindowID.self) { $windowID in
+            ProtocolDetailWindowContent(windowID: windowID)
+                .environment(appSession)
+                .preferredColorScheme(resolvedColorScheme)
+        }
+        .modelContainer(cupcakeStore)
+        .defaultSize(width: 600, height: 700)
+
+        WindowGroup("Job", id: "job-detail-window", for: JobDetailWindowID.self) { $windowID in
+            JobDetailWindowContent(windowID: windowID, ontologyStore: cupcakeOntologyStore)
+                .environment(appSession)
+                .preferredColorScheme(resolvedColorScheme)
+        }
+        .modelContainer(cupcakeStore)
+        .defaultSize(width: 500, height: 600)
+
+        WindowGroup("Session", id: "session-detail-window", for: SessionDetailWindowID.self) { $windowID in
+            SessionDetailWindowContent(windowID: windowID)
+                .environment(appSession)
+                .preferredColorScheme(resolvedColorScheme)
+        }
+        .modelContainer(cupcakeStore)
+        .defaultSize(width: 600, height: 700)
+
+        #if os(macOS)
+        Settings {
+            SettingsView()
+                .modelContainer(cupcakeOntologyStore)
+                .preferredColorScheme(resolvedColorScheme)
+                .frame(minWidth: 500, minHeight: 400)
+        }
+        #else
+        WindowGroup("Settings", id: "settings") {
+            SettingsView()
+                .modelContainer(cupcakeOntologyStore)
+                .preferredColorScheme(resolvedColorScheme)
+        }
+        .defaultSize(width: 500, height: 400)
         #endif
     }
 
@@ -83,6 +170,8 @@ struct CupcakeApp: App {
             CachedSession.self,
             CachedStepAnnotation.self,
             CachedSessionAnnotation.self,
+            CachedAnnotationFolder.self,
+            CachedFolderAnnotation.self,
             CachedStorageObject.self,
             CachedReagent.self,
             CachedStepReagent.self,
@@ -97,18 +186,19 @@ struct CupcakeApp: App {
             CachedMetadataColumn.self,
             CachedMetadataTableTemplate.self,
             CachedInstrumentJobAnnotation.self,
+            CachedTimeKeeper.self,
+            CachedMaintenanceLog.self,
+            CachedStepVariation.self,
+            CachedProtocolRating.self,
+            CachedStoredReagentAnnotation.self,
+            CachedReagentSubscription.self,
+            CachedSamplePool.self,
             OutboxEntry.self,
         ])
         let configuration: ModelConfiguration
         if inMemoryOnly {
             configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
         } else {
-            // Both this container and `CupcakeOntologyStore` previously omitted an explicit
-            // `url:`, so both defaulted to the exact same `Application Support/default.store`
-            // path and silently collided — whichever container initialized its schema there
-            // first made the file unreadable to the other ("no such table: ..."), a real bug
-            // caught live, not in any test (every test uses `isStoredInMemoryOnly: true`,
-            // which never touches this path at all).
             let storeURL = Self.applicationSupportDirectory.appendingPathComponent("CupcakeStore.store")
             configuration = ModelConfiguration(schema: schema, url: storeURL)
         }

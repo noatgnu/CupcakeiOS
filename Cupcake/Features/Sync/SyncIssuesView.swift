@@ -1,15 +1,11 @@
 import CupcakeModels
+import CupcakeTranscription
 import SwiftData
 import SwiftUI
 
-/// Lists everything queued in the outbox — entries still pending a retry (usually just waiting
-/// for connectivity, replayed automatically by `AppSession`'s `NWPathMonitor` hook) and entries
-/// that failed for a real, non-connectivity reason (`OutboxEntry.status == .failed`) and won't
-/// retry again on their own. A manual "Retry Now" covers the case where the device *thinks* it
-/// has connectivity but the specific host is still unreachable (captive portal, VPN, etc.).
+/// Lists everything queued in the outbox, with a manual "Retry Now" action.
 struct SyncIssuesView: View {
     @Environment(AppSession.self) private var appSession
-    @Environment(\.dismiss) private var dismiss
     @Query(sort: \OutboxEntry.sequence) private var entries: [OutboxEntry]
     @Query private var sections: [CachedProtocolSection]
     @Query private var steps: [CachedProtocolStep]
@@ -17,6 +13,7 @@ struct SyncIssuesView: View {
     @Query private var stepReagents: [CachedStepReagent]
     @Query private var reagents: [CachedReagent]
     @Query private var stepAnnotations: [CachedStepAnnotation]
+    @Query private var sessionAnnotations: [CachedSessionAnnotation]
     @Query private var storedReagents: [CachedStoredReagent]
     @Query private var reagentActions: [CachedReagentAction]
     @Query private var instrumentUsages: [CachedInstrumentUsage]
@@ -25,9 +22,7 @@ struct SyncIssuesView: View {
 
     @State private var isRetrying = false
 
-    /// Most entries carry no field snapshot in their payload (see `EmptyOutboxPayload`'s doc
-    /// comment) — look the *current* local record up by `relatedClientID` instead, live off the
-    /// same `@Query` the rest of the app reads.
+    /// Builds a display title for the given outbox entry by looking up its related local record.
     private func title(for entry: OutboxEntry) -> String {
         guard let operation = OutboxOperationType(rawValue: entry.operationType) else { return entry.operationType }
         switch operation {
@@ -69,65 +64,77 @@ struct SyncIssuesView: View {
         case .createInstrumentJob:
             let name = jobs.first(where: { $0.clientID == entry.relatedClientID })?.jobName ?? "Untitled Job"
             return "Create job: \(name)"
+        case .createStepAudioAnnotation:
+            let text = stepAnnotations.first(where: { $0.clientID == entry.relatedClientID })?.transcription
+            return "Add audio note: \(text.map(WebVTTFormatter.extractPlainText) ?? "…")"
+        case .createSessionAudioAnnotation:
+            let text = sessionAnnotations.first(where: { $0.clientID == entry.relatedClientID })?.transcription
+            return "Add session audio note: \(text.map(WebVTTFormatter.extractPlainText) ?? "…")"
+        case .createStepImageAnnotation:
+            return "Add photo note"
+        case .createSessionImageAnnotation:
+            return "Add session photo note"
+        case .createStepVideoAnnotation:
+            return "Add video note"
+        case .createSessionVideoAnnotation:
+            return "Add session video note"
+        case .createStepSketchAnnotation:
+            return "Add sketch note"
+        case .createSessionSketchAnnotation:
+            return "Add session sketch note"
         }
     }
 
     var body: some View {
-        NavigationStack {
-            Group {
-                if entries.isEmpty {
-                    ContentUnavailableView(
-                        "Nothing Pending",
-                        systemImage: "checkmark.icloud",
-                        description: Text("Everything you've created has synced to the server.")
-                    )
-                } else {
-                    List(entries) { entry in
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(title(for: entry))
-                            HStack(spacing: 4) {
-                                Text(entry.status == OutboxEntryStatus.failed.rawValue ? "Failed" : "Waiting to sync")
-                                if entry.retryCount > 0 {
-                                    Text("· \(entry.retryCount) retr\(entry.retryCount == 1 ? "y" : "ies")")
-                                }
-                            }
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            if let lastError = entry.lastError {
-                                Text(lastError)
-                                    .font(.caption2)
-                                    .foregroundStyle(.red)
+        Group {
+            if entries.isEmpty {
+                ContentUnavailableView(
+                    "Nothing Pending",
+                    systemImage: "checkmark.icloud",
+                    description: Text("Everything you've created has synced to the server.")
+                )
+            } else {
+                List(entries) { entry in
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(title(for: entry))
+                        HStack(spacing: 4) {
+                            Text(entry.status == OutboxEntryStatus.failed.rawValue ? "Failed" : "Waiting to sync")
+                            if entry.retryCount > 0 {
+                                Text("· \(entry.retryCount) retr\(entry.retryCount == 1 ? "y" : "ies")")
                             }
                         }
-                    }
-                }
-            }
-            .navigationTitle("Sync Issues")
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Done") { dismiss() }
-                }
-                if !entries.isEmpty {
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button {
-                            Task {
-                                isRetrying = true
-                                await appSession.replayOutbox()
-                                isRetrying = false
-                            }
-                        } label: {
-                            if isRetrying {
-                                ProgressView()
-                            } else {
-                                Text("Retry Now")
-                            }
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        if let lastError = entry.lastError {
+                            Text(lastError)
+                                .font(.caption2)
+                                .foregroundStyle(.red)
                         }
-                        .disabled(isRetrying)
-                        .accessibilityIdentifier("retrySyncButton")
                     }
                 }
             }
         }
-        .frame(minWidth: 360, minHeight: 400)
+        .navigationTitle("Sync Issues")
+        .toolbar {
+            if !entries.isEmpty {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button {
+                        Task {
+                            isRetrying = true
+                            await appSession.replayOutbox()
+                            isRetrying = false
+                        }
+                    } label: {
+                        if isRetrying {
+                            ProgressView()
+                        } else {
+                            Text("Retry Now")
+                        }
+                    }
+                    .disabled(isRetrying)
+                    .accessibilityIdentifier("retrySyncButton")
+                }
+            }
+        }
     }
 }

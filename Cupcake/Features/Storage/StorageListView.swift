@@ -1,40 +1,44 @@
 import CupcakeModels
+import CupcakeNetworking
+import CupcakeSync
 import SwiftData
 import SwiftUI
 
-/// Storage locations are browsed by drilling down one level at a time with a back-button trail,
-/// not an expandable tree — matches the reference web app's `storage-list.ts`, which fetches
-/// only the current level's direct children (`stored_at: currentId`) and shows a breadcrumb, not
-/// a client-side tree widget. `NavigationStack`'s own push/pop already gives the same drill-down
-/// + "go back" behavior here, so there's no separate breadcrumb component to build.
-///
-/// Reagent row fields (name, quantity+unit, and `currentQuantity` only when it differs from
-/// `quantity`) match `storage-list.html:236-329` exactly — the reference app has **no**
-/// low-stock or expiring-soon indicator anywhere in this browse view (only in the create/edit
-/// forms), so this doesn't invent one either.
-struct StorageListView: View {
-    var parentServerID: Int64?
+/// Two-panel drill-down browser: storage locations on the left, reagents at the current location on the right.
+struct StorageListView<SectionPicker: View>: View {
+    @ViewBuilder let sectionPicker: () -> SectionPicker
 
+    @Environment(AppSession.self) private var appSession
+    @Environment(\.modelContext) private var modelContext
     @Query private var allStorageObjects: [CachedStorageObject]
     @Query private var allStoredReagents: [CachedStoredReagent]
+
+    @State private var pathStack: [BreadcrumbSegment] = [BreadcrumbSegment(id: nil, name: "Storage")]
     @State private var isShowingAddReagentSheet = false
+    @State private var isShowingNewLocationSheet = false
+    @State private var editLocationTarget: CachedStorageObject?
+    @State private var errorMessage: String?
+    @State private var isShowingError = false
+    @State private var locationSearchText = ""
+    @State private var reagentSearchText = ""
+
+    private var currentLocationID: Int64? {
+        pathStack.last?.id
+    }
 
     private var childObjects: [CachedStorageObject] {
         allStorageObjects
-            .filter { $0.storedAtServerID == parentServerID }
+            .filter { $0.storedAtServerID == currentLocationID }
+            .filter { locationSearchText.isEmpty || $0.objectName.localizedCaseInsensitiveContains(locationSearchText) }
             .sorted { $0.objectName < $1.objectName }
     }
 
     private var reagentsHere: [CachedStoredReagent] {
-        guard let parentServerID else { return [] }
+        guard let currentLocationID else { return [] }
         return allStoredReagents
-            .filter { $0.storageObjectServerID == parentServerID }
+            .filter { $0.storageObjectServerID == currentLocationID }
+            .filter { reagentSearchText.isEmpty || $0.reagentName?.localizedCaseInsensitiveContains(reagentSearchText) == true }
             .sorted { ($0.reagentName ?? "") < ($1.reagentName ?? "") }
-    }
-
-    private var title: String {
-        guard let parentServerID else { return "Storage" }
-        return allStorageObjects.first(where: { $0.serverID == parentServerID })?.objectName ?? "Storage"
     }
 
     private func reagentSubtitle(_ reagent: CachedStoredReagent) -> String {
@@ -47,64 +51,125 @@ struct StorageListView: View {
     }
 
     var body: some View {
-        Group {
-            if childObjects.isEmpty && reagentsHere.isEmpty {
-                ContentUnavailableView(
-                    "Empty",
-                    systemImage: "shippingbox",
-                    description: Text("No locations or reagents here.")
-                )
-            } else {
-                List {
-                    if !childObjects.isEmpty {
-                        Section("Locations") {
-                            ForEach(childObjects) { object in
-                                NavigationLink(value: object.serverID) {
-                                    Label(object.objectName, systemImage: "shippingbox")
-                                }
-                            }
+        TwoPanelExplorerView(pathStack: $pathStack) {
+            ExplorerList(
+                isEmpty: childObjects.isEmpty,
+                emptyTitle: "No Sublocations",
+                emptySystemImage: "shippingbox",
+                emptyMessage: "This location has no sublocations."
+            ) {
+                ForEach(childObjects) { object in
+                    Button {
+                        enterLocation(object)
+                    } label: {
+                        Label(object.objectName, systemImage: "shippingbox")
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("storageLocationRow_\(object.objectName)")
+                    .contextMenu {
+                        Button {
+                            editLocationTarget = object
+                        } label: {
+                            Label("Edit", systemImage: "pencil")
+                        }
+                        Button(role: .destructive) {
+                            Task { await deleteLocation(object) }
+                        } label: {
+                            Label("Delete", systemImage: "trash")
                         }
                     }
-                    if !reagentsHere.isEmpty {
-                        Section("Reagents") {
-                            ForEach(reagentsHere) { reagent in
-                                NavigationLink(value: reagent.clientID) {
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(reagent.reagentName ?? "Unnamed Reagent")
-                                        Text(reagentSubtitle(reagent))
-                                            .font(.caption)
-                                            .foregroundStyle(reagent.currentQuantity != reagent.quantity ? .orange : .secondary)
-                                    }
-                                }
+                }
+            }
+            .toolbar {
+                ToolbarItem {
+                    Button {
+                        isShowingNewLocationSheet = true
+                    } label: {
+                        Label("New Location", systemImage: "plus")
+                    }
+                    .accessibilityIdentifier("newStorageLocationButton")
+                }
+            }
+        } detail: {
+            VStack(spacing: 0) {
+                if currentLocationID != nil {
+                    TextField("Search reagents", text: $reagentSearchText)
+                        .accessibilityIdentifier("reagentSearchField")
+                        .padding(.horizontal)
+                        .padding(.top, 8)
+                }
+                ExplorerList(
+                    isEmpty: reagentsHere.isEmpty,
+                    emptyTitle: "No Reagents",
+                    emptySystemImage: "flask",
+                    emptyMessage: "This location has no reagents."
+                ) {
+                    ForEach(reagentsHere) { reagent in
+                        NavigationLink(value: reagent.clientID) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(reagent.reagentName ?? "Unnamed Reagent")
+                                Text(reagentSubtitle(reagent))
+                                    .font(.caption)
+                                    .foregroundStyle(reagent.currentQuantity != reagent.quantity ? .orange : .secondary)
                             }
                         }
                     }
                 }
             }
-        }
-        .navigationTitle(title)
-        .toolbar {
-            if parentServerID != nil {
-                ToolbarItem {
-                    Button {
-                        isShowingAddReagentSheet = true
-                    } label: {
-                        Label("Add Reagent", systemImage: "plus")
+            .toolbar {
+                if currentLocationID != nil {
+                    ToolbarItem {
+                        Button {
+                            isShowingAddReagentSheet = true
+                        } label: {
+                            Label("Add Reagent", systemImage: "plus")
+                        }
+                        .accessibilityIdentifier("addStoredReagentButton")
                     }
-                    .accessibilityIdentifier("addStoredReagentButton")
                 }
+            }
+            .navigationDestination(for: UUID.self) { storedReagentClientID in
+                StoredReagentDetailView(storedReagentClientID: storedReagentClientID)
+            }
+        } sidebarHeader: {
+            VStack(spacing: 8) {
+                TextField("Search locations", text: $locationSearchText)
+                    .accessibilityIdentifier("storageLocationSearchField")
+                    .padding(.horizontal, 12)
+                    .padding(.top, 8)
+                sectionPicker()
             }
         }
         .sheet(isPresented: $isShowingAddReagentSheet) {
-            if let parentServerID {
-                AddStoredReagentSheet(storageObjectServerID: parentServerID, storageObjectName: title)
+            if let currentLocationID {
+                AddStoredReagentSheet(storageObjectServerID: currentLocationID, storageObjectName: pathStack.last?.name ?? "Storage")
             }
         }
-        .navigationDestination(for: Int64.self) { serverID in
-            StorageListView(parentServerID: serverID)
+        .sheet(isPresented: $isShowingNewLocationSheet) {
+            EditStorageLocationSheet(parentServerID: currentLocationID)
         }
-        .navigationDestination(for: UUID.self) { storedReagentClientID in
-            StoredReagentDetailView(storedReagentClientID: storedReagentClientID)
+        .sheet(item: $editLocationTarget) { object in
+            EditStorageLocationSheet(existingObject: object)
+        }
+        .alert("Couldn't delete location", isPresented: $isShowingError) {
+            Button("OK") {}
+        } message: {
+            Text(errorMessage ?? "")
+        }
+    }
+
+    private func enterLocation(_ object: CachedStorageObject) {
+        pathStack.append(BreadcrumbSegment(id: object.serverID, name: object.objectName))
+    }
+
+    private func deleteLocation(_ object: CachedStorageObject) async {
+        do {
+            try await appSession.makeSyncServices().inventorySync.deleteStorageObject(serverID: object.serverID)
+            modelContext.delete(object)
+            try? modelContext.save()
+        } catch {
+            errorMessage = error.userFacingMessage
+            isShowingError = true
         }
     }
 }

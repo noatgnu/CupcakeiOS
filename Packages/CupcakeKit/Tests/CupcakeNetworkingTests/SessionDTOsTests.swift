@@ -35,10 +35,7 @@ struct SessionDTOsTests {
 
     @Test("decodes a real POST sessions/ create response, which omits `status` (and every other field beyond the bare essentials)")
     func decodesCreateResponseMissingStatus() throws {
-        // Confirmed live against a real backend, same bug shape as `ProtocolDTO.sections`:
-        // `SessionCreateSerializer`'s response has no `status`/`processing`/`started_at`/
-        // `ended_at`/`is_running` at all — only the list/retrieve serializer includes them.
-        // Captured verbatim from a real 201 response body.
+        // Captured verbatim from a real 201 response body, which omits status/processing/started_at/ended_at/is_running.
         let json = Data("""
         {
             "id": 1,

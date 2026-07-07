@@ -4,11 +4,7 @@ import Testing
 
 @testable import CupcakeOntology
 
-/// Deliberately hits the real, public `noatgnu/cupcake-webgui` GitHub release — no mocking, same
-/// "don't mock the network layer" discipline as `CupcakeNetworkingTests`/`CupcakeSyncTests`
-/// against the real Cupcake backend. No credentials involved (a public GitHub Releases
-/// endpoint), and `tissue` is the smallest real ontology table (~28KB compressed), so this stays
-/// fast without needing a stub.
+/// Deliberately hits the real, public `noatgnu/cupcake-webgui` GitHub release, no mocking.
 @Suite("CupcakeOntology live release")
 struct CupcakeOntologyTests {
     @Test("fetchManifest decodes a real manifest from the live release")

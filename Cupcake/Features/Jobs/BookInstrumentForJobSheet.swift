@@ -4,10 +4,7 @@ import CupcakeSync
 import SwiftData
 import SwiftUI
 
-/// Online-only — see `InstrumentJobAnnotationSyncService`'s doc comment for why this whole flow
-/// has no offline path. Field set matches `BookInstrumentSheet`'s established pattern (two
-/// date-time pickers, description), plus an instrument picker since there's no fixed instrument
-/// context here the way a Storage/Instrument-tab booking has.
+/// Books an instrument for a job (instrument picker, start/end time, description). Online-only.
 struct BookInstrumentForJobSheet: View {
     @Environment(AppSession.self) private var appSession
     @Environment(\.dismiss) private var dismiss
@@ -41,6 +38,7 @@ struct BookInstrumentForJobSheet: View {
                     }
                     .accessibilityIdentifier("bookingInstrumentPicker")
                 }
+                ExistingBookingsSection(instrumentServerID: selectedInstrumentServerID)
                 Section {
                     DatePicker("Start Time", selection: $startTime)
                         .accessibilityIdentifier("jobBookingStartTimePicker")

@@ -3,8 +3,7 @@ import CupcakeNetworking
 import Foundation
 import SwiftData
 
-/// Read-sync + create-locally-then-sync-or-queue for `Project` — same shape as
-/// `ProtocolSyncService`. Part of the `InstrumentJob` subsystem (Phase 4.5).
+/// Read-sync + create-locally-then-sync-or-queue for `Project`.
 public actor ProjectSyncService {
     private let apiClient: APIClient
     private let deviceToken: @Sendable () -> String?
@@ -32,9 +31,7 @@ public actor ProjectSyncService {
         }
     }
 
-    /// Pushes an *already locally-created* project to the server, attaching the new `serverID`
-    /// to that same local record — the create-locally-then-sync path used when signed in, and
-    /// what `OutboxService.replay(_:)` calls to retry a queued `createProject` entry.
+    /// Pushes an already locally-created project to the server, attaching the new `serverID`.
     @discardableResult
     public func syncLocallyCreatedProject(clientID: UUID) async throws -> Int64 {
         guard let token = deviceToken() else {
@@ -49,6 +46,33 @@ public actor ProjectSyncService {
         )
         try await store.attachServerID(clientID: clientID, dto: dto)
         return dto.id
+    }
+
+    @discardableResult
+    public func update(serverID: Int64, projectName: String, projectDescription: String?) async throws -> ProjectDTO {
+        guard let token = deviceToken() else {
+            throw ProjectSyncError.noDeviceToken
+        }
+        let dto: ProjectDTO = try await apiClient.send(
+            "projects/\(serverID)/",
+            method: .patch,
+            body: UpdateProjectRequest(projectName: projectName, projectDescription: projectDescription),
+            authorizationHeader: "DeviceToken \(token)"
+        )
+        try await store.upsert([dto])
+        return dto
+    }
+
+    public func delete(serverID: Int64) async throws {
+        guard let token = deviceToken() else {
+            throw ProjectSyncError.noDeviceToken
+        }
+        try await apiClient.sendNoContent(
+            "projects/\(serverID)/",
+            method: .delete,
+            authorizationHeader: "DeviceToken \(token)"
+        )
+        try await store.removeLocal(serverID: serverID)
     }
 }
 
@@ -86,9 +110,7 @@ actor ProjectStore {
         return (project.projectName, project.projectDescription)
     }
 
-    /// Attaches a newly-assigned `serverID` to the existing local record matched by `clientID` —
-    /// the record already exists (created locally first), so this updates it in place rather
-    /// than inserting a second copy.
+    /// Attaches a newly-assigned `serverID` to the existing local record matched by `clientID`.
     func attachServerID(clientID: UUID, dto: ProjectDTO) throws {
         guard let project = try modelContext.fetch(
             FetchDescriptor<CachedProject>(predicate: #Predicate { $0.clientID == clientID })
@@ -98,6 +120,14 @@ actor ProjectStore {
         project.serverID = dto.id
         project.projectName = dto.projectName
         project.projectDescription = dto.projectDescription
+        try modelContext.save()
+    }
+
+    func removeLocal(serverID: Int64) throws {
+        guard let project = try modelContext.fetch(
+            FetchDescriptor<CachedProject>(predicate: #Predicate { $0.serverID == serverID })
+        ).first else { return }
+        modelContext.delete(project)
         try modelContext.save()
     }
 }

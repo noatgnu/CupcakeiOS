@@ -1,10 +1,6 @@
 import Foundation
 
-/// Talks to `api.github.com`, not the Cupcake backend — verified real endpoint:
-/// `noatgnu/cupcake-webgui`'s GitHub Releases, confirmed by actually downloading and inspecting
-/// a real `manifest-v0.0.2.json` and one full ontology `.sqlite.gz` asset (byte-for-byte
-/// round-tripped through this app's own gzip decoder) rather than assumed from a workflow file.
-/// No device-token auth needed — this is a public, unauthenticated GitHub API/CDN endpoint.
+/// Talks to `api.github.com`'s public, unauthenticated Releases API for `noatgnu/cupcake-webgui`, not the Cupcake backend.
 public actor OntologyReleaseClient {
     private let session: URLSession
     private static let releaseURL = URL(string: "https://api.github.com/repos/noatgnu/cupcake-webgui/releases/latest")!
@@ -13,9 +9,7 @@ public actor OntologyReleaseClient {
         self.session = session
     }
 
-    /// Fetches the latest release's asset list and downloads+decodes whichever asset's name
-    /// starts with `"manifest-"` — the release always has exactly one (the version suffix
-    /// changes per release, e.g. `manifest-v0.0.2.json`).
+    /// Fetches the latest release's asset list and downloads+decodes the one asset named `"manifest-*"`.
     public func fetchManifest() async throws -> OntologyManifest {
         let assets = try await fetchLatestReleaseAssets()
         guard let manifestAsset = assets.first(where: { $0.name.hasPrefix("manifest-") }) else {
@@ -26,9 +20,7 @@ public actor OntologyReleaseClient {
         return try JSONDecoder().decode(OntologyManifest.self, from: data)
     }
 
-    /// Downloads and gzip-decompresses one table's `.sqlite.gz` asset (matched by `table.file`
-    /// against the release's actual asset list, not constructed from a guessed URL pattern) —
-    /// returns the raw decompressed SQLite file bytes, ready to write to disk and open.
+    /// Downloads and gzip-decompresses one table's `.sqlite.gz` asset, matched by `table.file`.
     public func downloadTable(_ table: OntologyManifestTable) async throws -> Data {
         let assets = try await fetchLatestReleaseAssets()
         guard let asset = assets.first(where: { $0.name == table.file }) else {

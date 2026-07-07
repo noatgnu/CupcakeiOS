@@ -7,6 +7,7 @@ import SwiftUI
 struct ProtocolListView: View {
     @Environment(AppSession.self) private var appSession
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.openWindow) private var openWindow
     @Query(sort: \CachedProtocol.protocolTitle) private var protocols: [CachedProtocol]
     @Query private var outboxEntries: [OutboxEntry]
 
@@ -19,29 +20,48 @@ struct ProtocolListView: View {
     @State private var isShowingNewProtocolSheet = false
     @State private var isShowingSyncIssues = false
     @State private var isShowingSettings = false
+    @State private var isShowingImportSheet = false
+    @State private var pathStack: [BreadcrumbSegment] = [BreadcrumbSegment(id: nil, name: "All Protocols")]
+    @State private var listFilter: ProtocolListFilter?
+    @State private var filteredServerIDs: Set<Int64> = []
+    @State private var isLoadingFilter = false
 
-    /// A protocol authored by this app that hasn't reached the server yet, while signed in, is
-    /// either queued in the outbox (will sync automatically on reconnect) or the sync attempt
-    /// itself failed outright — either way, distinct from a *permanently* local record in
-    /// standalone mode, where there's no server to sync to at all.
+    /// Shows "Pending sync" while signed in, or "Local only" in standalone mode.
     private func pendingSyncLabel(for protocolModel: CachedProtocol) -> String? {
         guard protocolModel.serverID == nil else { return nil }
         guard protocolModel.isLocallyAuthored else { return nil }
         return appSession.isAuthenticated ? "Pending sync" : "Local only"
     }
 
+    /// Narrows the already-cached protocol list to the server IDs a filter endpoint returned.
+    private var displayedProtocols: [CachedProtocol] {
+        guard listFilter != nil else { return protocols }
+        return protocols.filter { protocolModel in
+            guard let serverID = protocolModel.serverID else { return false }
+            return filteredServerIDs.contains(serverID)
+        }
+    }
+
     var body: some View {
-        NavigationSplitView {
-            List(protocols, selection: $selectedProtocolID) { protocolModel in
-                VStack(alignment: .leading) {
-                    Text(protocolModel.protocolTitle)
-                    if let label = pendingSyncLabel(for: protocolModel) {
-                        Text(label)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+        TwoPanelExplorerView(pathStack: $pathStack, pushesDetailOnCompact: true) {
+            SelectableExplorerList(
+                selection: $selectedProtocolID,
+                isEmpty: displayedProtocols.isEmpty,
+                emptyTitle: "No Protocols",
+                emptySystemImage: "list.bullet.clipboard",
+                emptyMessage: "Create a protocol to get started."
+            ) {
+                ForEach(displayedProtocols) { protocolModel in
+                    VStack(alignment: .leading) {
+                        Text(protocolModel.protocolTitle)
+                        if let label = pendingSyncLabel(for: protocolModel) {
+                            Text(label)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                     }
+                    .tag(protocolModel.clientID)
                 }
-                .tag(protocolModel.clientID)
             }
             .navigationTitle("Protocols")
             .toolbar {
@@ -55,8 +75,36 @@ struct ProtocolListView: View {
                 }
                 if appSession.isAuthenticated {
                     ToolbarItem {
+                        Menu {
+                            Button("All Protocols") { Task { await applyFilter(nil) } }
+                            Button("My Protocols") { Task { await applyFilter(.myProtocols) } }
+                            Button("Shared With Me") { Task { await applyFilter(.sharedWithMe) } }
+                            Button("Public") { Task { await applyFilter(.publicProtocols) } }
+                            Button("Vaulted") { Task { await applyFilter(.vaultedProtocols) } }
+                        } label: {
+                            if isLoadingFilter {
+                                ProgressView()
+                            } else {
+                                Label("Filter", systemImage: listFilter == nil ? "line.3.horizontal.decrease.circle" : "line.3.horizontal.decrease.circle.fill")
+                            }
+                        }
+                        .accessibilityIdentifier("protocolFilterMenu")
+                    }
+                    ToolbarItem {
                         Button {
-                            isShowingSyncIssues = true
+                            isShowingImportSheet = true
+                        } label: {
+                            Label("Import from protocols.io…", systemImage: "square.and.arrow.down")
+                        }
+                        .accessibilityIdentifier("importFromProtocolsIOButton")
+                    }
+                    ToolbarItem {
+                        Button {
+                            if PlatformWindowPreference.prefersSeparateWindow {
+                                openWindow(id: "sync-issues")
+                            } else {
+                                isShowingSyncIssues = true
+                            }
                         } label: {
                             Label(outboxEntries.isEmpty ? "Sync Issues" : "Sync Issues (\(outboxEntries.count))", systemImage: outboxEntries.isEmpty ? "checkmark.icloud" : "exclamationmark.icloud")
                         }
@@ -73,6 +121,7 @@ struct ProtocolListView: View {
                             }
                         }
                         .disabled(isSyncing)
+                        .accessibilityIdentifier("syncNowButton")
                     }
                     ToolbarItem {
                         Button("Sign Out") {
@@ -84,30 +133,46 @@ struct ProtocolListView: View {
                         Button("Exit Offline Mode") {
                             appSession.exitStandalone()
                         }
+                        .accessibilityIdentifier("exitOfflineModeButton")
                     }
                 }
+                // macOS exposes Settings natively via Cmd+, — no toolbar button needed there.
+                #if !os(macOS)
                 ToolbarItem {
                     Button {
-                        isShowingSettings = true
+                        if PlatformWindowPreference.prefersSeparateWindow {
+                            openWindow(id: "settings")
+                        } else {
+                            isShowingSettings = true
+                        }
                     } label: {
                         Label("Settings", systemImage: "gearshape")
                     }
                     .accessibilityIdentifier("settingsButton")
                 }
+                #endif
             }
-            .task { await sync() }
             .sheet(isPresented: $isShowingNewProtocolSheet) {
                 NewProtocolView()
             }
+            .sheet(isPresented: $isShowingImportSheet) {
+                ImportProtocolFromURLSheet()
+            }
             .sheet(isPresented: $isShowingSyncIssues) {
-                SyncIssuesView()
+                NavigationStack {
+                    SyncIssuesView()
+                        .toolbar {
+                            ToolbarItem(placement: .cancellationAction) {
+                                Button("Done") { isShowingSyncIssues = false }
+                            }
+                        }
+                }
+                .frame(minWidth: 360, minHeight: 400)
             }
             .sheet(isPresented: $isShowingSettings) {
-                NavigationStack {
-                    SettingsView()
-                }
-                .modelContainer(ontologyStore)
-                .frame(minWidth: 400, minHeight: 500)
+                SettingsView()
+                    .modelContainer(ontologyStore)
+                    .frame(minWidth: 400, minHeight: 500)
             }
             .alert("Sync failed", isPresented: $isShowingError) {
                 Button("OK") {}
@@ -115,40 +180,54 @@ struct ProtocolListView: View {
                 Text(errorMessage ?? "")
             }
         } detail: {
-            // `.navigationDestination` inside a NavigationSplitView's detail column needs its
-            // own explicit NavigationStack to register pushes — without one, ProtocolDetailView's
-            // "start session" push silently does nothing (confirmed via XCUITest: the button tap
-            // registers, but the detail column never navigates to SessionDetailView).
-            NavigationStack {
-                if let selectedProtocolID, let protocolModel = protocols.first(where: { $0.clientID == selectedProtocolID }) {
-                    ProtocolDetailView(protocolModel: protocolModel)
-                } else {
-                    Text("Select a protocol")
-                        .foregroundStyle(.secondary)
-                }
+            if let selectedProtocolID, let protocolModel = protocols.first(where: { $0.clientID == selectedProtocolID }) {
+                ProtocolDetailView(protocolModel: protocolModel)
+            } else {
+                ExplorerList(
+                    isEmpty: true,
+                    emptyTitle: "No Protocol Selected",
+                    emptySystemImage: "list.bullet.clipboard",
+                    emptyMessage: "Select a protocol to see its details."
+                ) { EmptyView() }
             }
+        }
+        .onChange(of: selectedProtocolID) { _, newValue in
+            guard let newValue, let protocolModel = protocols.first(where: { $0.clientID == newValue }) else {
+                pathStack = [pathStack[0]]
+                return
+            }
+            pathStack = [pathStack[0], BreadcrumbSegment(id: protocolModel.serverID, name: protocolModel.protocolTitle)]
+        }
+        .onChange(of: pathStack) { _, newValue in
+            if newValue.count == 1 {
+                selectedProtocolID = nil
+            }
+        }
+    }
+
+    private func applyFilter(_ filter: ProtocolListFilter?) async {
+        listFilter = filter
+        guard let filter else {
+            filteredServerIDs = []
+            return
+        }
+        isLoadingFilter = true
+        defer { isLoadingFilter = false }
+        do {
+            let ids = try await appSession.makeSyncServices().protocolSync.fetchProtocolIDs(filter: filter)
+            filteredServerIDs = Set(ids)
+        } catch {
+            errorMessage = error.userFacingMessage
+            isShowingError = true
         }
     }
 
     private func sync() async {
         guard appSession.isAuthenticated else { return }
-        let services = appSession.makeSyncServices()
         isSyncing = true
         defer { isSyncing = false }
-        await appSession.replayOutbox()
         do {
-            try await services.protocolSync.refetchAll()
-            try await services.stepReagentSync.refetchAll()
-            try await services.inventorySync.refetchStorageObjects()
-            try await services.inventorySync.refetchReagents()
-            try await services.inventorySync.refetchStoredReagents()
-            try await services.inventorySync.refetchReagentActions()
-            try await services.instrumentSync.refetchInstruments()
-            try await services.instrumentSync.refetchInstrumentUsage()
-            try await services.projectSync.refetchAll()
-            try await services.instrumentJobSync.refetchAll()
-            try await services.labGroupSync.refetchAll()
-            try await services.metadataTableTemplateSync.refetchAll()
+            try await appSession.syncAll()
         } catch {
             errorMessage = error.userFacingMessage
             isShowingError = true

@@ -4,7 +4,6 @@ import SwiftUI
 
 struct ColumnTemplateManagementSheet: View {
     @Environment(AppSession.self) private var appSession
-    @Environment(\.dismiss) private var dismiss
 
     @State private var templates: [MetadataColumnTemplateDTO] = []
     @State private var isLoading = false
@@ -14,52 +13,46 @@ struct ColumnTemplateManagementSheet: View {
     @State private var isShowingError = false
 
     var body: some View {
-        NavigationStack {
-            Form {
-                if templates.isEmpty {
-                    if isLoading {
-                        ProgressView()
-                    } else {
-                        Text("No column templates yet.")
-                            .foregroundStyle(.secondary)
-                    }
+        Form {
+            if templates.isEmpty {
+                if isLoading {
+                    ProgressView()
                 } else {
-                    Section("My Templates") {
-                        ForEach(templates) { template in
-                            Button {
-                                editingTemplate = template
-                            } label: {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(template.name)
-                                    Text(template.columnName)
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
+                    Text("No column templates yet.")
+                        .foregroundStyle(.secondary)
+                }
+            } else {
+                Section("My Templates") {
+                    ForEach(templates) { template in
+                        Button {
+                            editingTemplate = template
+                        } label: {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(template.name)
+                                Text(template.columnName)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
                             }
-                            .buttonStyle(.plain)
-                            .accessibilityIdentifier("myColumnTemplateRow_\(template.name)")
                         }
-                        .onDelete { offsets in
-                            Task { await deleteTemplates(at: offsets) }
-                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("myColumnTemplateRow_\(template.name)")
                     }
-                }
-            }
-            .formStyle(.grouped)
-            .navigationTitle("My Column Templates")
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Done") { dismiss() }
-                }
-                ToolbarItem(placement: .primaryAction) {
-                    Button("New") {
-                        isShowingNewTemplateSheet = true
+                    .onDelete { offsets in
+                        Task { await deleteTemplates(at: offsets) }
                     }
-                    .accessibilityIdentifier("newColumnTemplateButton")
                 }
             }
         }
-        .frame(minWidth: 380, minHeight: 420)
+        .formStyle(.grouped)
+        .navigationTitle("My Column Templates")
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button("New") {
+                    isShowingNewTemplateSheet = true
+                }
+                .accessibilityIdentifier("newColumnTemplateButton")
+            }
+        }
         .alert("Couldn't update templates", isPresented: $isShowingError) {
             Button("OK") {}
         } message: {

@@ -3,10 +3,7 @@ import CupcakeNetworking
 import Foundation
 import SwiftData
 
-/// Read-sync + create-locally-then-sync-or-queue + `submit`/`cancel` actions for
-/// `InstrumentJob` — part of the independent Job subsystem (Phase 4.5). Deferred to a later
-/// slice: lab group/staff assignment, `metadata_table_template`/`create_metadata_from_template`,
-/// `InstrumentJobAnnotation`/`InstrumentUsageJobAnnotation` + the booking-merge flow.
+/// Read-sync + create-locally-then-sync-or-queue + `submit`/`cancel` actions for `InstrumentJob`.
 public actor InstrumentJobSyncService {
     private let apiClient: APIClient
     private let deviceToken: @Sendable () -> String?
@@ -34,11 +31,7 @@ public actor InstrumentJobSyncService {
         }
     }
 
-    /// Pushes an *already locally-created* job to the server, attaching the new `serverID` to
-    /// that same local record. Throws `SyncDependencyError.parentNotSynced` if the job has a
-    /// project that hasn't synced yet (an ordering issue, retried like a connectivity failure —
-    /// same reasoning as every other parent-dependency case in this app). A job with no project
-    /// at all (`projectClientID == nil`) has nothing to wait on and syncs immediately.
+    /// Pushes an already locally-created job to the server. Throws `SyncDependencyError.parentNotSynced` if its project hasn't synced yet.
     @discardableResult
     public func syncLocallyCreatedInstrumentJob(clientID: UUID) async throws -> Int64 {
         guard let token = deviceToken() else {
@@ -95,9 +88,7 @@ public actor InstrumentJobSyncService {
         return dto
     }
 
-    /// Creates the job's `MetadataTable` from a template — the job must not already have one
-    /// (`ccm/viewsets.py:588-669`). The response doesn't include the updated `InstrumentJob`
-    /// itself, so this does a follow-up `GET` to pick up the new `metadata_table` link.
+    /// Creates the job's `MetadataTable` from a template, then a follow-up GET for the new `metadata_table` link.
     @discardableResult
     public func createMetadataFromTemplate(
         jobServerID: Int64,
@@ -139,8 +130,7 @@ public actor InstrumentJobSyncService {
         return dto
     }
 
-    /// Required before booking an instrument for a job — see `UpdateInstrumentJobInstrumentRequest`'s
-    /// doc comment for why this exists at all.
+    /// Required before booking an instrument for a job.
     @discardableResult
     public func updateInstrument(jobServerID: Int64, instrumentServerID: Int64) async throws -> InstrumentJobDTO {
         guard let token = deviceToken() else {
@@ -156,11 +146,7 @@ public actor InstrumentJobSyncService {
         return dto
     }
 
-    /// Replaces the job's entire staff list. Requires the job to already have a `lab_group` set
-    /// (server-side validation rule 1) and every listed user to be a direct member of that lab
-    /// group with `can_process_jobs` (rules 2-3) — see `UpdateInstrumentJobStaffRequest`'s doc
-    /// comment. A rejection here is a real validation failure worth surfacing verbatim, not a
-    /// generic "couldn't sync" — callers should inspect `APIError.http`'s body on failure.
+    /// Replaces the job's entire staff list. A rejection here is a real validation failure worth surfacing verbatim.
     @discardableResult
     public func updateStaff(jobServerID: Int64, staffServerIDs: [Int64]) async throws -> InstrumentJobDTO {
         guard let token = deviceToken() else {
@@ -176,10 +162,7 @@ public actor InstrumentJobSyncService {
         return dto
     }
 
-    /// Re-fetches the job and its `metadata_table` — the metadata-merge signal
-    /// (`ccm/signals.py:175-260`) runs synchronously inside the booking-annotation create
-    /// request, so by the time that call returns, this pulls in whatever columns it merged.
-    /// Returns `nil` if the job still has no `metadata_table` (nothing to refresh).
+    /// Re-fetches the job and its `metadata_table`, picking up whatever the merge signal added. `nil` if there's no table yet.
     @discardableResult
     public func refreshMetadataTable(jobServerID: Int64, jobClientID: UUID) async throws -> MetadataTableDTO? {
         guard let token = deviceToken() else {
@@ -193,6 +176,22 @@ public actor InstrumentJobSyncService {
         let table: MetadataTableDTO = try await apiClient.get("metadata-tables/\(metadataTableServerID)/", authorizationHeader: authorization)
         try await store.upsertMetadataTable(table, instrumentJobClientID: jobClientID)
         return table
+    }
+
+    /// Free-text funder/cost-center fields, no server-side validation.
+    @discardableResult
+    public func updateFunderCostCenter(jobServerID: Int64, funder: String?, costCenter: String?) async throws -> InstrumentJobDTO {
+        guard let token = deviceToken() else {
+            throw InstrumentJobSyncError.noDeviceToken
+        }
+        let dto: InstrumentJobDTO = try await apiClient.send(
+            "instrument-jobs/\(jobServerID)/",
+            method: .patch,
+            body: UpdateInstrumentJobFunderCostCenterRequest(funder: funder, costCenter: costCenter),
+            authorizationHeader: "DeviceToken \(token)"
+        )
+        try await store.upsertSingle(dto)
+        return dto
     }
 
     public func fetchProjectColumnValues(projectServerID: Int64, columnName: String) async throws -> [String] {
@@ -209,9 +208,7 @@ public actor InstrumentJobSyncService {
     }
 }
 
-/// `submit`/`cancel` are DRF `@action`s that take no request body — `send(_:method:body:...)`
-/// still needs *something* `Encodable` to serialize, so this is an explicit "no fields" marker
-/// rather than repurposing an unrelated payload type.
+/// An explicit "no fields" marker for `submit`/`cancel`, DRF `@action`s that take no request body.
 private struct EmptyEncodable: Encodable, Sendable {}
 
 public enum InstrumentJobSyncError: Error {
@@ -253,7 +250,10 @@ actor InstrumentJobStore {
                 metadataTableServerID: dto.metadataTable,
                 labGroupServerID: dto.labGroup,
                 staffServerIDs: dto.staff,
-                staffUsernames: dto.staffUsernames
+                staffUsernames: dto.staffUsernames,
+                canEditStaffOnlyColumns: dto.canEditStaffOnlyColumns,
+                funder: dto.funder,
+                costCenter: dto.costCenter
             )
             modelContext.insert(created)
             return created
@@ -269,6 +269,9 @@ actor InstrumentJobStore {
         job.labGroupServerID = dto.labGroup
         job.staffServerIDs = dto.staff
         job.staffUsernames = dto.staffUsernames
+        job.canEditStaffOnlyColumns = dto.canEditStaffOnlyColumns
+        job.funder = dto.funder
+        job.costCenter = dto.costCenter
     }
 
     func upsertMetadataTable(_ dto: MetadataTableDTO, instrumentJobClientID: UUID) throws {
@@ -312,7 +315,8 @@ actor InstrumentJobStore {
                 hidden: columnDTO.hidden,
                 readonly: columnDTO.readonly,
                 ontologyType: columnDTO.ontologyType,
-                staffOnly: columnDTO.staffOnly
+                staffOnly: columnDTO.staffOnly,
+                modifiers: columnDTO.modifiers.map { MetadataColumnModifier(samples: $0.samples, value: $0.value) }
             )
             modelContext.insert(column)
         }
@@ -359,6 +363,8 @@ actor InstrumentJobStore {
         job.completedAt = dto.completedAt
         job.metadataTableServerID = dto.metadataTable
         job.labGroupServerID = dto.labGroup
+        job.funder = dto.funder
+        job.costCenter = dto.costCenter
         try modelContext.save()
     }
 }

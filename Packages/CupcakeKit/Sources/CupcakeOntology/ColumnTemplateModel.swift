@@ -1,17 +1,7 @@
 import Foundation
 import SwiftData
 
-/// Mirrors `MetadataColumnTemplate` (`ccv/models.py:3511`) — the pre-resolved
-/// `ontologyType`/`ontologyOptions`/`customOntologyFilters` per SDRF column is exactly what the
-/// structured tagging form reads to know which local ontology table to typeahead against for a
-/// given column, without reimplementing that resolution logic client-side. `ontologyOptions`/
-/// `customOntologyFilters` are Django `JSONField`s, kept as raw JSON text — decoded lazily by
-/// whichever form actually needs them, not eagerly here.
-///
-/// Column set confirmed against the real downloaded `column-template-system.sqlite.gz`'s schema
-/// (not assumed) — the full row includes several DB-bookkeeping columns
-/// (`is_active`/`is_locked`/`created_at`/etc.) not useful client-side, so only the
-/// tagging-relevant subset is modeled here.
+/// Mirrors `MetadataColumnTemplate`, with pre-resolved ontology type/options/filters per SDRF column.
 @Model
 public final class CachedColumnTemplate {
     @Attribute(.unique) public var serverID: Int64
@@ -55,8 +45,7 @@ public final class CachedColumnTemplate {
 
 extension CachedColumnTemplate: OntologyRowDecodable {
     public static let typeKey = "system"
-    /// Manifest name is `"system"`, but the internal table is `column_template` — confirmed
-    /// against the real downloaded `column-template-system.sqlite.gz`.
+    /// Manifest name is `"system"`, but the internal table is `column_template`.
     public static let sqlTableName = "column_template"
     public convenience init?(row: [String: String?]) {
         guard let idString = row["id"] ?? nil, let id = Int64(idString) else { return nil }
@@ -76,11 +65,7 @@ extension CachedColumnTemplate: OntologyRowDecodable {
     }
 }
 
-/// One composable SDRF template (e.g. `"base"`, `"human"`, `"cell-lines"`) — mirrors the
-/// `schema` table in `schema-sdrf.sqlite.gz`. `columnsJSON` is the raw `columns_json` blob (a
-/// nested array of column definitions with per-column validators/requirement level) — kept as
-/// text and decoded lazily, since its shape is considerably more involved than a flat column
-/// list and nothing needs it eagerly parsed at import time.
+/// One composable SDRF template (e.g. "base", "human", "cell-lines"). `columnsJSON` is kept as raw text, decoded lazily.
 @Model
 public final class CachedSDRFSchema {
     @Attribute(.unique) public var name: String
@@ -115,8 +100,7 @@ public final class CachedSDRFSchema {
 
 extension CachedSDRFSchema: OntologyRowDecodable {
     public static let typeKey = "sdrf"
-    /// Manifest name is `"sdrf"`, but the internal table is `schema` — confirmed against the
-    /// real downloaded `schema-sdrf.sqlite.gz`.
+    /// Manifest name is `"sdrf"`, but the internal table is `schema`.
     public static let sqlTableName = "schema"
     public convenience init?(row: [String: String?]) {
         guard let name = row["name"] ?? nil else { return nil }

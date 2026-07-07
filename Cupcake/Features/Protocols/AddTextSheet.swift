@@ -1,7 +1,6 @@
 import SwiftUI
 
-/// A minimal single-field entry sheet — reused for renaming a section (`initialText` pre-fills
-/// the current name) and any other plain "type a description, save it locally" case.
+/// A minimal single-field text entry sheet, reused for renaming a section and similar cases.
 struct AddTextSheet: View {
     @Environment(\.dismiss) private var dismiss
 

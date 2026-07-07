@@ -1,9 +1,7 @@
 import Foundation
 import SwiftData
 
-/// Offline-createable from Phase 2 on (§3), same as `CachedStepAnnotation` — read-only cache
-/// only for now, no create path yet in Phase 1. `session` is referenced by `clientID`, not
-/// `serverID` — see `CachedStepAnnotation`'s doc comment for why.
+/// A cached session-level annotation.
 @Model
 public final class CachedSessionAnnotation {
     @Attribute(.unique) public var clientID: UUID
@@ -12,6 +10,12 @@ public final class CachedSessionAnnotation {
     public var annotationText: String
     public var annotationType: String
     public var order: Int
+    public var transcription: String?
+    public var language: String?
+    public var translation: String?
+    public var pendingFileName: String?
+    public var scratched: Bool
+    public var createdAt: String
 
     public init(
         clientID: UUID = UUID(),
@@ -19,7 +23,13 @@ public final class CachedSessionAnnotation {
         sessionClientID: UUID,
         annotationText: String,
         annotationType: String = "text",
-        order: Int = 0
+        order: Int = 0,
+        transcription: String? = nil,
+        language: String? = nil,
+        translation: String? = nil,
+        pendingFileName: String? = nil,
+        scratched: Bool = false,
+        createdAt: String = ISO8601DateFormatter().string(from: Date())
     ) {
         self.clientID = clientID
         self.serverID = serverID
@@ -27,5 +37,11 @@ public final class CachedSessionAnnotation {
         self.annotationText = annotationText
         self.annotationType = annotationType
         self.order = order
+        self.transcription = transcription
+        self.language = language
+        self.translation = translation
+        self.pendingFileName = pendingFileName
+        self.scratched = scratched
+        self.createdAt = createdAt
     }
 }

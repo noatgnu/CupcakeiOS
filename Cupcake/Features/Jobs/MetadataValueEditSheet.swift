@@ -5,12 +5,72 @@ import CupcakeSync
 import SwiftData
 import SwiftUI
 
+/// Maps Unimod specification fields to this app's fixed SDRF `PP`/`MT` option lists.
+enum UnimodMapping {
+    private static let knownPositions = ["Anywhere", "Protein N-term", "Protein C-term", "Any N-term", "Any C-term"]
+    private static let classificationToModificationType: [String: String] = [
+        "Post-translational": "Variable",
+        "Chemical derivatization": "Fixed",
+        "Artefact": "Variable",
+        "Pre-translational": "Fixed",
+        "Multiple": "Variable",
+        "Other": "Variable",
+    ]
+
+    static func position(from unimodPosition: String) -> String {
+        knownPositions.contains(unimodPosition) ? unimodPosition : "Anywhere"
+    }
+
+    static func modificationType(from classification: String) -> String? {
+        classificationToModificationType[classification]
+    }
+}
+
+/// Identifies which cell (a column, optionally scoped to one sample) to edit via a `.sheet(item:)`.
+struct MetadataCellEditTarget: Identifiable {
+    let column: CachedMetadataColumn
+    let sampleIndex: Int?
+    var id: String { "\(column.serverID)_\(sampleIndex.map(String.init) ?? "default")" }
+}
+
+/// Identifies which metadata column to edit when `MetadataValueEditSheet` opens as its own window.
+struct MetadataValueEditWindowID: Codable, Hashable {
+    let columnServerID: Int64
+    let sampleIndex: Int?
+    let projectServerID: Int64?
+}
+
+/// Resolves a `MetadataValueEditWindowID` to the live column and hosts `MetadataValueEditSheet`.
+struct MetadataValueEditWindowContent: View {
+    let windowID: MetadataValueEditWindowID?
+    let ontologyStore: ModelContainer
+
+    @Query private var columns: [CachedMetadataColumn]
+
+    private var column: CachedMetadataColumn? {
+        guard let windowID else { return nil }
+        return columns.first { $0.serverID == windowID.columnServerID }
+    }
+
+    var body: some View {
+        if let windowID, let column {
+            MetadataValueEditSheet(column: column, sampleIndex: windowID.sampleIndex, projectServerID: windowID.projectServerID, ontologyStore: ontologyStore)
+        } else {
+            ContentUnavailableView("Column Not Found", systemImage: "questionmark.square.dashed")
+        }
+    }
+}
+
 struct MetadataValueEditSheet: View {
     @Environment(AppSession.self) private var appSession
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.dismissWindow) private var dismissWindow
+    @Environment(\.openWindow) private var openWindow
+    @Environment(\.modelContext) private var modelContext
     @Query private var labGroups: [CachedLabGroup]
 
     let column: CachedMetadataColumn
+    let sampleIndex: Int?
     let projectServerID: Int64?
     let ontologyStore: ModelContainer
 
@@ -31,14 +91,22 @@ struct MetadataValueEditSheet: View {
     @State private var isShowingFavouritesManagementSheet = false
     @State private var offlineOntologyType: String?
     @State private var offlineCustomFilters: [String: [String: String]]?
+    @State private var availableSpecifications: [(key: String, spec: [String: String])] = []
 
     private let specialSyntaxType: SDRFSpecialSyntaxType?
 
-    init(column: CachedMetadataColumn, projectServerID: Int64?, ontologyStore: ModelContainer) {
+    init(column: CachedMetadataColumn, sampleIndex: Int? = nil, projectServerID: Int64?, ontologyStore: ModelContainer) {
         self.column = column
+        self.sampleIndex = sampleIndex
         self.projectServerID = projectServerID
         self.ontologyStore = ontologyStore
-        let initialValue = column.value ?? ""
+        let initialValue: String
+        if let sampleIndex {
+            let modifierValue = column.modifiers.first { SampleIndexTextParser.parse($0.samples).contains(sampleIndex) }?.value
+            initialValue = modifierValue ?? column.value ?? ""
+        } else {
+            initialValue = column.value ?? ""
+        }
         _value = State(initialValue: initialValue)
         let syntaxType = SDRFSyntaxDetector.detect(columnName: column.name, columnType: column.type)
         specialSyntaxType = syntaxType
@@ -65,7 +133,7 @@ struct MetadataValueEditSheet: View {
     }
 
     private var hasOntologyType: Bool {
-        resolvedOntologyType != nil && !column.readonly && specialSyntaxType == nil
+        resolvedOntologyType != nil && !column.readonly && (specialSyntaxType == nil || specialSyntaxType == .modification)
     }
 
     private var firstLabGroupServerID: Int64? {
@@ -78,7 +146,11 @@ struct MetadataValueEditSheet: View {
                 Section(column.displayName ?? column.name) {
                     switch specialSyntaxType {
                     case .modification:
-                        SDRFKeyValueInputView(fieldSpecs: SDRFModificationFieldSpecs.all, fields: $keyValueFields)
+                        SDRFKeyValueInputView(fieldSpecs: SDRFModificationFieldSpecs.all, fields: $keyValueFields) { key, newValue in
+                            if key == "NT" {
+                                scheduleSearch(text: newValue)
+                            }
+                        }
                     case .cleavage:
                         SDRFKeyValueInputView(fieldSpecs: SDRFCleavageFieldSpecs.all, fields: $keyValueFields)
                     case .spikedCompound:
@@ -89,7 +161,7 @@ struct MetadataValueEditSheet: View {
                         TextField("Value", text: $value)
                             .accessibilityIdentifier("metadataValueField")
                             .onChange(of: value) {
-                                scheduleSearch()
+                                scheduleSearch(text: value)
                             }
                         HStack {
                             Button("Not Applicable") { value = "not applicable" }
@@ -106,8 +178,7 @@ struct MetadataValueEditSheet: View {
                     Section("Suggestions") {
                         ForEach(suggestions) { suggestion in
                             Button {
-                                value = suggestion.displayName
-                                suggestions = []
+                                selectSuggestion(suggestion)
                             } label: {
                                 VStack(alignment: .leading) {
                                     Text(suggestion.displayName)
@@ -117,6 +188,18 @@ struct MetadataValueEditSheet: View {
                                             .foregroundStyle(.secondary)
                                     }
                                 }
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+                if specialSyntaxType == .modification, !availableSpecifications.isEmpty {
+                    Section("Specifications") {
+                        ForEach(availableSpecifications, id: \.key) { entry in
+                            Button {
+                                applySpecification(entry.spec)
+                            } label: {
+                                Text(specificationSummary(entry.spec))
                             }
                             .buttonStyle(.plain)
                         }
@@ -134,7 +217,11 @@ struct MetadataValueEditSheet: View {
                         Task { await addToFavourites(scope: .global) }
                     }
                     Button("Manage My Favourites…") {
-                        isShowingFavouritesManagementSheet = true
+                        if PlatformWindowPreference.prefersSeparateWindow {
+                            openWindow(id: "favourites-manager")
+                        } else {
+                            isShowingFavouritesManagementSheet = true
+                        }
                     }
                     .accessibilityIdentifier("manageFavouritesButton")
                 }
@@ -152,10 +239,10 @@ struct MetadataValueEditSheet: View {
                 }
             }
             .formStyle(.grouped)
-            .navigationTitle("Edit Value")
+            .navigationTitle(sampleIndex.map { "Edit Value — Sample \($0)" } ?? "Edit Value")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
+                    Button("Cancel") { closeEditor() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
@@ -180,12 +267,20 @@ struct MetadataValueEditSheet: View {
         .sheet(isPresented: $isShowingFavouritesManagementSheet, onDismiss: {
             Task { await loadFavourites() }
         }) {
-            FavouritesManagementSheet()
+            NavigationStack {
+                FavouritesManagementSheet()
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Done") { isShowingFavouritesManagementSheet = false }
+                        }
+                    }
+            }
+            .frame(minWidth: 380, minHeight: 440)
         }
     }
 
     private func loadOfflineOntologyConfig() {
-        guard column.ontologyType == nil, specialSyntaxType == nil else { return }
+        guard column.ontologyType == nil, specialSyntaxType == nil || specialSyntaxType == .modification else { return }
         let context = ModelContext(ontologyStore)
         let columnName = column.name
         guard let template = try? context.fetch(
@@ -283,7 +378,51 @@ struct MetadataValueEditSheet: View {
         }
     }
 
-    private func scheduleSearch() {
+    private func selectSuggestion(_ suggestion: OntologySuggestionDTO) {
+        guard specialSyntaxType == .modification else {
+            value = suggestion.displayName
+            suggestions = []
+            return
+        }
+        let fullData = suggestion.fullData
+        keyValueFields["NT"] = fullData?.name ?? suggestion.displayName
+        if let accession = fullData?.accession, !accession.isEmpty {
+            keyValueFields["AC"] = accession
+        }
+        if let composition = fullData?.deltaComposition, !composition.isEmpty {
+            keyValueFields["CF"] = composition
+        }
+        if let monoMass = fullData?.deltaMonoMass, !monoMass.isEmpty {
+            keyValueFields["MM"] = monoMass
+        }
+        availableSpecifications = (fullData?.specifications ?? [:])
+            .filter { $0.value["hidden"] != "1" }
+            .sorted { $0.key < $1.key }
+            .map { (key: $0.key, spec: $0.value) }
+        suggestions = []
+    }
+
+    private func specificationSummary(_ spec: [String: String]) -> String {
+        var parts: [String] = []
+        if let site = spec["site"], !site.isEmpty { parts.append("Site: \(site)") }
+        if let position = spec["position"], !position.isEmpty { parts.append("Position: \(position)") }
+        if let classification = spec["classification"], !classification.isEmpty { parts.append("Class: \(classification)") }
+        return parts.isEmpty ? "Specification" : parts.joined(separator: " | ")
+    }
+
+    private func applySpecification(_ spec: [String: String]) {
+        if let site = spec["site"], !site.isEmpty {
+            keyValueFields["TA"] = site
+        }
+        if let position = spec["position"], !position.isEmpty {
+            keyValueFields["PP"] = UnimodMapping.position(from: position)
+        }
+        if let classification = spec["classification"], let modificationType = UnimodMapping.modificationType(from: classification) {
+            keyValueFields["MT"] = modificationType
+        }
+    }
+
+    private func scheduleSearch(text: String) {
         searchTask?.cancel()
         guard hasOntologyType else { return }
         searchTask = Task {
@@ -293,12 +432,12 @@ struct MetadataValueEditSheet: View {
                 let services = appSession.makeSyncServices()
                 let results: [OntologySuggestionDTO]
                 if column.ontologyType != nil {
-                    results = try await services.metadataColumnSync.fetchOntologySuggestions(columnServerID: column.serverID, search: value)
+                    results = try await services.metadataColumnSync.fetchOntologySuggestions(columnServerID: column.serverID, search: text)
                 } else if let offlineOntologyType {
                     results = try await services.metadataColumnSync.fetchOntologySuggestions(
                         ontologyType: offlineOntologyType,
                         customFilters: offlineCustomFilters,
-                        search: value
+                        search: text
                     )
                 } else {
                     results = []
@@ -325,13 +464,36 @@ struct MetadataValueEditSheet: View {
         }
     }
 
+    private func closeEditor() {
+        if PlatformWindowPreference.prefersSeparateWindow {
+            dismissWindow()
+        } else {
+            dismiss()
+        }
+    }
+
     private func save() async {
         isSaving = true
         defer { isSaving = false }
         do {
             let services = appSession.makeSyncServices()
-            try await services.metadataColumnSync.updateColumnValue(columnServerID: column.serverID, value: valueToSave)
-            dismiss()
+            let dto: MetadataColumnDTO
+            if let sampleIndex {
+                dto = try await services.metadataColumnSync.updateColumnValue(
+                    columnServerID: column.serverID,
+                    value: valueToSave,
+                    sampleIndices: [sampleIndex],
+                    valueType: .sampleSpecific
+                )
+            } else {
+                dto = try await services.metadataColumnSync.updateColumnValue(columnServerID: column.serverID, value: valueToSave)
+            }
+            column.value = dto.value
+            column.notApplicable = dto.notApplicable
+            column.notAvailable = dto.notAvailable
+            column.modifiers = dto.modifiers.map { MetadataColumnModifier(samples: $0.samples, value: $0.value) }
+            try? modelContext.save()
+            closeEditor()
         } catch {
             errorMessage = error.userFacingMessage
             isShowingError = true

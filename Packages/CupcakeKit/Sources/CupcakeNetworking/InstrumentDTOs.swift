@@ -1,6 +1,4 @@
-/// Field names verified directly against `ccm/serializers.py`'s `InstrumentSerializer`/
-/// `InstrumentUsageSerializer`. Endpoint paths verified against `ccm/urls.py`: `instruments/`
-/// and `instrument-usage/` — the latter is singular, no trailing `s`.
+/// `GET instruments/` response shape.
 public struct InstrumentDTO: Decodable, Sendable {
     public let id: Int64
     public let instrumentName: String
@@ -11,9 +9,41 @@ public struct InstrumentDTO: Decodable, Sendable {
     public let maintenanceOverdue: Bool
 }
 
-/// `timeStarted`/`timeEnded` are nullable `DateTimeField`s server-side. `usageHours` is a
-/// `DecimalField`, which DRF serializes as a string, not a bare JSON number — same reasoning as
-/// `StoredReagentDTO.molecularWeight`'s omission.
+/// `POST instruments/` body. Requires `is_staff`/`is_superuser` server-side.
+public struct CreateInstrumentRequest: Encodable, Sendable {
+    public var instrumentName: String
+    public var instrumentDescription: String?
+    public var enabled: Bool
+    public var acceptsBookings: Bool
+    public var allowOverlappingBookings: Bool
+
+    public init(instrumentName: String, instrumentDescription: String? = nil, enabled: Bool, acceptsBookings: Bool, allowOverlappingBookings: Bool) {
+        self.instrumentName = instrumentName
+        self.instrumentDescription = instrumentDescription
+        self.enabled = enabled
+        self.acceptsBookings = acceptsBookings
+        self.allowOverlappingBookings = allowOverlappingBookings
+    }
+}
+
+/// `PATCH instruments/{id}/` body — same staff/superuser requirement as create.
+public struct UpdateInstrumentRequest: Encodable, Sendable {
+    public var instrumentName: String
+    public var instrumentDescription: String?
+    public var enabled: Bool
+    public var acceptsBookings: Bool
+    public var allowOverlappingBookings: Bool
+
+    public init(instrumentName: String, instrumentDescription: String? = nil, enabled: Bool, acceptsBookings: Bool, allowOverlappingBookings: Bool) {
+        self.instrumentName = instrumentName
+        self.instrumentDescription = instrumentDescription
+        self.enabled = enabled
+        self.acceptsBookings = acceptsBookings
+        self.allowOverlappingBookings = allowOverlappingBookings
+    }
+}
+
+/// `usageHours` is a `DecimalField`, serialized by DRF as a string, not a bare JSON number.
 public struct InstrumentUsageDTO: Decodable, Sendable {
     public let id: Int64
     public let instrument: Int64
@@ -26,19 +56,7 @@ public struct InstrumentUsageDTO: Decodable, Sendable {
     public let maintenance: Bool
 }
 
-/// `POST instrument-usage/` body. Field set verified against `InstrumentUsageSerializer`
-/// (`ccm/serializers.py:418-453`) and the reference web app's `instrument-usage-modal.ts`, which
-/// only ever collects `timeStarted`/`timeEnded`/`description`/`maintenance` — `approved` is
-/// deliberately never sent by this app. The server's real behavior when it's omitted (confirmed
-/// live, correcting an earlier, incomplete assumption here) is conditional, not a flat default:
-/// `ccm/serializers.py:532-536` sets `approved = False` only when the booking *requires*
-/// pre-approval; when it doesn't (the common case for an instrument with no
-/// `max_days_ahead_pre_approval`/`max_days_within_usage_pre_approval` restrictions — e.g. every
-/// booking against a real, freshly-seeded test instrument came back `"approved": true` despite
-/// never sending the field), the server auto-approves it. A client claiming its own booking is
-/// pre-approved would still be wrong to do even where the backend doesn't stop it — see
-/// `InstrumentSyncService`'s doc comment). Both timestamps are ISO 8601 strings; `timeEnded` is
-/// nil for an in-progress booking.
+/// `POST instrument-usage/` body. `approved` is deliberately never sent; the server decides it conditionally.
 public struct CreateInstrumentUsageRequest: Encodable, Sendable {
     public var instrument: Int64
     public var timeStarted: String

@@ -1,11 +1,7 @@
 import Foundation
 import SwiftData
 
-/// Offline-createable, same client-generated-identity pattern as everything else authored by
-/// this app. `Project` (`ccrv.Project`) is the one cross-app link between the CCRV
-/// (Session/Protocol) world and the CCM `InstrumentJob` subsystem — a job's `project` FK is the
-/// only relationship connecting the two, confirmed by grepping both directions (no FK exists
-/// from `InstrumentJob` to `Session`/`Protocol`/`Step` at all).
+/// Offline-createable project. The one link between the Session/Protocol world and `InstrumentJob`.
 @Model
 public final class CachedProject {
     @Attribute(.unique) public var clientID: UUID

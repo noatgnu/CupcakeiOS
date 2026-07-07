@@ -3,9 +3,7 @@ import CupcakeNetworking
 import Foundation
 import SwiftData
 
-/// Read-only, full-refetch population of metadata table templates — the backend's own queryset
-/// already scopes results to what this user can see (owned + public + accessible-group), so a
-/// plain full-refetch needs no further client-side filtering.
+/// Fetches, creates, updates, and deletes metadata table templates.
 public actor MetadataTableTemplateSyncService {
     private let apiClient: APIClient
     private let deviceToken: @Sendable () -> String?
@@ -72,6 +70,33 @@ public actor MetadataTableTemplateSyncService {
         try await store.upsert([dto])
         return dto
     }
+
+    @discardableResult
+    public func update(templateServerID: Int64, request: CreateMetadataTableTemplateRequest) async throws -> MetadataTableTemplateDTO {
+        guard let token = deviceToken() else {
+            throw MetadataTableTemplateSyncError.noDeviceToken
+        }
+        let dto: MetadataTableTemplateDTO = try await apiClient.send(
+            "metadata-table-templates/\(templateServerID)/",
+            method: .patch,
+            body: request,
+            authorizationHeader: "DeviceToken \(token)"
+        )
+        try await store.upsert([dto])
+        return dto
+    }
+
+    public func delete(templateServerID: Int64) async throws {
+        guard let token = deviceToken() else {
+            throw MetadataTableTemplateSyncError.noDeviceToken
+        }
+        try await apiClient.sendNoContent(
+            "metadata-table-templates/\(templateServerID)/",
+            method: .delete,
+            authorizationHeader: "DeviceToken \(token)"
+        )
+        try await store.delete(serverID: templateServerID)
+    }
 }
 
 public enum MetadataTableTemplateSyncError: Error {
@@ -98,6 +123,19 @@ actor MetadataTableTemplateStore {
             template.isDefault = dto.isDefault
             template.columnCount = dto.columnCount
             template.labGroupServerID = dto.labGroup
+            template.canEdit = dto.canEdit
+            template.canDelete = dto.canDelete
+            template.schemaNames = dto.schemaNames
+        }
+        try modelContext.save()
+    }
+
+    func delete(serverID: Int64) throws {
+        let existing = try modelContext.fetch(
+            FetchDescriptor<CachedMetadataTableTemplate>(predicate: #Predicate { $0.serverID == serverID })
+        )
+        for template in existing {
+            modelContext.delete(template)
         }
         try modelContext.save()
     }

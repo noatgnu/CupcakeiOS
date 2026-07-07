@@ -3,11 +3,7 @@ import CupcakeNetworking
 import Foundation
 import SwiftData
 
-/// Online-only — the metadata-merge signal this whole flow exists for is server-side and
-/// synchronous, so there's no meaningful "queue for later" offline path the way other creates
-/// have (see `AnnotationDataRequest`'s established shortcut, reused here from `StepAnnotation`).
-/// Depends on `InstrumentJobSyncService` to refresh the job's merged metadata table afterward,
-/// since that service already owns the `MetadataTable` upsert logic.
+/// Online-only, since the metadata-merge signal this flow exists for is server-side and synchronous.
 public actor InstrumentJobAnnotationSyncService {
     private let apiClient: APIClient
     private let deviceToken: @Sendable () -> String?
@@ -41,18 +37,7 @@ public actor InstrumentJobAnnotationSyncService {
         }
     }
 
-    /// Sets the job's `instrument` FK, then the full 3-call booking sequence (`POST
-    /// instrument-usage/` -> `POST instrument-job-annotations/` with `annotation_type: "booking"`
-    /// -> `POST instrument-usage-job-annotations/` to link them), then refreshes the job's
-    /// metadata table to pick up whatever the server-side merge signal added. Requires the job to
-    /// already have a `metadata_table` (via `createMetadataFromTemplate`) — the merge signal
-    /// no-ops otherwise.
-    ///
-    /// The `instrument` PATCH is not optional — confirmed live that the merge signal
-    /// (`ccm/signals.py:175-260`) bails out immediately if `instrument_job.instrument` is unset,
-    /// regardless of whether the usage/annotation/link calls below all succeed. Without it, this
-    /// whole method silently does nothing but create bookkeeping records — no error, no merged
-    /// columns, and no indication anything is wrong.
+    /// Sets the job's `instrument` FK (required for the merge signal to fire), then runs the 3-call booking sequence and refreshes the job's metadata table.
     @discardableResult
     public func createBookingAnnotation(
         jobServerID: Int64,

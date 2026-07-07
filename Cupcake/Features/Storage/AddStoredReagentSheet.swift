@@ -4,17 +4,7 @@ import CupcakeSync
 import SwiftData
 import SwiftUI
 
-/// Field set and reagent-typeahead pattern verified against the reference web app's
-/// `stored-reagent-create-modal.ts` (fields 28-39, html 22-239): reagent name (typeahead against
-/// the existing catalog, creating a new `Reagent` inline on save if the typed name doesn't
-/// match), quantity + unit (unit only matters for a brand-new reagent), barcode, expiration
-/// date, low stock threshold. `molecularWeight`/`notes`/`shareable`/`accessAll`/image upload
-/// exist in the reference modal too but are deliberately out of scope here — this app's
-/// `CachedStoredReagent` model doesn't carry them yet, and adding all five is unrelated scope
-/// creep for what this sheet needs to do (create a stock entry offline).
-///
-/// Always created locally first, then synced immediately when signed in — a genuine
-/// unreachability failure queues it in the outbox, same pattern as every other create flow.
+/// Creates a stored reagent (reagent typeahead/inline-create, quantity/unit, barcode, expiration, low-stock threshold).
 struct AddStoredReagentSheet: View {
     @Environment(AppSession.self) private var appSession
     @Environment(\.dismiss) private var dismiss

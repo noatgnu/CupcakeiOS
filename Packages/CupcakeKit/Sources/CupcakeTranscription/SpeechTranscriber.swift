@@ -33,11 +33,7 @@ public enum SpeechTranscriber {
         return recognizer.supportsOnDeviceRecognition
     }
 
-    /// Prefers on-device recognition (works offline, keeps the audio local) whenever the
-    /// recognizer supports it for this locale; falls back to Apple's network-based recognition
-    /// within the same `SFSpeechRecognizer` call otherwise, rather than failing outright — only
-    /// genuinely unrecoverable cases (no authorization, no recognizer at all for this locale)
-    /// throw, leaving the caller to fall back to server-side transcription.
+    /// Prefers on-device recognition when supported, falling back to Apple's network-based recognition otherwise.
     public static func transcribe(fileURL: URL, localeIdentifier: String = Locale.current.identifier) async throws -> TranscriptionResult {
         guard await requestAuthorization() else {
             throw SpeechTranscriptionError.authorizationDenied

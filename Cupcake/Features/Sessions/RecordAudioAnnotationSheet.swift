@@ -1,17 +1,32 @@
+import AVFoundation
 import CupcakeNetworking
-import CupcakeSync
 import CupcakeTranscription
 import SwiftUI
 import Translation
 
+/// A simple horizontal level bar reflecting live mic input, updated by `AudioRecorder.audioLevel`.
+struct AudioLevelMeterView: View {
+    let level: Float
+
+    var body: some View {
+        GeometryReader { geometry in
+            ZStack(alignment: .leading) {
+                Capsule().fill(.quaternary)
+                Capsule()
+                    .fill(.tint)
+                    .frame(width: geometry.size.width * CGFloat(level))
+                    .animation(.easeOut(duration: 0.08), value: level)
+            }
+        }
+        .frame(height: 8)
+        .accessibilityIdentifier("audioLevelMeter")
+    }
+}
+
 struct RecordAudioAnnotationSheet: View {
-    @Environment(AppSession.self) private var appSession
     @Environment(\.dismiss) private var dismiss
 
-    let sessionClientID: UUID
-    let sessionServerID: Int64
-    let stepClientID: UUID
-    let stepServerID: Int64
+    let onSaveLocally: (URL, String?, String?, String?) async throws -> Void
     let onSaved: () -> Void
 
     private static let commonLocales = [
@@ -29,9 +44,19 @@ struct RecordAudioAnnotationSheet: View {
     @State private var errorMessage: String?
     @State private var isShowingError = false
     @State private var translationConfiguration: TranslationSession.Configuration?
+    @State private var onDeviceTranscriptionUnavailable = false
+    #if os(iOS)
+    @State private var availableInputs: [AVAudioSessionPortDescription] = []
+    @State private var selectedInputUID: String?
+    #endif
 
     private var canSave: Bool {
         recorder.recordedFileURL != nil && !isTranscribing && !isSaving
+    }
+
+    /// The bare language code (e.g. `en`), without a regional variant.
+    private var baseLanguageCode: String {
+        Locale(identifier: localeIdentifier).language.languageCode?.identifier ?? localeIdentifier
     }
 
     var body: some View {
@@ -50,8 +75,24 @@ struct RecordAudioAnnotationSheet: View {
                             .foregroundStyle(.secondary)
                     }
                 }
+                #if os(iOS)
+                if !availableInputs.isEmpty {
+                    Section("Microphone") {
+                        Picker("Microphone", selection: $selectedInputUID) {
+                            ForEach(availableInputs, id: \.uid) { input in
+                                Text(input.portName).tag(Optional(input.uid))
+                            }
+                        }
+                        .disabled(recorder.isRecording)
+                        .onChange(of: selectedInputUID) { _, newValue in
+                            recorder.setPreferredInput(availableInputs.first(where: { $0.uid == newValue }))
+                        }
+                    }
+                }
+                #endif
                 Section("Recording") {
                     if recorder.isRecording {
+                        AudioLevelMeterView(level: recorder.audioLevel)
                         Button("Stop Recording", role: .destructive) {
                             stopAndTranscribe()
                         }
@@ -71,11 +112,19 @@ struct RecordAudioAnnotationSheet: View {
                         }
                     }
                 }
+                if onDeviceTranscriptionUnavailable {
+                    Section {
+                        Text("This device couldn't transcribe the recording. It'll be transcribed automatically once uploaded.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .accessibilityIdentifier("transcriptionUnavailableNote")
+                    }
+                }
                 if !transcript.isEmpty {
                     Section("Transcript") {
                         Text(transcript)
                             .accessibilityIdentifier("audioTranscriptText")
-                        if localeIdentifier != "en-US", translatedText.isEmpty {
+                        if baseLanguageCode != "en", translatedText.isEmpty {
                             Button(isTranslating ? "Translating…" : "Translate to English") {
                                 translationConfiguration = TranslationSession.Configuration(
                                     source: Locale.Language(identifier: localeIdentifier),
@@ -110,6 +159,12 @@ struct RecordAudioAnnotationSheet: View {
             }
         }
         .frame(minWidth: 380, minHeight: 460)
+        #if os(iOS)
+        .onAppear {
+            availableInputs = recorder.availableInputs()
+            selectedInputUID = recorder.preferredInput()?.uid
+        }
+        #endif
         .alert("Couldn't save recording", isPresented: $isShowingError) {
             Button("OK") {}
         } message: {
@@ -134,6 +189,7 @@ struct RecordAudioAnnotationSheet: View {
         }
         transcript = ""
         translatedText = ""
+        onDeviceTranscriptionUnavailable = false
         do {
             try recorder.startRecording()
         } catch {
@@ -142,10 +198,12 @@ struct RecordAudioAnnotationSheet: View {
         }
     }
 
+    /// On-device transcription is best-effort; failure saves untranscribed with a calm inline note, not a blocking alert.
     private func stopAndTranscribe() {
         recorder.stopRecording()
         guard let fileURL = recorder.recordedFileURL else { return }
         isTranscribing = true
+        onDeviceTranscriptionUnavailable = false
         Task {
             defer { isTranscribing = false }
             do {
@@ -153,8 +211,7 @@ struct RecordAudioAnnotationSheet: View {
                 transcript = result.text
                 transcriptSegments = result.segments
             } catch {
-                errorMessage = "On-device transcription failed: \(error.userFacingMessage)"
-                isShowingError = true
+                onDeviceTranscriptionUnavailable = true
             }
         }
     }
@@ -169,17 +226,7 @@ struct RecordAudioAnnotationSheet: View {
             return WebVTTFormatter.formatSingleCue(text: translatedText, duration: lastSegment.timestamp + lastSegment.duration)
         }()
         do {
-            let services = appSession.makeSyncServices()
-            try await services.stepAnnotationSync.uploadAudioAnnotation(
-                sessionServerID: sessionServerID,
-                stepServerID: stepServerID,
-                sessionClientID: sessionClientID,
-                stepClientID: stepClientID,
-                fileURL: fileURL,
-                transcription: vttTranscription,
-                language: vttTranscription == nil ? nil : localeIdentifier,
-                translation: vttTranslation
-            )
+            try await onSaveLocally(fileURL, vttTranscription, vttTranscription == nil ? nil : baseLanguageCode, vttTranslation)
             onSaved()
             dismiss()
         } catch {

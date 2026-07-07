@@ -1,16 +1,7 @@
 import Foundation
 import SwiftData
 
-/// Read-only reference data when fetched from someone else's server-side protocol (§3) — but a
-/// protocol can also be authored by this app, either purely locally (standalone/offline mode,
-/// where it never gets a `serverID`) or online (where it does). `isLocallyAuthored` — not
-/// `serverID == nil` — is what actually governs whether this app lets you keep editing it
-/// (`ProtocolDetailView.isEditable`): a protocol this app created online still has a `serverID`
-/// (it's synced), but you should still be able to add sections/steps/reagents to your own
-/// protocol afterward, same as the reference web app's `protocol-editor.ts` lets its owner keep
-/// editing after creation. `serverID == nil` alone would wrongly treat "created online, has a
-/// serverID" the same as "someone else's read-only protocol." `clientID` is always the real
-/// persistent identity.
+/// A protocol, either read-only reference data or authored by this app. `isLocallyAuthored`, not `serverID == nil`, governs editability.
 @Model
 public final class CachedProtocol {
     @Attribute(.unique) public var clientID: UUID

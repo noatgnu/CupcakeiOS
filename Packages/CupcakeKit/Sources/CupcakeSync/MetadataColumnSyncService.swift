@@ -3,10 +3,7 @@ import CupcakeNetworking
 import Foundation
 import SwiftData
 
-/// Online-only, like every other `InstrumentJob`-adjacent write path in this app — there's no
-/// offline-authoring story for metadata tables (they only exist server-side, created from a
-/// template). A `MetadataColumn` is always already server-backed by the time this app can reach
-/// it (never locally created), so there's no `clientID`/outbox path to mirror here.
+/// Online-only. A `MetadataColumn` is always already server-backed, never locally created.
 public actor MetadataColumnSyncService {
     private let apiClient: APIClient
     private let deviceToken: @Sendable () -> String?
@@ -23,22 +20,26 @@ public actor MetadataColumnSyncService {
     }
 
     @discardableResult
-    public func updateColumnValue(columnServerID: Int64, value: String) async throws -> MetadataColumnDTO {
+    public func updateColumnValue(
+        columnServerID: Int64,
+        value: String,
+        sampleIndices: [Int]? = nil,
+        valueType: ColumnValueUpdateType = .default
+    ) async throws -> MetadataColumnDTO {
         guard let token = deviceToken() else {
             throw MetadataColumnSyncError.noDeviceToken
         }
         let response: UpdateColumnValueResponse = try await apiClient.send(
             "metadata-columns/\(columnServerID)/update_column_value/",
             method: .post,
-            body: UpdateColumnValueRequest(value: value),
+            body: UpdateColumnValueRequest(value: value, sampleIndices: sampleIndices, valueType: valueType),
             authorizationHeader: "DeviceToken \(token)"
         )
         try await store.updateSingle(response.column)
         return response.column
     }
 
-    /// `search_type` is always `icontains` — this app's v1 slice doesn't expose the reference web
-    /// app's "Contains"/"Starts with" toggle.
+    /// `search_type` is always `icontains`.
     public func fetchOntologySuggestions(columnServerID: Int64, search: String, limit: Int = 10) async throws -> [OntologySuggestionDTO] {
         guard let token = deviceToken(), search.count >= 2 else { return [] }
         let authorization = "DeviceToken \(token)"
@@ -108,9 +109,7 @@ public enum MetadataColumnSyncError: Error {
 
 @ModelActor
 actor MetadataColumnStore {
-    /// Updates the one column in place — unlike `InstrumentJobStore.upsertMetadataTable`'s
-    /// delete-and-reinsert-all-columns strategy (appropriate for a full table refetch), a single
-    /// value edit shouldn't discard and recreate every sibling column's local record.
+    /// Updates the one column in place, without discarding sibling columns' local records.
     func updateSingle(_ dto: MetadataColumnDTO) throws {
         let columnServerID = dto.id
         guard let column = try modelContext.fetch(
@@ -119,6 +118,7 @@ actor MetadataColumnStore {
         column.value = dto.value
         column.notApplicable = dto.notApplicable
         column.notAvailable = dto.notAvailable
+        column.modifiers = dto.modifiers.map { MetadataColumnModifier(samples: $0.samples, value: $0.value) }
         try modelContext.save()
     }
 }

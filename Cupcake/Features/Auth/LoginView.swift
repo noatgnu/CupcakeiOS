@@ -1,12 +1,7 @@
 import CupcakeNetworking
 import SwiftUI
 
-/// The reference web app's login form also has a "Remember Me" checkbox (extends the JWT
-/// refresh token's lifetime — `login.html:107-120`). Deliberately not reproduced here: this
-/// app's `AuthManager.signIn` exchanges the JWT for a `DeviceToken` within seconds and discards
-/// the JWT immediately after (see its doc comment) — `DeviceToken` has no expiry by default
-/// regardless of how long the now-discarded JWT would have lived, so the toggle would affect
-/// nothing in this app's actual auth flow. Adding it anyway would be misleading UI, not fidelity.
+/// Login form for server URL/username/password, or standalone/ORCID entry points.
 struct LoginView: View {
     @Environment(AppSession.self) private var appSession
 
@@ -91,6 +86,7 @@ struct LoginView: View {
             defer { isSigningIn = false }
             do {
                 try await appSession.signIn(serverURLString: serverURLString, username: username, password: password)
+                await appSession.checkForLocalRecordsToImport()
             } catch {
                 errorMessage = "Sign in failed: \(error.userFacingMessage)"
             }
@@ -104,6 +100,7 @@ struct LoginView: View {
             defer { isSigningIn = false }
             do {
                 try await appSession.signInWithORCID(serverURLString: serverURLString)
+                await appSession.checkForLocalRecordsToImport()
             } catch {
                 errorMessage = "ORCID sign in failed: \(error.userFacingMessage)"
             }

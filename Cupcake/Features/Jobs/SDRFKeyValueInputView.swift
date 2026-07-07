@@ -15,6 +15,7 @@ struct SDRFKeyValueFieldSpec {
 struct SDRFKeyValueInputView: View {
     let fieldSpecs: [SDRFKeyValueFieldSpec]
     @Binding var fields: [String: String]
+    var onFieldChange: ((String, String) -> Void)?
 
     var body: some View {
         ForEach(fieldSpecs, id: \.key) { spec in
@@ -31,7 +32,10 @@ struct SDRFKeyValueInputView: View {
             } else {
                 TextField(spec.label, text: Binding(
                     get: { fields[spec.key] ?? "" },
-                    set: { fields[spec.key] = $0 }
+                    set: {
+                        fields[spec.key] = $0
+                        onFieldChange?(spec.key, $0)
+                    }
                 ))
                 .accessibilityIdentifier("sdrfField_\(spec.key)")
             }

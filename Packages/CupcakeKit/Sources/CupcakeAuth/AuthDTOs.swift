@@ -1,5 +1,4 @@
-/// `POST auth/login/` request body. Confirmed against `ccc/authentication.py:login_view` —
-/// distinct from the plain SimpleJWT `auth/token/` endpoint, which doesn't accept `remember_me`.
+/// `POST auth/login/` request body.
 public struct LoginRequest: Encodable, Sendable {
     public var username: String
     public var password: String
@@ -12,10 +11,7 @@ public struct LoginRequest: Encodable, Sendable {
     }
 }
 
-/// `POST auth/login/` response. Field names are `access_token`/`refresh_token` here — the
-/// sibling `auth/token/` endpoint instead returns bare `access`/`refresh` (standard SimpleJWT).
-/// Getting this wrong silently decodes to a missing-key error, not a wrong-but-plausible value,
-/// so it's worth flagging why this DTO doesn't just reuse the other endpoint's shape.
+/// `POST auth/login/` response. Field names are `access_token`/`refresh_token`, not the plain SimpleJWT shape.
 public struct LoginResponse: Decodable, Sendable {
     public let accessToken: String
     public let refreshToken: String
@@ -45,9 +41,7 @@ public struct DeviceTokenCreateRequest: Encodable, Sendable {
     }
 }
 
-/// `POST auth/exchange-code/` request body — trades the short-lived opaque code from the ORCID
-/// callback's redirect for real JWTs. Response shape is identical to `LoginResponse`'s (the
-/// callback's `user` payload has one extra `orcid_id` field, silently ignored by `Decodable`).
+/// `POST auth/exchange-code/` request body — trades the ORCID callback's opaque code for real JWTs.
 public struct ExchangeAuthCodeRequest: Encodable, Sendable {
     public var authCode: String
 
@@ -56,10 +50,7 @@ public struct ExchangeAuthCodeRequest: Encodable, Sendable {
     }
 }
 
-/// `DeviceToken` as returned by the backend. `createdAt`/`lastUsedAt`/`expiresAt` are kept as
-/// raw strings rather than `Date` — this bootstrap path never needs to display them, and DRF's
-/// exact timestamp format isn't worth committing to here (decode failures on unrelated field
-/// format drift would break login, not just a display screen).
+/// `DeviceToken` as returned by the backend. Timestamps are kept as raw strings, not `Date`.
 public struct DeviceTokenDTO: Decodable, Sendable {
     public let id: Int
     public let token: String

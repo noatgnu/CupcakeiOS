@@ -3,8 +3,7 @@ import CupcakeNetworking
 import Foundation
 import SwiftData
 
-/// Phase 1: full-refetch, read-only population of instruments and their booking history.
-/// Offline-create for `InstrumentUsage` (a booking request) is Phase 3.
+/// Full-refetch population of instruments and their booking history, plus `InstrumentUsage` offline-create.
 public actor InstrumentSyncService {
     private let apiClient: APIClient
     private let deviceToken: @Sendable () -> String?
@@ -44,11 +43,7 @@ public actor InstrumentSyncService {
         }
     }
 
-    /// Pushes an *already locally-created* booking to the server, attaching the new `serverID`
-    /// to that same local record — the create-locally-then-sync path used when signed in, and
-    /// what `OutboxService.replay(_:)` calls to retry a queued `createInstrumentUsage` entry.
-    /// Never sends `approved` — see `CreateInstrumentUsageRequest`'s doc comment for why a
-    /// client claiming its own pre-approval would be wrong even though the backend permits it.
+    /// Pushes an already locally-created booking to the server, attaching the new `serverID`. Never sends `approved`.
     @discardableResult
     public func syncLocallyCreatedInstrumentUsage(clientID: UUID) async throws -> Int64 {
         guard let token = deviceToken() else {
@@ -69,6 +64,60 @@ public actor InstrumentSyncService {
         )
         try await store.attachServerID(instrumentUsageClientID: clientID, dto: dto)
         return dto.id
+    }
+
+    @discardableResult
+    public func createInstrument(instrumentName: String, instrumentDescription: String?, enabled: Bool, acceptsBookings: Bool, allowOverlappingBookings: Bool) async throws -> InstrumentDTO {
+        guard let token = deviceToken() else {
+            throw InstrumentSyncError.noDeviceToken
+        }
+        let dto: InstrumentDTO = try await apiClient.send(
+            "instruments/",
+            method: .post,
+            body: CreateInstrumentRequest(
+                instrumentName: instrumentName,
+                instrumentDescription: instrumentDescription,
+                enabled: enabled,
+                acceptsBookings: acceptsBookings,
+                allowOverlappingBookings: allowOverlappingBookings
+            ),
+            authorizationHeader: "DeviceToken \(token)"
+        )
+        try await store.upsertInstruments([dto])
+        return dto
+    }
+
+    @discardableResult
+    public func updateInstrument(serverID: Int64, instrumentName: String, instrumentDescription: String?, enabled: Bool, acceptsBookings: Bool, allowOverlappingBookings: Bool) async throws -> InstrumentDTO {
+        guard let token = deviceToken() else {
+            throw InstrumentSyncError.noDeviceToken
+        }
+        let dto: InstrumentDTO = try await apiClient.send(
+            "instruments/\(serverID)/",
+            method: .patch,
+            body: UpdateInstrumentRequest(
+                instrumentName: instrumentName,
+                instrumentDescription: instrumentDescription,
+                enabled: enabled,
+                acceptsBookings: acceptsBookings,
+                allowOverlappingBookings: allowOverlappingBookings
+            ),
+            authorizationHeader: "DeviceToken \(token)"
+        )
+        try await store.upsertInstruments([dto])
+        return dto
+    }
+
+    public func deleteInstrument(serverID: Int64) async throws {
+        guard let token = deviceToken() else {
+            throw InstrumentSyncError.noDeviceToken
+        }
+        try await apiClient.sendNoContent(
+            "instruments/\(serverID)/",
+            method: .delete,
+            authorizationHeader: "DeviceToken \(token)"
+        )
+        try await store.removeInstrumentLocally(serverID: serverID)
     }
 }
 
@@ -140,6 +189,14 @@ actor InstrumentStore {
         try modelContext.save()
     }
 
+    func removeInstrumentLocally(serverID: Int64) throws {
+        guard let instrument = try modelContext.fetch(
+            FetchDescriptor<CachedInstrument>(predicate: #Predicate { $0.serverID == serverID })
+        ).first else { return }
+        modelContext.delete(instrument)
+        try modelContext.save()
+    }
+
     func instrumentUsageFields(clientID: UUID) throws -> (instrumentServerID: Int64, timeStarted: String, timeEnded: String?, description: String, maintenance: Bool) {
         guard let usage = try modelContext.fetch(
             FetchDescriptor<CachedInstrumentUsage>(predicate: #Predicate { $0.clientID == clientID })
@@ -149,9 +206,7 @@ actor InstrumentStore {
         return (usage.instrumentServerID, timeStarted, usage.timeEnded, usage.usageDescription, usage.maintenance)
     }
 
-    /// Attaches a newly-assigned `serverID` to the existing local record matched by `clientID` —
-    /// the record already exists (created locally first), so this updates it in place rather
-    /// than inserting a second copy.
+    /// Attaches a newly-assigned `serverID` to the existing local record matched by `clientID`.
     func attachServerID(instrumentUsageClientID: UUID, dto: InstrumentUsageDTO) throws {
         guard let usage = try modelContext.fetch(
             FetchDescriptor<CachedInstrumentUsage>(predicate: #Predicate { $0.clientID == instrumentUsageClientID })

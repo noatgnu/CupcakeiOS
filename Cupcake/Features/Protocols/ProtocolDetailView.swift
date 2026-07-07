@@ -4,9 +4,37 @@ import CupcakeSync
 import SwiftData
 import SwiftUI
 
+/// Identifies which protocol to show when `ProtocolDetailView` opens as its own window.
+struct ProtocolDetailWindowID: Codable, Hashable {
+    let protocolClientID: UUID
+}
+
+/// Resolves a `ProtocolDetailWindowID` to the live protocol and hosts `ProtocolDetailView`.
+struct ProtocolDetailWindowContent: View {
+    let windowID: ProtocolDetailWindowID?
+
+    @Query private var protocols: [CachedProtocol]
+
+    private var protocolModel: CachedProtocol? {
+        guard let windowID else { return nil }
+        return protocols.first { $0.clientID == windowID.protocolClientID }
+    }
+
+    var body: some View {
+        if let protocolModel {
+            NavigationStack {
+                ProtocolDetailView(protocolModel: protocolModel)
+            }
+        } else {
+            ContentUnavailableView("Protocol Not Found", systemImage: "questionmark.square.dashed")
+        }
+    }
+}
+
 struct ProtocolDetailView: View {
     @Environment(AppSession.self) private var appSession
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.openWindow) private var openWindow
     @Query private var allStepReagents: [CachedStepReagent]
     @Query private var allReagents: [CachedReagent]
     let protocolModel: CachedProtocol
@@ -19,24 +47,24 @@ struct ProtocolDetailView: View {
     @State private var reagentAttachmentTargetStep: CachedProtocolStep?
     @State private var isShowingStartSessionSheet = false
     @State private var renameSectionTarget: CachedProtocolSection?
+    @State private var exportURL: URL?
+    @State private var isLoadingExport = false
+    @State private var isShowingRatingSheet = false
+    @State private var isShowingEditSheet = false
+    @State private var isDeleting = false
+    @State private var editStepTarget: CachedProtocolStep?
+    @State private var editReagentTarget: CachedStepReagent?
 
     private var sections: [CachedProtocolSection] {
         protocolModel.sections.sorted { $0.order < $1.order }
     }
 
-    /// Governs whether starting a session, or adding a section/step/reagent, goes through the
-    /// network (protocol is actually on the server and we're signed in) or is created directly
-    /// in the local store instead (locally-created protocol, or standalone/offline mode). Same
-    /// UI, same result either way — only where the write lands differs.
+    /// Whether creates should go straight to the server or be created locally instead.
     private var canAuthorOnline: Bool {
         protocolModel.serverID != nil && appSession.isAuthenticated
     }
 
-    /// A protocol this app authored (whether it ever synced or not) stays editable; one fetched
-    /// as someone else's read-only reference data (§3) doesn't. Not `serverID == nil` — a
-    /// protocol created online by this app still has a real `serverID` but should stay editable
-    /// (see `CachedProtocol.isLocallyAuthored`'s doc comment for why the two aren't the same
-    /// thing).
+    /// A protocol this app authored stays editable, regardless of whether it has synced.
     private var isEditable: Bool {
         protocolModel.isLocallyAuthored
     }
@@ -50,8 +78,7 @@ struct ProtocolDetailView: View {
             }
     }
 
-    /// Matches the reference web app's display of `scaledQuantity = quantity * scalableFactor`
-    /// (`ccrv/serializers.py:731-734`) for scalable reagents.
+    /// Shows `scaledQuantity = quantity * scalableFactor` for scalable reagents.
     private func reagentDisplayText(_ entry: (stepReagent: CachedStepReagent, reagent: CachedReagent)) -> String {
         let base = "\(entry.reagent.name): \(entry.stepReagent.quantity.formatted()) \(entry.reagent.unit)"
         guard entry.stepReagent.scalable else { return base }
@@ -59,9 +86,7 @@ struct ProtocolDetailView: View {
         return "\(base) — ×\(entry.stepReagent.scalableFactor.formatted()) = \(scaled.formatted()) \(entry.reagent.unit)"
     }
 
-    /// Descriptions authored via the reference web app's rich-text editor are stored as HTML —
-    /// `Section`'s title has to be a plain `String`, so this strips markup rather than rendering
-    /// it (the step list below renders the same field richly via `HTMLText` instead).
+    /// Strips HTML markup from the section description for use as a plain-text title.
     private func sectionTitle(_ section: CachedProtocolSection) -> String {
         let base = section.sectionDescription.map(HTMLText.plainText(from:)) ?? "Untitled Section"
         guard let duration = section.sectionDuration else { return base }
@@ -74,38 +99,131 @@ struct ProtocolDetailView: View {
     }
 
     var body: some View {
-        List {
+        sectionsList
+            .navigationTitle(protocolModel.protocolTitle)
+        .toolbar { detailToolbar }
+        .navigationDestination(item: $createdSessionClientID) { sessionClientID in
+            SessionDetailView(sessionClientID: sessionClientID, protocols: [protocolModel])
+        }
+        .sheet(item: $renameSectionTarget) { section in
+            AddTextSheet(title: "Rename Section", prompt: "Section name", initialText: section.sectionDescription ?? "") { newName in
+                Task { await renameSection(section, to: newName) }
+            }
+        }
+        .sheet(item: $newStepTargetSection) { section in
+            AddStepSheet { description, duration in
+                Task { await addStep(description: description, duration: duration, to: section) }
+            }
+        }
+        .sheet(item: $editStepTarget) { step in
+            AddStepSheet(
+                navigationTitle: "Edit Step",
+                initialDescription: HTMLText.plainText(from: step.stepDescription),
+                initialDurationSeconds: step.stepDuration
+            ) { description, duration in
+                Task { await editStep(step, description: description, duration: duration) }
+            }
+        }
+        .sheet(item: $editReagentTarget) { stepReagent in
+            EditStepReagentSheet(stepReagent: stepReagent)
+        }
+        .sheet(item: $reagentAttachmentTargetStep) { step in
+            AttachReagentSheet(step: step, canAuthorOnline: canAuthorOnline)
+        }
+        .sheet(isPresented: $isShowingRatingSheet) {
+            if let protocolServerID = protocolModel.serverID {
+                RateProtocolSheet(protocolServerID: protocolServerID)
+            }
+        }
+        .sheet(isPresented: $isShowingEditSheet) {
+            EditProtocolSheet(protocolModel: protocolModel)
+        }
+        .task {
+            guard let protocolServerID = protocolModel.serverID, let userID = appSession.currentUserID else { return }
+            try? await appSession.makeSyncServices().protocolRatingSync.refetchMyRating(protocolServerID: protocolServerID, userID: userID)
+        }
+        .sheet(isPresented: $isShowingStartSessionSheet) {
+            StartSessionSheet(defaultName: "\(protocolModel.protocolTitle) — \(Date().formatted(date: .abbreviated, time: .shortened))") { name, enabled in
+                Task { await startSession(name: name, enabled: enabled) }
+            }
+        }
+        .alert("Couldn't start session", isPresented: $isShowingError) {
+            Button("OK") {}
+        } message: {
+            Text(errorMessage ?? "")
+        }
+    }
+
+    private var sectionsList: some View {
+        ExplorerList(
+            isEmpty: sections.isEmpty,
+            emptyTitle: "No Sections",
+            emptySystemImage: "list.bullet.rectangle",
+            emptyMessage: isEditable ? "Add a section to get started." : "This protocol has no sections."
+        ) {
             ForEach(sections) { section in
                 Section(sectionTitle(section)) {
                     ForEach(section.steps.sorted(by: { $0.order < $1.order })) { step in
                         VStack(alignment: .leading, spacing: 4) {
-                            HTMLText(html: step.stepDescription)
+                            HTMLText(html: StepTemplateRenderer.render(stepDescription: step.stepDescription, reagents: stepReagents(for: step)))
                             if let durationLabel = stepDurationLabel(step) {
                                 Text(durationLabel)
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
                             ForEach(stepReagents(for: step), id: \.stepReagent.clientID) { entry in
-                                Text(reagentDisplayText(entry))
-                                    .font(.caption)
+                                HStack {
+                                    Button {
+                                        editReagentTarget = entry.stepReagent
+                                    } label: {
+                                        Text(reagentDisplayText(entry))
+                                            .font(.caption)
+                                    }
+                                    .buttonStyle(.plain)
                                     .foregroundStyle(.secondary)
+                                    .accessibilityIdentifier("editReagentButton_\(entry.stepReagent.clientID)")
+                                    if entry.stepReagent.serverID != nil {
+                                        Spacer()
+                                        Button {
+                                            Task { await deleteReagent(entry.stepReagent) }
+                                        } label: {
+                                            Image(systemName: "trash")
+                                                .font(.caption)
+                                        }
+                                        .buttonStyle(.plain)
+                                        .foregroundStyle(.red)
+                                        .accessibilityIdentifier("deleteReagentButton_\(entry.stepReagent.clientID)")
+                                    }
+                                }
                             }
-                            Button {
-                                reagentAttachmentTargetStep = step
-                            } label: {
-                                Label("Attach Reagent", systemImage: "eyedropper")
-                                    .font(.caption)
+                            HStack {
+                                Button {
+                                    reagentAttachmentTargetStep = step
+                                } label: {
+                                    Label("Attach Reagent", systemImage: "eyedropper")
+                                        .font(.caption)
+                                }
+                                .buttonStyle(.borderless)
+                                .accessibilityIdentifier("attachReagentButton")
+                                if isEditable {
+                                    Button {
+                                        editStepTarget = step
+                                    } label: {
+                                        Label("Edit Step", systemImage: "pencil")
+                                            .font(.caption)
+                                    }
+                                    .buttonStyle(.borderless)
+                                    .accessibilityIdentifier("editStepButton")
+                                }
                             }
-                            .buttonStyle(.borderless)
-                            .accessibilityIdentifier("attachReagentButton")
                         }
                     }
+                    .onDelete { offsets in
+                        let sortedSteps = section.steps.sorted { $0.order < $1.order }
+                        Task { await deleteSteps(at: offsets, from: sortedSteps) }
+                    }
                     if isEditable {
-                        // Vertically stacked, not an HStack — two labeled buttons side by side
-                        // can overflow horizontally on a narrow iPhone width, leaving one
-                        // unhittable even after XCUITest's own scroll-to-visible attempt
-                        // (confirmed: "Add Step" became unhittable once "Rename Section" grew the
-                        // row wider than the screen).
+                        // Vertical stack avoids horizontal overflow on narrow iPhone widths.
                         VStack(alignment: .leading, spacing: 4) {
                             Button {
                                 newStepTargetSection = section
@@ -120,75 +238,139 @@ struct ProtocolDetailView: View {
                                 Label("Rename Section", systemImage: "pencil")
                             }
                             .accessibilityIdentifier("renameSectionButton")
+
+                            if section.serverID != nil {
+                                Button(role: .destructive) {
+                                    Task { await deleteSection(section) }
+                                } label: {
+                                    Label("Delete Section", systemImage: "trash")
+                                }
+                                .accessibilityIdentifier("deleteSectionButton")
+                            }
                         }
                     }
                 }
             }
         }
-        .navigationTitle(protocolModel.protocolTitle)
-        .toolbar {
-            if isEditable {
-                ToolbarItem {
-                    Button {
-                        Task { await addSection() }
-                    } label: {
-                        Label("Add Section", systemImage: "text.badge.plus")
-                    }
-                    .accessibilityIdentifier("addSectionButton")
-                }
-            }
+    }
+
+    @ToolbarContentBuilder
+    private var detailToolbar: some ToolbarContent {
+        if isEditable {
             ToolbarItem {
                 Button {
-                    isShowingStartSessionSheet = true
+                    Task { await addSection() }
                 } label: {
-                    if isCreatingSession {
+                    Label("Add Section", systemImage: "text.badge.plus")
+                }
+                .accessibilityIdentifier("addSectionButton")
+            }
+        }
+        if protocolModel.serverID != nil {
+            ToolbarItem {
+                Button {
+                    isShowingEditSheet = true
+                } label: {
+                    Label("Edit Protocol", systemImage: "pencil")
+                }
+                .accessibilityIdentifier("editProtocolButton")
+            }
+            ToolbarItem {
+                Button(role: .destructive) {
+                    Task { await deleteProtocol() }
+                } label: {
+                    if isDeleting {
                         ProgressView()
                     } else {
-                        Label("New Session", systemImage: "plus")
+                        Label("Delete Protocol", systemImage: "trash")
                     }
                 }
-                .disabled(isCreatingSession)
-                .accessibilityIdentifier("newSessionButton")
+                .disabled(isDeleting)
+                .accessibilityIdentifier("deleteProtocolButton")
             }
         }
-        .navigationDestination(item: $createdSessionClientID) { sessionClientID in
-            SessionDetailView(sessionClientID: sessionClientID, protocolModel: protocolModel)
+        ToolbarItem {
+            Button {
+                isShowingStartSessionSheet = true
+            } label: {
+                if isCreatingSession {
+                    ProgressView()
+                } else {
+                    Label("New Session", systemImage: "plus")
+                }
+            }
+            .disabled(isCreatingSession)
+            .accessibilityIdentifier("newSessionButton")
         }
-        .sheet(item: $renameSectionTarget) { section in
-            AddTextSheet(title: "Rename Section", prompt: "Section name", initialText: section.sectionDescription ?? "") { newName in
-                section.sectionDescription = newName
-                try? modelContext.save()
+        if PlatformWindowPreference.prefersSeparateWindow {
+            ToolbarItem {
+                Button {
+                    openWindow(id: "protocol-detail-window", value: ProtocolDetailWindowID(protocolClientID: protocolModel.clientID))
+                } label: {
+                    Label("Open in New Window", systemImage: "macwindow.badge.plus")
+                }
+                .accessibilityIdentifier("openProtocolInWindowButton")
             }
         }
-        .sheet(item: $newStepTargetSection) { section in
-            AddStepSheet { description, duration in
-                Task { await addStep(description: description, duration: duration, to: section) }
+        if protocolModel.serverID != nil {
+            ToolbarItem {
+                Button {
+                    isShowingRatingSheet = true
+                } label: {
+                    Label("Rate Protocol", systemImage: "star")
+                }
+                .accessibilityIdentifier("rateProtocolButton")
             }
         }
-        .sheet(item: $reagentAttachmentTargetStep) { step in
-            AttachReagentSheet(step: step, canAuthorOnline: canAuthorOnline)
-        }
-        .sheet(isPresented: $isShowingStartSessionSheet) {
-            StartSessionSheet(defaultName: "\(protocolModel.protocolTitle) — \(Date().formatted(date: .abbreviated, time: .shortened))") { name, enabled in
-                Task { await startSession(name: name, enabled: enabled) }
+        if protocolModel.serverID != nil {
+            ToolbarItem {
+                if let exportURL {
+                    ShareLink(item: exportURL) {
+                        Label("Export as HTML", systemImage: "square.and.arrow.up")
+                    }
+                    .accessibilityIdentifier("exportProtocolButton")
+                } else {
+                    Button {
+                        Task { await loadExportURL() }
+                    } label: {
+                        if isLoadingExport {
+                            ProgressView()
+                        } else {
+                            Label("Export as HTML", systemImage: "square.and.arrow.up")
+                        }
+                    }
+                    .disabled(isLoadingExport)
+                    .accessibilityIdentifier("exportProtocolButton")
+                }
             }
-        }
-        .alert("Couldn't start session", isPresented: $isShowingError) {
-            Button("OK") {}
-        } message: {
-            Text(errorMessage ?? "")
         }
     }
 
-    /// Created instantly with a default name, no dialog — matches the reference web app's
-    /// `createSection()` (`protocol-editor.ts:186-210`), which POSTs immediately with a
-    /// `"New Section N"` placeholder name and lets the user rename afterward, rather than
-    /// collecting a name upfront.
-    ///
-    /// Created **locally first** always (so nothing is lost or blocked on the network), then
-    /// synced immediately if this protocol is online-authored (`canAuthorOnline`) — a genuine
-    /// unreachability failure queues it in the outbox instead of erroring out, same as
-    /// `NewProtocolView`'s pattern.
+    private func loadExportURL() async {
+        guard let serverID = protocolModel.serverID else { return }
+        isLoadingExport = true
+        defer { isLoadingExport = false }
+        do {
+            exportURL = try await appSession.makeSyncServices().protocolSync.fetchExportURL(protocolServerID: serverID, sessionServerID: nil)
+        } catch {
+            errorMessage = error.userFacingMessage
+            isShowingError = true
+        }
+    }
+
+    private func deleteProtocol() async {
+        guard let serverID = protocolModel.serverID else { return }
+        isDeleting = true
+        defer { isDeleting = false }
+        do {
+            try await appSession.makeSyncServices().protocolSync.delete(serverID: serverID)
+        } catch {
+            errorMessage = error.userFacingMessage
+            isShowingError = true
+        }
+    }
+
+    /// Creates a section locally with a default name, then syncs immediately or queues it in the outbox.
     private func addSection() async {
         let description = "New Section \(sections.count + 1)"
         let order = sections.count
@@ -200,7 +382,10 @@ struct ProtocolDetailView: View {
         let clientID = section.clientID
         let services = appSession.makeSyncServices()
         do {
-            try await services.protocolSync.syncLocallyCreatedSection(clientID: clientID)
+            // Write the returned serverID directly onto this context's own object.
+            let newServerID = try await services.protocolSync.syncLocallyCreatedSection(clientID: clientID, knownProtocolServerID: protocolModel.serverID)
+            section.serverID = newServerID
+            try? modelContext.save()
         } catch let error as APIError {
             if case .transport = error {
                 try? await services.outboxSync.enqueueCreateSection(clientID: clientID)
@@ -208,6 +393,8 @@ struct ProtocolDetailView: View {
                 errorMessage = "Saved locally, but couldn't sync: \(error.userFacingMessage)"
                 isShowingError = true
             }
+        } catch is SyncDependencyError {
+            try? await services.outboxSync.enqueueCreateSection(clientID: clientID)
         } catch {
             errorMessage = "Saved locally, but couldn't sync: \(error.userFacingMessage)"
             isShowingError = true
@@ -226,7 +413,9 @@ struct ProtocolDetailView: View {
         let clientID = step.clientID
         let services = appSession.makeSyncServices()
         do {
-            try await services.protocolSync.syncLocallyCreatedStep(clientID: clientID)
+            let newServerID = try await services.protocolSync.syncLocallyCreatedStep(clientID: clientID, knownSectionServerID: section.serverID, knownProtocolServerID: protocolModel.serverID)
+            step.serverID = newServerID
+            try? modelContext.save()
         } catch let error as APIError {
             if case .transport = error {
                 try? await services.outboxSync.enqueueCreateStep(clientID: clientID)
@@ -234,19 +423,85 @@ struct ProtocolDetailView: View {
                 errorMessage = "Saved locally, but couldn't sync: \(error.userFacingMessage)"
                 isShowingError = true
             }
+        } catch is SyncDependencyError {
+            try? await services.outboxSync.enqueueCreateStep(clientID: clientID)
         } catch {
             errorMessage = "Saved locally, but couldn't sync: \(error.userFacingMessage)"
             isShowingError = true
         }
     }
 
-    /// A section's own duration isn't entered directly here — it's the sum of its steps'
-    /// durations. This deliberately diverges from the reference web app, where section duration
-    /// is an independently editable field, never computed from steps — an explicit design
-    /// choice for this app's local-authoring flow, not an unverified assumption (see
-    /// `CachedProtocolSection.sectionDuration`'s doc comment). `nil` (not `0`) when no step in
-    /// the section has a duration set, so an unset duration doesn't display as a misleading
-    /// "(0 min)".
+    private func renameSection(_ section: CachedProtocolSection, to newName: String) async {
+        section.sectionDescription = newName
+        try? modelContext.save()
+        guard canAuthorOnline, let serverID = section.serverID else { return }
+        do {
+            try await appSession.makeSyncServices().protocolSync.updateSection(serverID: serverID, sectionDescription: newName, sectionDuration: section.sectionDuration)
+        } catch {
+            errorMessage = error.userFacingMessage
+            isShowingError = true
+        }
+    }
+
+    private func deleteSection(_ section: CachedProtocolSection) async {
+        guard let serverID = section.serverID else { return }
+        do {
+            try await appSession.makeSyncServices().protocolSync.deleteSection(serverID: serverID)
+            modelContext.delete(section)
+            try? modelContext.save()
+        } catch {
+            errorMessage = error.userFacingMessage
+            isShowingError = true
+        }
+    }
+
+    private func editStep(_ step: CachedProtocolStep, description: String, duration: Int?) async {
+        step.stepDescription = description
+        step.stepDuration = duration
+        if let section = step.section {
+            recomputeSectionDuration(for: section)
+        }
+        try? modelContext.save()
+        guard canAuthorOnline, let serverID = step.serverID else { return }
+        do {
+            try await appSession.makeSyncServices().protocolSync.updateStep(serverID: serverID, stepDescription: description, stepDuration: duration)
+        } catch {
+            errorMessage = error.userFacingMessage
+            isShowingError = true
+        }
+    }
+
+    private func deleteSteps(at offsets: IndexSet, from sortedSteps: [CachedProtocolStep]) async {
+        let stepsToRemove = offsets.map { sortedSteps[$0] }
+        for step in stepsToRemove {
+            guard let serverID = step.serverID else {
+                modelContext.delete(step)
+                continue
+            }
+            do {
+                try await appSession.makeSyncServices().protocolSync.deleteStep(serverID: serverID)
+                modelContext.delete(step)
+            } catch {
+                errorMessage = error.userFacingMessage
+                isShowingError = true
+            }
+        }
+        try? modelContext.save()
+    }
+
+    private func deleteReagent(_ stepReagent: CachedStepReagent) async {
+        guard let serverID = stepReagent.serverID else { return }
+        do {
+            try await appSession.makeSyncServices().stepReagentSync.delete(serverID: serverID)
+            modelContext.delete(stepReagent)
+            try? modelContext.save()
+        } catch {
+            errorMessage = error.userFacingMessage
+            isShowingError = true
+        }
+    }
+
+    /// Recomputes a section's duration as the sum of its steps' durations, or `nil` if none set.
     private func recomputeSectionDuration(for section: CachedProtocolSection) {
         let durations = section.steps.compactMap(\.stepDuration)
         section.sectionDuration = durations.isEmpty ? nil : durations.reduce(0, +)
@@ -256,35 +511,17 @@ struct ProtocolDetailView: View {
         isCreatingSession = true
         defer { isCreatingSession = false }
 
-        // Created locally first always (so nothing is lost or blocked on the network, and the UI
-        // can navigate to it immediately), then synced right away if this protocol is
-        // online-authored — same create-locally-then-sync-or-queue pattern as `addSection`.
-        let session = CachedSession(
-            uniqueID: nil,
+        let (clientID, outcome) = await SessionCreation.createSession(
             name: name,
             enabled: enabled,
-            isRunning: true,
-            status: "running",
-            primaryProtocolClientID: protocolModel.clientID
+            protocolClientIDs: [protocolModel.clientID],
+            canAuthorOnline: canAuthorOnline,
+            modelContext: modelContext,
+            appSession: appSession
         )
-        modelContext.insert(session)
-        try? modelContext.save()
-        createdSessionClientID = session.clientID
-
-        guard canAuthorOnline else { return }
-        let clientID = session.clientID
-        let services = appSession.makeSyncServices()
-        do {
-            try await services.sessionSync.syncLocallyCreatedSession(clientID: clientID)
-        } catch let error as APIError {
-            if case .transport = error {
-                try? await services.outboxSync.enqueueCreateSession(clientID: clientID)
-            } else {
-                errorMessage = "Saved locally, but couldn't sync: \(error.userFacingMessage)"
-                isShowingError = true
-            }
-        } catch {
-            errorMessage = "Saved locally, but couldn't sync: \(error.userFacingMessage)"
+        createdSessionClientID = clientID
+        if case .failed(let message) = outcome {
+            errorMessage = "Saved locally, but couldn't sync: \(message)"
             isShowingError = true
         }
     }

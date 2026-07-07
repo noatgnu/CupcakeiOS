@@ -5,6 +5,7 @@ import SwiftUI
 struct AddMetadataColumnSheet: View {
     @Environment(AppSession.self) private var appSession
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.openWindow) private var openWindow
 
     let tableServerID: Int64
     let onColumnAdded: () async -> Void
@@ -29,7 +30,11 @@ struct AddMetadataColumnSheet: View {
                 }
                 Section {
                     Button("Manage My Templates…") {
-                        isShowingManagementSheet = true
+                        if PlatformWindowPreference.prefersSeparateWindow {
+                            openWindow(id: "column-template-manager")
+                        } else {
+                            isShowingManagementSheet = true
+                        }
                     }
                     .accessibilityIdentifier("manageColumnTemplatesButton")
                 }
@@ -67,7 +72,15 @@ struct AddMetadataColumnSheet: View {
             Text(errorMessage ?? "")
         }
         .sheet(isPresented: $isShowingManagementSheet) {
-            ColumnTemplateManagementSheet()
+            NavigationStack {
+                ColumnTemplateManagementSheet()
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Done") { isShowingManagementSheet = false }
+                        }
+                    }
+            }
+            .frame(minWidth: 380, minHeight: 420)
         }
     }
 

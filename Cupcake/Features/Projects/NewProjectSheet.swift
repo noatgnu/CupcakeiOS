@@ -4,18 +4,28 @@ import CupcakeSync
 import SwiftData
 import SwiftUI
 
-/// Matches the reference web app's standalone `ProjectEditModal` — name + description only, its
-/// own explicit "New Project" action, not bundled into job creation.
+/// Creates or edits a project (name + description only).
 struct NewProjectSheet: View {
     @Environment(AppSession.self) private var appSession
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
 
-    @State private var projectName = ""
-    @State private var projectDescription = ""
+    /// `nil` for create, set for edit.
+    let existingProject: CachedProject?
+
+    @State private var projectName: String
+    @State private var projectDescription: String
     @State private var isSaving = false
     @State private var errorMessage: String?
     @State private var isShowingError = false
+
+    init(existingProject: CachedProject? = nil) {
+        self.existingProject = existingProject
+        _projectName = State(initialValue: existingProject?.projectName ?? "")
+        _projectDescription = State(initialValue: existingProject?.projectDescription ?? "")
+    }
+
+    private var isEditing: Bool { existingProject != nil }
 
     var body: some View {
         NavigationStack {
@@ -26,13 +36,13 @@ struct NewProjectSheet: View {
                     .accessibilityIdentifier("newProjectDescriptionField")
             }
             .formStyle(.grouped)
-            .navigationTitle("New Project")
+            .navigationTitle(isEditing ? "Edit Project" : "New Project")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Create") {
+                    Button(isEditing ? "Save" : "Create") {
                         Task { await save() }
                     }
                     .disabled(projectName.isEmpty || isSaving)
@@ -41,7 +51,7 @@ struct NewProjectSheet: View {
             }
         }
         .frame(minWidth: 320, minHeight: 220)
-        .alert("Couldn't create project", isPresented: $isShowingError) {
+        .alert(isEditing ? "Couldn't save project" : "Couldn't create project", isPresented: $isShowingError) {
             Button("OK") {}
         } message: {
             Text(errorMessage ?? "")
@@ -49,6 +59,28 @@ struct NewProjectSheet: View {
     }
 
     private func save() async {
+        if let existingProject {
+            await update(existingProject)
+        } else {
+            await create()
+        }
+    }
+
+    private func update(_ project: CachedProject) async {
+        guard let serverID = project.serverID else { return }
+        isSaving = true
+        defer { isSaving = false }
+        let description = projectDescription.isEmpty ? nil : projectDescription
+        do {
+            try await appSession.makeSyncServices().projectSync.update(serverID: serverID, projectName: projectName, projectDescription: description)
+            dismiss()
+        } catch {
+            errorMessage = error.userFacingMessage
+            isShowingError = true
+        }
+    }
+
+    private func create() async {
         isSaving = true
         defer { isSaving = false }
 

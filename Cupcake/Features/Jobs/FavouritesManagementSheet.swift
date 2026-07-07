@@ -6,7 +6,6 @@ import SwiftUI
 
 struct FavouritesManagementSheet: View {
     @Environment(AppSession.self) private var appSession
-    @Environment(\.dismiss) private var dismiss
     @Query private var labGroups: [CachedLabGroup]
 
     @State private var personalFavourites: [FavouriteMetadataOptionDTO] = []
@@ -17,25 +16,17 @@ struct FavouritesManagementSheet: View {
     @State private var isShowingError = false
 
     var body: some View {
-        NavigationStack {
-            Form {
-                favouritesSection("Personal", favourites: personalFavourites)
-                favouritesSection("Lab Group", favourites: labGroupFavourites, showLabGroupName: true)
-                favouritesSection("Global", favourites: globalFavourites)
-                if !isLoading && personalFavourites.isEmpty && labGroupFavourites.isEmpty && globalFavourites.isEmpty {
-                    Text("No favourites yet.")
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .formStyle(.grouped)
-            .navigationTitle("My Favourites")
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Done") { dismiss() }
-                }
+        Form {
+            favouritesSection("Personal", favourites: personalFavourites)
+            favouritesSection("Lab Group", favourites: labGroupFavourites, showLabGroupName: true)
+            favouritesSection("Global", favourites: globalFavourites)
+            if !isLoading && personalFavourites.isEmpty && labGroupFavourites.isEmpty && globalFavourites.isEmpty {
+                Text("No favourites yet.")
+                    .foregroundStyle(.secondary)
             }
         }
-        .frame(minWidth: 380, minHeight: 440)
+        .formStyle(.grouped)
+        .navigationTitle("My Favourites")
         .alert("Couldn't update favourites", isPresented: $isShowingError) {
             Button("OK") {}
         } message: {

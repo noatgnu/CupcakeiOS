@@ -1,13 +1,8 @@
 import Foundation
 
 /// Thin REST transport shared by every CupcakeKit module that talks to the backend.
-///
-/// Deliberately has no built-in notion of "the current auth scheme" — callers pass whatever
-/// `Authorization` header value is right for the call (`Bearer <jwt>` during the one-time login/
-/// device-token bootstrap, `DeviceToken <token>` for everything after).
 public actor APIClient {
-    /// Immutable and `Sendable`, so safe to read without `await` — `AuthService.orcidLoginURL()`
-    /// needs this synchronously to build an `ASWebAuthenticationSession` URL.
+    /// Immutable and `Sendable`, so safe to read synchronously.
     public nonisolated let baseURL: URL
     private let session: URLSession
     private let decoder: JSONDecoder
@@ -36,8 +31,7 @@ public actor APIClient {
         return try await execute(request)
     }
 
-    /// GET a fully-qualified URL as-is — for following a DRF pagination `next` link, which is
-    /// always an absolute URL, not a path relative to `baseURL`.
+    /// GET a fully-qualified URL as-is, for following a DRF pagination `next` link.
     public func get<Response: Decodable & Sendable>(
         absoluteURL: URL,
         authorizationHeader: String? = nil
@@ -86,6 +80,26 @@ public actor APIClient {
         let request = try makeRequest(path: path, method: method, query: query, authorizationHeader: authorizationHeader)
         let (data, response) = try await perform(request)
         try validate(response, body: data)
+    }
+
+    /// Fetches raw bytes from a fully-qualified URL, plus the server's `Content-Disposition` filename.
+    public func downloadData(from url: URL, authorizationHeader: String? = nil) async throws -> (data: Data, suggestedFilename: String?) {
+        var request = URLRequest(url: url)
+        request.httpMethod = HTTPMethod.get.rawValue
+        if let authorizationHeader {
+            request.setValue(authorizationHeader, forHTTPHeaderField: "Authorization")
+        }
+        let (data, response) = try await perform(request)
+        try validate(response, body: data)
+        let filename = (response as? HTTPURLResponse)?
+            .value(forHTTPHeaderField: "Content-Disposition")
+            .flatMap { header -> String? in
+                guard let range = header.range(of: "filename=\"") else { return nil }
+                let rest = header[range.upperBound...]
+                guard let end = rest.firstIndex(of: "\"") else { return nil }
+                return String(rest[..<end])
+            }
+        return (data, filename)
     }
 
     private func makeRequest(

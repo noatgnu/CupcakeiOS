@@ -1,12 +1,7 @@
 import Foundation
 import SwiftData
 
-/// The remaining 8 ontology `type_key`s — column sets confirmed against `ccv/ontology_registry.py`
-/// (`CupcakeKit`'s earlier research pass reading the real Django model definitions directly, not
-/// guessed); `tissue`/`species`/`human_disease`/`subcellular_location`/`unimod`/
-/// `ms_unique_vocabularies` (in `OntologyModels.swift`) were additionally spot-verified against
-/// real downloaded `.sqlite.gz` files and matched exactly, giving high confidence these do too —
-/// they share the same export mechanism (`export_mobile_snapshot.py`'s scalar-field dump).
+// The remaining 8 ontology `type_key`s.
 
 /// `tax_id, scientific_name, common_name, synonyms, rank, parent_tax_id`.
 @Model
@@ -43,11 +38,7 @@ extension CachedNCBITaxonomy: OntologyRowDecodable {
     }
 }
 
-/// `identifier, name, definition, synonyms, formula, mass, charge, inchi, smiles, parent_terms,
-/// roles, replacement_term`. `mass` kept as text (a Django `DecimalField` — DRF/export
-/// serializes decimals as strings, same reasoning as `StoredReagentDTO.molecularWeight`'s
-/// omission elsewhere; here it's just kept as an opaque string rather than dropped, since
-/// there's no display need to omit it).
+/// `identifier, name, definition, ..., mass, ...`. `mass` is a `DecimalField`, kept as text.
 @Model
 public final class CachedChEBICompound {
     @Attribute(.unique) public var identifier: String
@@ -201,8 +192,7 @@ extension CachedUberonAnatomy: OntologyRowDecodable {
     }
 }
 
-/// `identifier, name, definition, synonyms, accession, cell_line, source, parent_terms,
-/// part_of, develops_from, replacement_term`.
+/// `identifier, name, definition, synonyms, accession, cell_line, source, parent_terms, part_of, develops_from, replacement_term`.
 @Model
 public final class CachedCellOntology {
     @Attribute(.unique) public var identifier: String

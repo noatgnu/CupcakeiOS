@@ -4,14 +4,7 @@ import CupcakeSync
 import SwiftData
 import SwiftUI
 
-/// `actionType` is exactly `"add"`/`"reserve"` — confirmed against `ccm/models.py:700-703`'s
-/// `action_type_choices`; there is no `"consume"` choice anywhere in the backend, despite that
-/// being an intuitive-seeming third option. `quantity` must be positive regardless of
-/// `actionType` — the add/subtract sign comes from `actionType`, not the sign of `quantity`.
-///
-/// Always recorded locally first (updating `currentQuantity` immediately so the UI reflects it
-/// without waiting on a round-trip), then synced right away when signed in — a genuine
-/// unreachability failure queues it in the outbox, same pattern as every other create flow.
+/// Records an Add/Reserve action for a reagent, updating `currentQuantity` locally then syncing or queuing.
 struct RecordReagentActionSheet: View {
     @Environment(AppSession.self) private var appSession
     @Environment(\.dismiss) private var dismiss
@@ -85,8 +78,7 @@ struct RecordReagentActionSheet: View {
             notes: notes.isEmpty ? nil : notes
         )
         modelContext.insert(action)
-        // Optimistic local update — the server computes `current_quantity` as a sum of actions,
-        // but the UI shouldn't have to wait on a round-trip to reflect a just-recorded action.
+        // Optimistic local update, ahead of the server's own round-trip.
         storedReagent.currentQuantity += actionType == "add" ? quantity : -quantity
         try? modelContext.save()
 

@@ -1,13 +1,7 @@
 import Foundation
 import SwiftData
 
-/// `clientID` is the real identity (a session can be started fully offline from a cached or
-/// locally-created protocol, per §4.2/§4.3 — it may never get a `serverID`). `uniqueID` mirrors
-/// the server's own `unique_id` display field once synced; it is server-generated, never
-/// client-assigned, so it can't double as the local identity the way it might first appear to.
-/// `protocolServerIDs` is kept for network-fidelity/display of the server's M2M relationship;
-/// `primaryProtocolClientID` is what the UI actually navigates with, since it works the same way
-/// whether the session (and its protocol) originated online or fully locally.
+/// A cached session; `protocolClientIDs` holds its 0..N attached protocols.
 @Model
 public final class CachedSession {
     @Attribute(.unique) public var clientID: UUID
@@ -15,18 +9,14 @@ public final class CachedSession {
     public var uniqueID: String?
     public var name: String?
     public var enabled: Bool
-    /// Nullable because the server's own computation of this can serialize as JSON `null` for
-    /// an unstarted session — see `SessionDTO`'s doc comment for the exact Python short-circuit
-    /// bug that causes it.
+    /// Nullable — the server can serialize this as JSON `null` for an unstarted session.
     public var isRunning: Bool?
     public var status: String
     public var protocolServerIDs: [Int64]
+    public var protocolClientIDs: [UUID]
+    @available(*, deprecated, message: "Use protocolClientIDs instead — kept for one release.")
     public var primaryProtocolClientID: UUID?
-    /// When this device first learned about the session — its own creation time for a
-    /// locally-created session, or first-sync time for one fetched from the server (an
-    /// approximation there, since `SessionDTO` doesn't carry the server's own `created_at`).
-    /// Used only for sorting the sessions list, matching the reference web app's
-    /// `ordering: '-created_at'` (`session-list.ts:54-85`).
+    /// When this device first learned about the session; used for sorting the sessions list.
     public var createdAt: Date
 
     public init(
@@ -38,6 +28,7 @@ public final class CachedSession {
         isRunning: Bool?,
         status: String,
         protocolServerIDs: [Int64] = [],
+        protocolClientIDs: [UUID] = [],
         primaryProtocolClientID: UUID? = nil,
         createdAt: Date = Date()
     ) {
@@ -49,7 +40,28 @@ public final class CachedSession {
         self.isRunning = isRunning
         self.status = status
         self.protocolServerIDs = protocolServerIDs
+        self.protocolClientIDs = protocolClientIDs
         self.primaryProtocolClientID = primaryProtocolClientID
         self.createdAt = createdAt
+    }
+}
+
+extension CachedSession {
+    private static let backfillDefaultsKey = "cupcake.didBackfillProtocolClientIDs"
+
+    /// One-time migration backfilling `protocolClientIDs` from the old `primaryProtocolClientID`.
+    @MainActor
+    public static func backfillProtocolClientIDsIfNeeded(in modelContainer: ModelContainer) {
+        guard !UserDefaults.standard.bool(forKey: backfillDefaultsKey) else { return }
+        let context = ModelContext(modelContainer)
+        if let sessions = try? context.fetch(FetchDescriptor<CachedSession>()) {
+            for session in sessions where session.protocolClientIDs.isEmpty {
+                if let primaryProtocolClientID = session.primaryProtocolClientID {
+                    session.protocolClientIDs = [primaryProtocolClientID]
+                }
+            }
+            try? context.save()
+        }
+        UserDefaults.standard.set(true, forKey: backfillDefaultsKey)
     }
 }

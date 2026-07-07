@@ -11,6 +11,9 @@ public final class CachedMetadataTableTemplate {
     public var isDefault: Bool
     public var columnCount: Int
     public var labGroupServerID: Int64?
+    public var canEdit: Bool
+    public var canDelete: Bool
+    public var schemaNames: [String]
 
     public init(
         serverID: Int64,
@@ -20,7 +23,10 @@ public final class CachedMetadataTableTemplate {
         visibility: String = "private",
         isDefault: Bool = false,
         columnCount: Int = 0,
-        labGroupServerID: Int64? = nil
+        labGroupServerID: Int64? = nil,
+        canEdit: Bool = false,
+        canDelete: Bool = false,
+        schemaNames: [String] = []
     ) {
         self.serverID = serverID
         self.name = name
@@ -30,5 +36,8 @@ public final class CachedMetadataTableTemplate {
         self.isDefault = isDefault
         self.columnCount = columnCount
         self.labGroupServerID = labGroupServerID
+        self.canEdit = canEdit
+        self.canDelete = canDelete
+        self.schemaNames = schemaNames
     }
 }

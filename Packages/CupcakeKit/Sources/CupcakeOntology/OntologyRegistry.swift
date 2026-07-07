@@ -1,10 +1,7 @@
 import Foundation
 import SwiftData
 
-/// The full set of 14 ontology tables + `column-template`/`schema` datasets — one entry per
-/// manifest `table.name`, confirmed against a real downloaded `manifest-v0.0.2.json`'s `tables`
-/// array. This is what drives both `CupcakeOntologyStore.makeContainer()`'s schema and the
-/// "Offline Ontology Data" settings screen's list.
+/// The full set of ontology + column-template/schema datasets, driving both the store's schema and the settings screen's list.
 public enum OntologyRegistry {
     public static let allModelTypes: [any PersistentModel.Type] = [
         CachedTissue.self,
@@ -25,8 +22,7 @@ public enum OntologyRegistry {
         CachedSDRFSchema.self,
     ]
 
-    /// Human-readable label per `type_key` — for the settings screen. Order matches the
-    /// reference plan's own 14-ontology-table listing, with the two non-ontology datasets last.
+    /// Human-readable label per `type_key`, for the settings screen.
     public static let displayNames: [String: String] = [
         "tissue": "Tissue",
         "species": "Species",
@@ -46,14 +42,10 @@ public enum OntologyRegistry {
         "sdrf": "SDRF Schemas",
     ]
 
-    /// Large tables (`ncbi_taxonomy`: 361MB uncompressed / 2.85M rows; `chebi`: ~15MB
-    /// compressed) default to off, matching the plan's "12-on/2-off default" — everything else
-    /// is small enough (under a few MB) to default on.
+    /// Large tables default to off; everything else defaults on.
     public static let defaultDisabled: Set<String> = ["ncbi_taxonomy", "chebi"]
 
-    /// Dispatches a manifest table's import to the right concrete `OntologyRowDecodable` type by
-    /// its `name` (== `typeKey`) — lets callers (the Settings screen) drive imports generically
-    /// off the manifest's own table list without hardcoding a type-per-row switch themselves.
+    /// Dispatches a manifest table's import to the right concrete `OntologyRowDecodable` type by its `name`.
     public static func importTable(_ table: OntologyManifestTable, using service: OntologyImportService) async throws {
         switch table.name {
         case CachedTissue.typeKey: try await service.importTable(CachedTissue.self, table: table)

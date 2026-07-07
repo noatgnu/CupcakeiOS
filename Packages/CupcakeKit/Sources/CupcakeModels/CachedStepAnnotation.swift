@@ -1,12 +1,7 @@
 import Foundation
 import SwiftData
 
-/// Offline-createable (Phase 2 onward), so — unlike the read-only `Cached*` protocol types —
-/// this uses a client-generated `clientID` as its real persistent identity from the start.
-/// `serverID` fills in once a create round-trip succeeds. `session`/`step` are referenced by
-/// their `clientID`, not their `serverID`, because a locally-created session or step (standalone
-/// mode, or not yet synced) may not have a `serverID` at all — resolving to server IDs happens
-/// only at the network-call boundary (`StepAnnotationSyncService`), never for local storage.
+/// A cached step-level annotation.
 @Model
 public final class CachedStepAnnotation {
     @Attribute(.unique) public var clientID: UUID
@@ -19,6 +14,10 @@ public final class CachedStepAnnotation {
     public var transcription: String?
     public var language: String?
     public var translation: String?
+    public var pendingFileName: String?
+    public var scratched: Bool
+    public var instrumentUsageServerID: Int64?
+    public var createdAt: String
 
     public init(
         clientID: UUID = UUID(),
@@ -30,7 +29,11 @@ public final class CachedStepAnnotation {
         order: Int = 0,
         transcription: String? = nil,
         language: String? = nil,
-        translation: String? = nil
+        translation: String? = nil,
+        pendingFileName: String? = nil,
+        scratched: Bool = false,
+        instrumentUsageServerID: Int64? = nil,
+        createdAt: String = ISO8601DateFormatter().string(from: Date())
     ) {
         self.clientID = clientID
         self.serverID = serverID
@@ -42,5 +45,9 @@ public final class CachedStepAnnotation {
         self.transcription = transcription
         self.language = language
         self.translation = translation
+        self.pendingFileName = pendingFileName
+        self.scratched = scratched
+        self.instrumentUsageServerID = instrumentUsageServerID
+        self.createdAt = createdAt
     }
 }

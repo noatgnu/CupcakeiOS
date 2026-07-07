@@ -4,22 +4,7 @@ import CupcakeSync
 import SwiftData
 import SwiftUI
 
-/// Completes the Protocol -> Section -> Step -> StepReagent authoring hierarchy: attaching a
-/// reagent (existing or newly named on the spot) with a quantity to a step. Always created
-/// locally first (so nothing is lost or blocked on the network), then synced immediately when
-/// the owning protocol is online-authored (`canAuthorOnline`) — a genuine unreachability failure
-/// queues it in the outbox instead of erroring out, same as protocol/section/step/session
-/// creation.
-///
-/// Verified against the reference web app's `step-reagent-modal.ts`:
-/// - Reagent name is a live typeahead (`searchReagent()`, 200ms debounce, min 1 char) against the
-///   real reagent catalog, not a plain picker — this app searches its local `CachedReagent` cache
-///   instead of a network call, consistent with everything else in this offline-authoring flow.
-///   Selecting a suggestion autofills both name and unit (`onSelectReagent()`).
-/// - Unit is a fixed-list dropdown (`step-reagent-modal.html:41-73`), not free text.
-/// - `quantity`, `scalable`, `scalableFactor` are all real, independently editable fields there
-///   (not a quantity-only form) — `scalableFactor` is forced back to `1` whenever `scalable` is
-///   off.
+/// Attaches a reagent (existing or new) with a quantity/unit/scalable factor to a step. Created locally, then synced or queued.
 struct AttachReagentSheet: View {
     @Environment(AppSession.self) private var appSession
     @Environment(\.dismiss) private var dismiss

@@ -1,7 +1,17 @@
 import Foundation
 import SwiftData
 
-/// Read-only in this app's v1 slice — `update_column_value` editing is deferred.
+/// A per-sample-range value override, e.g. samples `"1-3,7"` use `value` instead of the column's default.
+public struct MetadataColumnModifier: Codable, Sendable, Hashable {
+    public var samples: String
+    public var value: String
+
+    public init(samples: String, value: String) {
+        self.samples = samples
+        self.value = value
+    }
+}
+
 @Model
 public final class CachedMetadataColumn {
     @Attribute(.unique) public var serverID: Int64
@@ -18,6 +28,7 @@ public final class CachedMetadataColumn {
     public var readonly: Bool
     public var ontologyType: String?
     public var staffOnly: Bool
+    public var modifiers: [MetadataColumnModifier]
 
     public init(
         serverID: Int64,
@@ -33,7 +44,8 @@ public final class CachedMetadataColumn {
         hidden: Bool = false,
         readonly: Bool = false,
         ontologyType: String? = nil,
-        staffOnly: Bool = false
+        staffOnly: Bool = false,
+        modifiers: [MetadataColumnModifier] = []
     ) {
         self.serverID = serverID
         self.metadataTableServerID = metadataTableServerID
@@ -49,5 +61,6 @@ public final class CachedMetadataColumn {
         self.readonly = readonly
         self.ontologyType = ontologyType
         self.staffOnly = staffOnly
+        self.modifiers = modifiers
     }
 }

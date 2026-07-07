@@ -1,10 +1,7 @@
 import Foundation
 import SwiftData
 
-/// Read-only when fetched from the server's reagent catalog, but standalone/offline authoring
-/// (creating a reagent locally to attach to a step you're writing from scratch, with no server
-/// configured at all) needs its own identity too — same `clientID`-first,
-/// `serverID`-once-synced pattern as the rest of the offline-createable models.
+/// A reagent, either fetched from the server catalog or created locally.
 @Model
 public final class CachedReagent {
     @Attribute(.unique) public var clientID: UUID

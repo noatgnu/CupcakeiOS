@@ -1,18 +1,24 @@
 import CupcakeModels
+import CupcakeNetworking
+import CupcakeSync
 import SwiftData
 import SwiftUI
 
-/// Matches the reference web app's per-instrument "Bookings" tab (`instruments.ts:672-698`,
-/// `instruments.html:806-887`): time started/ended (or "In Progress" if not yet ended),
-/// description, and a status showing "Maintenance" when the booking is a maintenance block,
-/// plus Approved/Pending from `approved`. `maintenanceOverdue` is surfaced here (not in the
-/// list row), matching the reference app's own instrument-detail placement.
+/// Shows an instrument's bookings, maintenance status, and maintenance log.
 struct InstrumentDetailView: View {
     let instrumentServerID: Int64
 
+    @Environment(AppSession.self) private var appSession
+    @Environment(\.modelContext) private var modelContext
     @Query private var instruments: [CachedInstrument]
     @Query private var usages: [CachedInstrumentUsage]
+    @Query private var maintenanceLogs: [CachedMaintenanceLog]
     @State private var isShowingBookingSheet = false
+    @State private var isShowingMaintenanceSheet = false
+    @State private var isShowingEditSheet = false
+    @State private var isDeleting = false
+    @State private var errorMessage: String?
+    @State private var isShowingError = false
 
     private var instrument: CachedInstrument? {
         instruments.first(where: { $0.serverID == instrumentServerID })
@@ -22,6 +28,12 @@ struct InstrumentDetailView: View {
         usages
             .filter { $0.instrumentServerID == instrumentServerID }
             .sorted { ($0.timeStarted ?? "") > ($1.timeStarted ?? "") }
+    }
+
+    private var logs: [CachedMaintenanceLog] {
+        maintenanceLogs
+            .filter { $0.instrumentServerID == instrumentServerID }
+            .sorted { ($0.maintenanceDate ?? "") > ($1.maintenanceDate ?? "") }
     }
 
     private func timeRangeText(_ booking: CachedInstrumentUsage) -> String {
@@ -64,6 +76,33 @@ struct InstrumentDetailView: View {
                     }
                 }
             }
+            Section("Maintenance") {
+                if logs.isEmpty {
+                    Text("No maintenance logged yet")
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(logs) { log in
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(log.maintenanceDescription?.isEmpty == false ? log.maintenanceDescription! : log.maintenanceType.capitalized)
+                            HStack(spacing: 4) {
+                                Text(HumanReadableTime.formatAbsolute(log.maintenanceDate) ?? "No date")
+                                Text("· \(log.status.replacingOccurrences(of: "_", with: " ").capitalized)")
+                            }
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        }
+                        .swipeActions(edge: .trailing) {
+                            if log.status != "completed" {
+                                Button("Complete") {
+                                    Task { await markComplete(log) }
+                                }
+                                .tint(.green)
+                                .accessibilityIdentifier("completeMaintenanceLogButton")
+                            }
+                        }
+                    }
+                }
+            }
         }
         .navigationTitle(instrument?.instrumentName ?? "Instrument")
         .toolbar {
@@ -75,9 +114,96 @@ struct InstrumentDetailView: View {
                 }
                 .accessibilityIdentifier("bookInstrumentButton")
             }
+            ToolbarItem {
+                Button {
+                    isShowingMaintenanceSheet = true
+                } label: {
+                    Label("Log Maintenance", systemImage: "wrench.and.screwdriver")
+                }
+                .accessibilityIdentifier("logMaintenanceButton")
+            }
+            ToolbarItem {
+                Menu {
+                    Button {
+                        isShowingEditSheet = true
+                    } label: {
+                        Label("Edit Instrument", systemImage: "pencil")
+                    }
+                    .accessibilityIdentifier("editInstrumentButton")
+                    if let instrument {
+                        Button {
+                            Task { await toggleEnabled(instrument) }
+                        } label: {
+                            Label(instrument.enabled ? "Disable" : "Enable", systemImage: instrument.enabled ? "xmark.circle" : "checkmark.circle")
+                        }
+                        .accessibilityIdentifier("toggleInstrumentEnabledButton")
+                    }
+                    Button(role: .destructive) {
+                        Task { await deleteInstrument() }
+                    } label: {
+                        Label("Delete Instrument", systemImage: "trash")
+                    }
+                    .accessibilityIdentifier("deleteInstrumentButton")
+                } label: {
+                    Label("More", systemImage: "ellipsis.circle")
+                }
+                .disabled(isDeleting)
+            }
         }
         .sheet(isPresented: $isShowingBookingSheet) {
             BookInstrumentSheet(instrumentServerID: instrumentServerID, instrumentName: instrument?.instrumentName ?? "Instrument")
+        }
+        .sheet(isPresented: $isShowingMaintenanceSheet) {
+            LogMaintenanceSheet(instrumentServerID: instrumentServerID, instrumentName: instrument?.instrumentName ?? "Instrument")
+        }
+        .sheet(isPresented: $isShowingEditSheet) {
+            if let instrument {
+                EditInstrumentSheet(existingInstrument: instrument)
+            }
+        }
+        .alert("Couldn't update instrument", isPresented: $isShowingError) {
+            Button("OK") {}
+        } message: {
+            Text(errorMessage ?? "")
+        }
+        .task {
+            try? await appSession.makeSyncServices().maintenanceLogSync.refetch(instrumentServerID: instrumentServerID)
+        }
+    }
+
+    private func markComplete(_ log: CachedMaintenanceLog) async {
+        try? await appSession.makeSyncServices().maintenanceLogSync.updateStatus(serverID: log.serverID, status: "completed")
+    }
+
+    private func toggleEnabled(_ instrument: CachedInstrument) async {
+        do {
+            try await appSession.makeSyncServices().instrumentSync.updateInstrument(
+                serverID: instrument.serverID,
+                instrumentName: instrument.instrumentName,
+                instrumentDescription: instrument.instrumentDescription,
+                enabled: !instrument.enabled,
+                acceptsBookings: instrument.acceptsBookings,
+                allowOverlappingBookings: instrument.allowOverlappingBookings
+            )
+            instrument.enabled.toggle()
+            try? modelContext.save()
+        } catch {
+            errorMessage = error.userFacingMessage
+            isShowingError = true
+        }
+    }
+
+    private func deleteInstrument() async {
+        guard let instrument else { return }
+        isDeleting = true
+        defer { isDeleting = false }
+        do {
+            try await appSession.makeSyncServices().instrumentSync.deleteInstrument(serverID: instrument.serverID)
+            modelContext.delete(instrument)
+            try? modelContext.save()
+        } catch {
+            errorMessage = error.userFacingMessage
+            isShowingError = true
         }
     }
 }

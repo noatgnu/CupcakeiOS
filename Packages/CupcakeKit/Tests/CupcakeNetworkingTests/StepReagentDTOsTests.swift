@@ -7,8 +7,7 @@ import Testing
 struct StepReagentDTOsTests {
     @Test("decodes the literal StepReagentSerializer shape, including the nested reagent object")
     func decodesStepReagent() throws {
-        // Matches ccrv/serializers.py's StepReagentSerializer.Meta.fields verbatim (trimmed).
-        // Note `reagent` is a nested object on read, not a bare id.
+        // `reagent` is a nested object on read, not a bare id.
         let json = Data("""
         {
             "id": 1, "step": 10,

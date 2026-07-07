@@ -7,8 +7,6 @@ import Testing
 struct ProtocolDTOsTests {
     @Test("decodes the literal ProtocolModelSerializer shape, including nested sections/steps")
     func decodesNestedProtocol() throws {
-        // Matches ccrv/serializers.py's ProtocolModelSerializer.Meta.fields verbatim (trimmed
-        // to the fields this DTO actually declares).
         let json = Data("""
         {
             "id": 42,
@@ -42,11 +40,7 @@ struct ProtocolDTOsTests {
 
     @Test("decodes a real POST protocols/ create response, which omits `sections` entirely")
     func decodesCreateResponseMissingSections() throws {
-        // Confirmed live against a real backend: `ProtocolModelCreateSerializer`'s response
-        // (unlike the list/retrieve serializer) has no `sections` key at all — decoding this
-        // with `sections` as a plain required field threw `DecodingError.keyNotFound` on every
-        // single protocol creation, the client never learning its own already-succeeded create
-        // actually worked. Captured verbatim from a real 201 response body.
+        // Captured verbatim from a real 201 response body, which has no `sections` key at all.
         let json = Data("""
         {
             "id": 16,

@@ -1,15 +1,7 @@
 import Foundation
 import SwiftData
 
-/// Ontology reference data lives in its own `CupcakeOntologyStore` container (a separate
-/// `ModelContainer` from the main `CupcakeStore`), not `CupcakeModels` — it's read-only,
-/// independently rebuildable per table (re-import overwrites, no sync/outbox involvement), and
-/// has a completely different lifecycle from synced/authored content.
-///
-/// Column sets in this file verified directly against real downloaded `.sqlite.gz` assets from
-/// the live release (not assumed from a spec) — each is `TEXT`-only (server-side JSON/array
-/// fields like `synonyms` are exported as JSON-string text, kept as raw text here; nothing in
-/// this app's v1 scope needs them decoded yet).
+// Ontology reference data lives in its own `CupcakeOntologyStore` container, read-only and independently rebuildable per table.
 
 /// `identifier, accession, synonyms, cross_references`.
 @Model
@@ -35,8 +27,7 @@ extension CachedTissue: OntologyRowDecodable {
     }
 }
 
-/// `id, code, taxon, official_name, common_name, synonym` — `code` (not the numeric `id`) is
-/// this table's natural unique key, confirmed non-null and distinct across a real sample.
+/// `id, code, taxon, official_name, common_name, synonym` — `code` is this table's natural unique key.
 @Model
 public final class CachedSpecies {
     @Attribute(.unique) public var code: String
@@ -106,10 +97,7 @@ extension CachedHumanDisease: OntologyRowDecodable {
     }
 }
 
-/// `location_identifier, topology_identifier, orientation_identifier, accession, definition,
-/// synonyms, content, is_a, part_of, keyword, gene_ontology, annotation, references, links`.
-/// `accession` is this table's unique key (the others are cross-reference-style identifiers,
-/// not guaranteed unique on their own).
+/// `location_identifier, topology_identifier, ..., accession, ...`. `accession` is this table's unique key.
 @Model
 public final class CachedSubcellularLocation {
     @Attribute(.unique) public var accession: String
@@ -183,9 +171,7 @@ extension CachedSubcellularLocation: OntologyRowDecodable {
     }
 }
 
-/// `accession, name, definition, additional_data` — `additional_data` is a Django `JSONField`,
-/// exported as a JSON string (`export_mobile_snapshot.py`'s scalar-field serialization), kept as
-/// raw text here.
+/// `accession, name, definition, additional_data` — `additional_data` is JSON, kept as raw text.
 @Model
 public final class CachedUnimod {
     @Attribute(.unique) public var accession: String
@@ -233,9 +219,7 @@ extension CachedMSUniqueVocabularies: OntologyRowDecodable {
     }
 }
 
-/// Tracks what's actually been imported, independent of the manifest describing what's
-/// *available* — lets the "Offline Ontology Data" settings screen show per-table import
-/// status/size/toggle without re-parsing a SQLite file just to check.
+/// Tracks what's actually been imported, independent of the manifest describing what's available.
 @Model
 public final class OntologyImportState {
     @Attribute(.unique) public var typeKey: String

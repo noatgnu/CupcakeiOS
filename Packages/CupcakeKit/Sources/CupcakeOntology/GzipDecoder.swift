@@ -1,16 +1,7 @@
 import Compression
 import Foundation
 
-/// Decodes a `.gz` file's bytes. Apple's `Compression` framework has no gzip *container* option
-/// (`COMPRESSION_ZLIB` there means raw DEFLATE, matching zlib's own inflate — not the gzip
-/// wrapper format, which adds its own 10-byte header and 8-byte trailer around that same
-/// DEFLATE payload). So this strips the gzip header (handling the optional FEXTRA/FNAME/
-/// FCOMMENT/FHCRC flag bytes — none of the fixed-size assumptions a naive "skip 10 bytes" would
-/// make) and trailer manually, then runs `compression_decode_buffer` on what's left.
-///
-/// Verified end to end against a real downloaded ontology `.sqlite.gz` asset: the decompressed
-/// output was byte-for-byte identical to the same file decompressed with the system `gunzip`,
-/// and reopened correctly as a SQLite database — not just "compiles," actually round-tripped.
+/// Decodes a `.gz` file's bytes by manually stripping the gzip header/trailer, then running raw DEFLATE decompression.
 enum GzipDecoder {
     static func decode(_ data: Data) -> Data? {
         guard data.count > 18, data[data.startIndex] == 0x1f, data[data.startIndex + 1] == 0x8b, data[data.startIndex + 2] == 0x08 else {

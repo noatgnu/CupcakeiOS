@@ -31,11 +31,7 @@ public actor LabGroupSyncService {
         }
     }
 
-    /// `direct_only=true` — matches the reference web app's own `getLabGroupMembers` call for
-    /// job-submission staff candidates (`job-submission-state.ts`): direct membership only, not
-    /// bubbled-up sub-group members, since staff assignment itself requires direct membership
-    /// server-side (`InstrumentJobSerializer.validate` rule 2). Only the first page — matching
-    /// the reference app's own `limit: 10` for this exact picker, not a general limitation.
+    /// `direct_only=true`, since staff assignment requires direct membership server-side. Only the first page.
     public func fetchMembers(labGroupServerID: Int64) async throws -> [UserDTO] {
         guard let token = deviceToken() else { return [] }
         let authorization = "DeviceToken \(token)"
@@ -46,6 +42,63 @@ public actor LabGroupSyncService {
         )
         return page.results
     }
+
+    /// Every `LabGroupPermission` grant recorded for this lab group.
+    public func fetchPermissions(labGroupServerID: Int64) async throws -> [LabGroupPermissionDTO] {
+        guard let token = deviceToken() else { return [] }
+        let authorization = "DeviceToken \(token)"
+        let page: PaginatedResponse<LabGroupPermissionDTO> = try await apiClient.get(
+            "lab-group-permissions/",
+            query: [URLQueryItem(name: "lab_group", value: String(labGroupServerID))],
+            authorizationHeader: authorization
+        )
+        return page.results
+    }
+
+    /// Check-then-PATCH-or-POST, since a blind POST risks a duplicate-key crash for an existing grant.
+    @discardableResult
+    public func setPermission(
+        userServerID: Int64,
+        labGroupServerID: Int64,
+        canView: Bool,
+        canInvite: Bool,
+        canManage: Bool,
+        canProcessJobs: Bool
+    ) async throws -> LabGroupPermissionDTO {
+        guard let token = deviceToken() else {
+            throw LabGroupSyncError.noDeviceToken
+        }
+        let authorization = "DeviceToken \(token)"
+
+        let existing: PaginatedResponse<LabGroupPermissionDTO> = try await apiClient.get(
+            "lab-group-permissions/",
+            query: [
+                URLQueryItem(name: "lab_group", value: String(labGroupServerID)),
+                URLQueryItem(name: "user", value: String(userServerID)),
+            ],
+            authorizationHeader: authorization
+        )
+
+        if let existingPermission = existing.results.first {
+            return try await apiClient.send(
+                "lab-group-permissions/\(existingPermission.id)/",
+                method: .patch,
+                body: UpdateLabGroupPermissionRequest(canView: canView, canInvite: canInvite, canManage: canManage, canProcessJobs: canProcessJobs),
+                authorizationHeader: authorization
+            )
+        } else {
+            return try await apiClient.send(
+                "lab-group-permissions/",
+                method: .post,
+                body: CreateLabGroupPermissionRequest(user: userServerID, labGroup: labGroupServerID, canView: canView, canInvite: canInvite, canManage: canManage, canProcessJobs: canProcessJobs),
+                authorizationHeader: authorization
+            )
+        }
+    }
+}
+
+public enum LabGroupSyncError: Error {
+    case noDeviceToken
 }
 
 @ModelActor

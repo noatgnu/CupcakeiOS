@@ -3,11 +3,7 @@ import CupcakeOntology
 import SwiftData
 import SwiftUI
 
-/// Lists the 14 ontology tables + column-template/schema datasets from the live release
-/// manifest, each with its row count/size, import status, an enabled toggle, and an "Import"
-/// action — matches the plan's "Offline Ontology Data" settings screen. Large tables
-/// (`ncbi_taxonomy`, `chebi`) default to disabled given their size (361MB/15MB), not imported
-/// automatically just by opening this screen.
+/// Lists ontology datasets from the release manifest with row count/size, import status, and an Import action.
 struct OfflineOntologyDataView: View {
     @Environment(\.modelContext) private var modelContext
 

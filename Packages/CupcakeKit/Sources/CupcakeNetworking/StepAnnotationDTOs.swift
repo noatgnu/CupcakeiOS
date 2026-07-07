@@ -1,4 +1,3 @@
-/// Field names verified directly against `ccrv/serializers.py`'s `StepAnnotationSerializer`.
 public struct StepAnnotationDTO: Decodable, Sendable {
     public let id: Int64
     public let session: Int64
@@ -7,12 +6,36 @@ public struct StepAnnotationDTO: Decodable, Sendable {
     public let annotationText: String
     public let annotationType: String
     public let order: Int
+    public let scratched: Bool
+    public let fileUrl: String?
+    public let transcription: String?
+    public let language: String?
+    public let translation: String?
+    public let createdAt: String
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(Int64.self, forKey: .id)
+        session = try container.decode(Int64.self, forKey: .session)
+        step = try container.decode(Int64.self, forKey: .step)
+        annotation = try container.decode(Int64.self, forKey: .annotation)
+        annotationText = try container.decode(String.self, forKey: .annotationText)
+        annotationType = try container.decode(String.self, forKey: .annotationType)
+        order = try container.decode(Int.self, forKey: .order)
+        scratched = try container.decodeIfPresent(Bool.self, forKey: .scratched) ?? false
+        fileUrl = try container.decodeIfPresent(String.self, forKey: .fileUrl)
+        transcription = try container.decodeIfPresent(String.self, forKey: .transcription)
+        language = try container.decodeIfPresent(String.self, forKey: .language)
+        translation = try container.decodeIfPresent(String.self, forKey: .translation)
+        createdAt = try container.decodeIfPresent(String.self, forKey: .createdAt) ?? ""
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, session, step, annotation, annotationText, annotationType, order, scratched, fileUrl
+        case transcription, language, translation, createdAt
+    }
 }
 
-/// The `annotation_data` shortcut `StepAnnotationViewSet.create()` reads (`ccrv/viewsets.py`) —
-/// creates the underlying `Annotation` row server-side inline. Only for non-file annotation
-/// types (text, molarity/calculator, booking); photo/audio/video/sketch go through chunked
-/// upload instead (Phase 2).
 public struct AnnotationDataRequest: Encodable, Sendable {
     public var annotationType: String
     public var annotation: String
@@ -25,8 +48,6 @@ public struct AnnotationDataRequest: Encodable, Sendable {
     }
 }
 
-/// `POST step-annotations/` body using the `annotation_data` shortcut. The outer `annotation`
-/// FK is populated server-side from `annotation_data` — never sent directly by this path.
 public struct CreateStepAnnotationRequest: Encodable, Sendable {
     public var session: Int64
     public var step: Int64
@@ -42,6 +63,7 @@ public struct CreateStepAnnotationRequest: Encodable, Sendable {
 public struct AnnotationChunkedUploadResponse: Decodable, Sendable {
     public let annotationId: Int64?
     public let stepAnnotationId: Int64?
+    public let sessionAnnotationId: Int64?
     public let message: String?
     public let warning: String?
 }

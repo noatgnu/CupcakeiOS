@@ -3,8 +3,7 @@ import CupcakeNetworking
 import Foundation
 import SwiftData
 
-/// Phase 1: full-refetch, read-only population of storage/reagent lookup data. Offline create
-/// for `StoredReagent`/`ReagentAction` is Phase 3.
+/// Full-refetch population of storage/reagent lookup data, plus `StoredReagent`/`ReagentAction` offline create.
 public actor InventorySyncService {
     private let apiClient: APIClient
     private let deviceToken: @Sendable () -> String?
@@ -38,25 +37,71 @@ public actor InventorySyncService {
         }
     }
 
-    /// Plain full-refetch every cycle, not a delta cursor — `ReagentAction` has no
-    /// `updated_at__gte` filter or deletion-log coverage server-side (see
-    /// `CachedReagentAction`'s doc comment), so there's no cursor to advance.
+    /// Live search only, no local caching. For the molarity calculator's molecular-weight typeahead, 2-char minimum.
+    public func searchStoredReagentsWithMolecularWeight(search: String) async throws -> [StoredReagentDTO] {
+        guard search.count >= 2, let token = deviceToken() else { return [] }
+        let page: PaginatedResponse<StoredReagentDTO> = try await apiClient.get(
+            "stored-reagents/",
+            query: [
+                URLQueryItem(name: "search", value: search),
+                URLQueryItem(name: "molecular_weight__isnull", value: "false"),
+                URLQueryItem(name: "limit", value: "10"),
+            ],
+            authorizationHeader: "DeviceToken \(token)"
+        )
+        return page.results
+    }
+
+    @discardableResult
+    public func createStorageObject(objectName: String, objectType: String, objectDescription: String?, storedAt: Int64?) async throws -> StorageObjectDTO {
+        guard let token = deviceToken() else {
+            throw InventorySyncError.noDeviceToken
+        }
+        let dto: StorageObjectDTO = try await apiClient.send(
+            "storage-objects/",
+            method: .post,
+            body: CreateStorageObjectRequest(objectName: objectName, objectType: objectType, objectDescription: objectDescription, storedAt: storedAt),
+            authorizationHeader: "DeviceToken \(token)"
+        )
+        try await store.upsertStorageObjects([dto])
+        return dto
+    }
+
+    @discardableResult
+    public func updateStorageObject(serverID: Int64, objectName: String, objectType: String, objectDescription: String?) async throws -> StorageObjectDTO {
+        guard let token = deviceToken() else {
+            throw InventorySyncError.noDeviceToken
+        }
+        let dto: StorageObjectDTO = try await apiClient.send(
+            "storage-objects/\(serverID)/",
+            method: .patch,
+            body: UpdateStorageObjectRequest(objectName: objectName, objectType: objectType, objectDescription: objectDescription),
+            authorizationHeader: "DeviceToken \(token)"
+        )
+        try await store.upsertStorageObjects([dto])
+        return dto
+    }
+
+    public func deleteStorageObject(serverID: Int64) async throws {
+        guard let token = deviceToken() else {
+            throw InventorySyncError.noDeviceToken
+        }
+        try await apiClient.sendNoContent(
+            "storage-objects/\(serverID)/",
+            method: .delete,
+            authorizationHeader: "DeviceToken \(token)"
+        )
+        try await store.removeStorageObjectLocally(serverID: serverID)
+    }
+
+    /// Plain full-refetch every cycle; `ReagentAction` has no delta filter or deletion-log coverage server-side.
     public func refetchReagentActions() async throws {
         try await refetchAllPages(path: "reagent-actions/") { (dtos: [ReagentActionDTO]) in
             try await store.upsertReagentActions(dtos)
         }
     }
 
-    /// Pushes an *already locally-created* stored-reagent to the server, attaching the new
-    /// `serverID` to that same local record — the create-locally-then-sync path used when
-    /// signed in, and what `OutboxService.replay(_:)` calls to retry a queued
-    /// `createStoredReagent` entry. Handles the reagent itself inline, same reasoning as
-    /// `StepReagentSyncService.syncLocallyCreatedStepReagent`: if it doesn't have a `serverID`
-    /// yet (a brand-new reagent, or a purely-local one from before), it's created on the server
-    /// first and its `serverID` attached, all within this one call. Throws
-    /// `SyncDependencyError.parentNotSynced` only for the storage location — which should never
-    /// actually happen in practice, since storage locations are always read-only server-fetched
-    /// data with an existing `serverID` by the time a stored-reagent is created in one.
+    /// Pushes an already locally-created stored-reagent to the server, syncing its reagent inline if needed.
     @discardableResult
     public func syncLocallyCreatedStoredReagent(clientID: UUID) async throws -> Int64 {
         guard let token = deviceToken() else {
@@ -100,8 +145,7 @@ public actor InventorySyncService {
         return dto.id
     }
 
-    /// Same shape, for a `ReagentAction`. Throws `SyncDependencyError.parentNotSynced` if the
-    /// stored-reagent it's recorded against hasn't synced yet.
+    /// Same shape, for a `ReagentAction`. Throws `SyncDependencyError.parentNotSynced` if its stored-reagent hasn't synced yet.
     @discardableResult
     public func syncLocallyCreatedReagentAction(clientID: UUID) async throws -> Int64 {
         guard let token = deviceToken() else {
@@ -171,6 +215,14 @@ actor InventoryStore {
         try modelContext.save()
     }
 
+    func removeStorageObjectLocally(serverID: Int64) throws {
+        guard let object = try modelContext.fetch(
+            FetchDescriptor<CachedStorageObject>(predicate: #Predicate { $0.serverID == serverID })
+        ).first else { return }
+        modelContext.delete(object)
+        try modelContext.save()
+    }
+
     func upsertReagents(_ dtos: [ReagentDTO]) throws {
         for dto in dtos {
             let reagentID = dto.id
@@ -227,8 +279,7 @@ actor InventoryStore {
 
     func upsertReagentActions(_ dtos: [ReagentActionDTO]) throws {
         for dto in dtos {
-            // A reagent-action whose stored-reagent isn't cached yet can't be resolved to a
-            // local clientID — skip it, same pattern as StepReagentStore's unresolved-step case.
+            // Skip a reagent-action whose stored-reagent isn't cached yet.
             let storedReagentServerID = dto.reagent
             guard let storedReagent = try? modelContext.fetch(
                 FetchDescriptor<CachedStoredReagent>(predicate: #Predicate { $0.serverID == storedReagentServerID })
@@ -299,9 +350,7 @@ actor InventoryStore {
         try modelContext.save()
     }
 
-    /// Attaches a newly-assigned `serverID` to the existing local record matched by `clientID` —
-    /// the record already exists (created locally first), so this updates it in place rather
-    /// than inserting a second copy.
+    /// Attaches a newly-assigned `serverID` to the existing local record matched by `clientID`.
     func attachServerID(storedReagentClientID: UUID, dto: StoredReagentDTO) throws {
         guard let storedReagent = try modelContext.fetch(
             FetchDescriptor<CachedStoredReagent>(predicate: #Predicate { $0.clientID == storedReagentClientID })

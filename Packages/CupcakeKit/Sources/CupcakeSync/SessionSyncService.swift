@@ -3,10 +3,7 @@ import CupcakeNetworking
 import Foundation
 import SwiftData
 
-/// Phase 1: full-refetch read cache + a synchronous online-only create. `Session.unique_id` is
-/// server-generated (`SessionCreateSerializer.create()` overrides any client-supplied value), so
-/// there's no client-identity reconciliation to do here — unlike Phase 2's offline create, this
-/// path always has connectivity and gets the real `serverID` back immediately.
+/// Full-refetch read cache plus session create/update/delete against the server.
 public actor SessionSyncService {
     private let apiClient: APIClient
     private let deviceToken: @Sendable () -> String?
@@ -34,13 +31,7 @@ public actor SessionSyncService {
         }
     }
 
-    /// Requires connectivity — Phase 2 adds the offline-create/outbox path for this. Returns the
-    /// new session's `clientID` rather than the cached `@Model` instance — a SwiftData model
-    /// object belongs to the actor's own `ModelContext` and can't safely cross to a caller on a
-    /// different actor (e.g. the UI's `@MainActor` context); callers re-query their own context
-    /// by this ID instead. `clientID`, not `serverID`, because that's what the UI navigates with
-    /// uniformly regardless of whether a session came from the server or (in standalone mode)
-    /// was created purely locally.
+    /// Requires connectivity. Returns the new session's `clientID`, not the `@Model` instance.
     @discardableResult
     public func createSession(name: String, enabled: Bool = true, protocolServerIDs: [Int64] = []) async throws -> UUID {
         guard let token = deviceToken() else {
@@ -55,29 +46,51 @@ public actor SessionSyncService {
         return try await store.upsertOne(dto)
     }
 
-    /// Same "sync the existing local record in place" shape as
-    /// `ProtocolSyncService.syncLocallyCreatedProtocol` — the create-locally-then-sync path used
-    /// when signed in, and what `OutboxService.replay(_:)` calls to retry a queued
-    /// `createSession` entry. Throws `SyncDependencyError.parentNotSynced` if the session's
-    /// primary protocol hasn't synced yet (an ordering issue, retried like a connectivity
-    /// failure, not a terminal error).
+    /// Syncs a locally-created session; throws `SyncDependencyError.parentNotSynced` unless every attached protocol has synced.
     @discardableResult
     public func syncLocallyCreatedSession(clientID: UUID) async throws -> Int64 {
         guard let token = deviceToken() else {
             throw SessionSyncError.noDeviceToken
         }
         let fields = try await store.sessionFields(clientID: clientID)
-        guard let protocolServerID = fields.protocolServerID else {
+        guard fields.allProtocolsResolved else {
             throw SyncDependencyError.parentNotSynced
         }
         let dto: SessionDTO = try await apiClient.send(
             "sessions/",
             method: .post,
-            body: CreateSessionRequest(name: fields.name ?? "", enabled: fields.enabled, protocols: [protocolServerID]),
+            body: CreateSessionRequest(name: fields.name ?? "", enabled: fields.enabled, protocols: fields.resolvedProtocolServerIDs),
             authorizationHeader: "DeviceToken \(token)"
         )
         try await store.attachServerID(clientID: clientID, dto: dto)
         return dto.id
+    }
+
+    @discardableResult
+    public func update(serverID: Int64, name: String, enabled: Bool) async throws -> SessionDTO {
+        guard let token = deviceToken() else {
+            throw SessionSyncError.noDeviceToken
+        }
+        let dto: SessionDTO = try await apiClient.send(
+            "sessions/\(serverID)/",
+            method: .patch,
+            body: UpdateSessionRequest(name: name, enabled: enabled),
+            authorizationHeader: "DeviceToken \(token)"
+        )
+        try await store.upsert([dto])
+        return dto
+    }
+
+    public func delete(serverID: Int64) async throws {
+        guard let token = deviceToken() else {
+            throw SessionSyncError.noDeviceToken
+        }
+        try await apiClient.sendNoContent(
+            "sessions/\(serverID)/",
+            method: .delete,
+            authorizationHeader: "DeviceToken \(token)"
+        )
+        try await store.removeLocal(serverID: serverID)
     }
 }
 
@@ -102,25 +115,26 @@ actor SessionStore {
         return clientID
     }
 
-    func sessionFields(clientID: UUID) throws -> (name: String?, enabled: Bool, protocolServerID: Int64?) {
+    func sessionFields(clientID: UUID) throws -> (name: String?, enabled: Bool, resolvedProtocolServerIDs: [Int64], allProtocolsResolved: Bool) {
         guard let session = try modelContext.fetch(
             FetchDescriptor<CachedSession>(predicate: #Predicate { $0.clientID == clientID })
         ).first else {
             throw SessionSyncError.sessionNotCached
         }
-        var protocolServerID: Int64?
-        if let primaryProtocolClientID = session.primaryProtocolClientID {
+        var resolvedServerIDs: [Int64] = []
+        for protocolClientID in session.protocolClientIDs {
             let match = try? modelContext.fetch(
-                FetchDescriptor<CachedProtocol>(predicate: #Predicate { $0.clientID == primaryProtocolClientID })
+                FetchDescriptor<CachedProtocol>(predicate: #Predicate { $0.clientID == protocolClientID })
             )
-            protocolServerID = match?.first?.serverID
+            if let serverID = match?.first?.serverID {
+                resolvedServerIDs.append(serverID)
+            }
         }
-        return (session.name, session.enabled, protocolServerID)
+        let allResolved = resolvedServerIDs.count == session.protocolClientIDs.count
+        return (session.name, session.enabled, resolvedServerIDs, allResolved)
     }
 
-    /// Attaches a newly-assigned `serverID` to the existing local record matched by `clientID` —
-    /// the record already exists (created locally first), so this updates it in place rather
-    /// than inserting a second copy the way the read-sync `upsert` does.
+    /// Attaches a newly-assigned `serverID` to the existing local record matched by `clientID`.
     func attachServerID(clientID: UUID, dto: SessionDTO) throws {
         guard let session = try modelContext.fetch(
             FetchDescriptor<CachedSession>(predicate: #Predicate { $0.clientID == clientID })
@@ -136,6 +150,11 @@ actor SessionStore {
             session.status = status
         }
         session.protocolServerIDs = dto.protocols
+        let resolvedClientIDs = protocolClientIDs(forServerIDs: dto.protocols)
+        if !resolvedClientIDs.isEmpty {
+            session.protocolClientIDs = resolvedClientIDs
+        }
+        session.primaryProtocolClientID = session.protocolClientIDs.first
         try modelContext.save()
     }
 
@@ -145,7 +164,7 @@ actor SessionStore {
         let existing = try? modelContext.fetch(
             FetchDescriptor<CachedSession>(predicate: #Predicate { $0.serverID == sessionServerID })
         )
-        let primaryProtocolClientID = primaryProtocolClientID(forServerIDs: dto.protocols)
+        let resolvedClientIDs = protocolClientIDs(forServerIDs: dto.protocols)
         let cachedSession = existing?.first ?? {
             let created = CachedSession(
                 serverID: dto.id,
@@ -155,7 +174,8 @@ actor SessionStore {
                 isRunning: dto.isRunning,
                 status: dto.status ?? "draft",
                 protocolServerIDs: dto.protocols,
-                primaryProtocolClientID: primaryProtocolClientID
+                protocolClientIDs: resolvedClientIDs,
+                primaryProtocolClientID: resolvedClientIDs.first
             )
             modelContext.insert(created)
             return created
@@ -168,19 +188,30 @@ actor SessionStore {
             cachedSession.status = status
         }
         cachedSession.protocolServerIDs = dto.protocols
+        if cachedSession.protocolClientIDs.isEmpty {
+            cachedSession.protocolClientIDs = resolvedClientIDs
+        }
         if cachedSession.primaryProtocolClientID == nil {
-            cachedSession.primaryProtocolClientID = primaryProtocolClientID
+            cachedSession.primaryProtocolClientID = cachedSession.protocolClientIDs.first
         }
         return cachedSession.clientID
     }
 
-    /// Resolves the server's M2M `protocols: [Int64]` to the locally-cached protocol's
-    /// `clientID`, so the UI can navigate session -> protocol the same way regardless of origin.
-    private func primaryProtocolClientID(forServerIDs protocolServerIDs: [Int64]) -> UUID? {
-        guard let firstProtocolServerID = protocolServerIDs.first else { return nil }
-        let match = try? modelContext.fetch(
-            FetchDescriptor<CachedProtocol>(predicate: #Predicate { $0.serverID == firstProtocolServerID })
-        )
-        return match?.first?.clientID
+    func removeLocal(serverID: Int64) throws {
+        guard let session = try modelContext.fetch(
+            FetchDescriptor<CachedSession>(predicate: #Predicate { $0.serverID == serverID })
+        ).first else { return }
+        modelContext.delete(session)
+        try modelContext.save()
+    }
+
+    /// Resolves the server's M2M `protocols: [Int64]` to locally-cached protocols' `clientID`s.
+    private func protocolClientIDs(forServerIDs protocolServerIDs: [Int64]) -> [UUID] {
+        protocolServerIDs.compactMap { serverID in
+            let match = try? modelContext.fetch(
+                FetchDescriptor<CachedProtocol>(predicate: #Predicate { $0.serverID == serverID })
+            )
+            return match?.first?.clientID
+        }
     }
 }

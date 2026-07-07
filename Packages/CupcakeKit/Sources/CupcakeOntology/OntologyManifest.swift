@@ -1,10 +1,6 @@
 import Foundation
 
-/// Shape verified directly against a real downloaded `manifest-v0.0.2.json` from
-/// `noatgnu/cupcake-webgui`'s releases — not assumed from a spec. `file` (not `filename`) is the
-/// per-table asset's exact GitHub release asset name; `dataset` is `"ontology"` for the 14
-/// per-type_key tables, `"column-template"` for the single `column-template-system.sqlite.gz`
-/// (name `"system"`), and `"schema"` for the single `schema-sdrf.sqlite.gz` (name `"sdrf"`).
+/// The GitHub release manifest listing every ontology/column-template/schema table asset.
 public struct OntologyManifest: Decodable, Sendable {
     public let formatVersion: Int
     public let tables: [OntologyManifestTable]

@@ -4,15 +4,7 @@ import CupcakeSync
 import SwiftData
 import SwiftUI
 
-/// Field set and layout verified against the reference web app's `instrument-usage-modal.ts`:
-/// two separate date-time pickers (start required, end optional — "leave empty if in
-/// progress"), a description field, and a maintenance checkbox. The instrument itself is fixed
-/// context, not a form field, matching `@Input() instrument` there. `approved` is deliberately
-/// never sent or defaulted to `true` by this app — see `CreateInstrumentUsageRequest`'s doc
-/// comment.
-///
-/// Always created locally first, then synced immediately when signed in — a genuine
-/// unreachability failure queues it in the outbox, same pattern as every other create flow.
+/// Books an instrument (start/end time, description, maintenance flag), created locally then synced or queued.
 struct BookInstrumentSheet: View {
     @Environment(AppSession.self) private var appSession
     @Environment(\.dismiss) private var dismiss
@@ -37,6 +29,7 @@ struct BookInstrumentSheet: View {
     var body: some View {
         NavigationStack {
             Form {
+                ExistingBookingsSection(instrumentServerID: instrumentServerID)
                 Section {
                     DatePicker("Start Time", selection: $startTime)
                         .accessibilityIdentifier("bookingStartTimePicker")

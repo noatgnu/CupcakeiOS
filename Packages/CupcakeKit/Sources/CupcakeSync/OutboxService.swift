@@ -3,29 +3,13 @@ import CupcakeNetworking
 import Foundation
 import SwiftData
 
-/// Queues and replays creates that couldn't reach the server due to genuine unreachability
-/// (`APIError.transport`) — the record itself is always created locally first (see
-/// `NewProtocolView`'s create-locally-then-sync flow), so nothing is lost or blocked on the
-/// network; this only handles getting it to the server once connectivity comes back, via
-/// `NWPathMonitor`-triggered or manual `replayPending()` calls.
-///
-/// `createProtocol`/`createSection`/`createStep`/`createSession`/`createStepReagent`/
-/// `createTextAnnotation` are all wired up end to end — every local-authoring create operation
-/// in this app goes through this path when signed in. Extending to a future new operation is the
-/// same shape: add a `Create*Payload` (`CupcakeModels`) if it needs one, an `enqueueCreate*`, and
-/// a case in `replay(_:)` calling the matching `sync*` method on the relevant sync service.
-///
-/// Section/step/session/annotation replay can fail with `SyncDependencyError.parentNotSynced` — its parent
-/// hasn't synced yet, most often because *that* parent's own outbox entry is still ahead of it
-/// in the queue (strict FIFO `sequence` order normally handles this: a protocol enqueued before
-/// its section replays first and unblocks it) — but a parent could also still be failing for its
-/// own reasons. Either way this is an ordering issue, not a real error, so it's retried exactly
-/// like a connectivity failure rather than marked `.failed`.
+/// Queues and replays creates that couldn't reach the server due to genuine unreachability.
 public actor OutboxService {
     private let protocolSync: ProtocolSyncService
     private let sessionSync: SessionSyncService
     private let stepReagentSync: StepReagentSyncService
     private let stepAnnotationSync: StepAnnotationSyncService
+    private let sessionAnnotationSync: SessionAnnotationSyncService
     private let inventorySync: InventorySyncService
     private let instrumentSync: InstrumentSyncService
     private let projectSync: ProjectSyncService
@@ -38,6 +22,7 @@ public actor OutboxService {
         sessionSync: SessionSyncService,
         stepReagentSync: StepReagentSyncService,
         stepAnnotationSync: StepAnnotationSyncService,
+        sessionAnnotationSync: SessionAnnotationSyncService,
         inventorySync: InventorySyncService,
         instrumentSync: InstrumentSyncService,
         projectSync: ProjectSyncService,
@@ -47,6 +32,7 @@ public actor OutboxService {
         self.sessionSync = sessionSync
         self.stepReagentSync = stepReagentSync
         self.stepAnnotationSync = stepAnnotationSync
+        self.sessionAnnotationSync = sessionAnnotationSync
         self.inventorySync = inventorySync
         self.instrumentSync = instrumentSync
         self.projectSync = projectSync
@@ -110,11 +96,47 @@ public actor OutboxService {
         try await store.enqueue(OutboxEntry(operationType: OutboxOperationType.createInstrumentJob.rawValue, payloadJSON: data, relatedClientID: clientID))
     }
 
-    /// Attempts every pending/failed entry in FIFO (`createdAt`) order. An entry that still
-    /// fails due to unreachability (or an unmet ordering dependency, see the type's doc comment)
-    /// is left in place with its retry count bumped for next time; one that fails for a real,
-    /// non-connectivity reason is marked `.failed` with the error message so a "Sync Issues"
-    /// screen can surface it, and isn't retried automatically again.
+    public func enqueueCreateStepAudioAnnotation(clientID: UUID) async throws {
+        let data = try JSONEncoder().encode(EmptyOutboxPayload())
+        try await store.enqueue(OutboxEntry(operationType: OutboxOperationType.createStepAudioAnnotation.rawValue, payloadJSON: data, relatedClientID: clientID))
+    }
+
+    public func enqueueCreateSessionAudioAnnotation(clientID: UUID) async throws {
+        let data = try JSONEncoder().encode(EmptyOutboxPayload())
+        try await store.enqueue(OutboxEntry(operationType: OutboxOperationType.createSessionAudioAnnotation.rawValue, payloadJSON: data, relatedClientID: clientID))
+    }
+
+    public func enqueueCreateStepImageAnnotation(clientID: UUID) async throws {
+        let data = try JSONEncoder().encode(EmptyOutboxPayload())
+        try await store.enqueue(OutboxEntry(operationType: OutboxOperationType.createStepImageAnnotation.rawValue, payloadJSON: data, relatedClientID: clientID))
+    }
+
+    public func enqueueCreateSessionImageAnnotation(clientID: UUID) async throws {
+        let data = try JSONEncoder().encode(EmptyOutboxPayload())
+        try await store.enqueue(OutboxEntry(operationType: OutboxOperationType.createSessionImageAnnotation.rawValue, payloadJSON: data, relatedClientID: clientID))
+    }
+
+    public func enqueueCreateStepVideoAnnotation(clientID: UUID) async throws {
+        let data = try JSONEncoder().encode(EmptyOutboxPayload())
+        try await store.enqueue(OutboxEntry(operationType: OutboxOperationType.createStepVideoAnnotation.rawValue, payloadJSON: data, relatedClientID: clientID))
+    }
+
+    public func enqueueCreateSessionVideoAnnotation(clientID: UUID) async throws {
+        let data = try JSONEncoder().encode(EmptyOutboxPayload())
+        try await store.enqueue(OutboxEntry(operationType: OutboxOperationType.createSessionVideoAnnotation.rawValue, payloadJSON: data, relatedClientID: clientID))
+    }
+
+    public func enqueueCreateStepSketchAnnotation(clientID: UUID) async throws {
+        let data = try JSONEncoder().encode(EmptyOutboxPayload())
+        try await store.enqueue(OutboxEntry(operationType: OutboxOperationType.createStepSketchAnnotation.rawValue, payloadJSON: data, relatedClientID: clientID))
+    }
+
+    public func enqueueCreateSessionSketchAnnotation(clientID: UUID) async throws {
+        let data = try JSONEncoder().encode(EmptyOutboxPayload())
+        try await store.enqueue(OutboxEntry(operationType: OutboxOperationType.createSessionSketchAnnotation.rawValue, payloadJSON: data, relatedClientID: clientID))
+    }
+
+    /// Attempts every pending/failed entry in FIFO order.
     public func replayPending() async {
         let entries = (try? await store.fetchPending()) ?? []
         for entry in entries {
@@ -160,13 +182,27 @@ public actor OutboxService {
             try await projectSync.syncLocallyCreatedProject(clientID: entry.relatedClientID)
         case .createInstrumentJob:
             try await instrumentJobSync.syncLocallyCreatedInstrumentJob(clientID: entry.relatedClientID)
+        case .createStepAudioAnnotation:
+            try await stepAnnotationSync.syncLocallyCreatedAudioAnnotation(clientID: entry.relatedClientID)
+        case .createSessionAudioAnnotation:
+            try await sessionAnnotationSync.syncLocallyCreatedAudioAnnotation(clientID: entry.relatedClientID)
+        case .createStepImageAnnotation:
+            try await stepAnnotationSync.syncLocallyCreatedImageAnnotation(clientID: entry.relatedClientID)
+        case .createSessionImageAnnotation:
+            try await sessionAnnotationSync.syncLocallyCreatedImageAnnotation(clientID: entry.relatedClientID)
+        case .createStepVideoAnnotation:
+            try await stepAnnotationSync.syncLocallyCreatedVideoAnnotation(clientID: entry.relatedClientID)
+        case .createSessionVideoAnnotation:
+            try await sessionAnnotationSync.syncLocallyCreatedVideoAnnotation(clientID: entry.relatedClientID)
+        case .createStepSketchAnnotation:
+            try await stepAnnotationSync.syncLocallyCreatedSketchAnnotation(clientID: entry.relatedClientID)
+        case .createSessionSketchAnnotation:
+            try await sessionAnnotationSync.syncLocallyCreatedSketchAnnotation(clientID: entry.relatedClientID)
         }
     }
 }
 
-/// A plain, `Sendable` snapshot of the fields `OutboxService.replay(_:)` needs — `OutboxEntry`
-/// itself is a SwiftData `@Model`, bound to `OutboxStore`'s own `ModelContext`, so it can't
-/// safely cross to `OutboxService`'s actor the way its own stored properties can.
+/// A plain, `Sendable` snapshot of the fields `OutboxService.replay(_:)` needs.
 struct OutboxEntrySnapshot: Sendable {
     let id: UUID
     let operationType: String
@@ -175,8 +211,7 @@ struct OutboxEntrySnapshot: Sendable {
 
 @ModelActor
 actor OutboxStore {
-    /// Assigns strictly-increasing `sequence` values regardless of `Date()` resolution — see
-    /// `OutboxEntry.sequence`'s doc comment.
+    /// Assigns a strictly-increasing `sequence` value regardless of `Date()` resolution.
     func enqueue(_ entry: OutboxEntry) throws {
         let maxSequence = try modelContext.fetch(
             FetchDescriptor<OutboxEntry>(sortBy: [SortDescriptor(\.sequence, order: .reverse)])

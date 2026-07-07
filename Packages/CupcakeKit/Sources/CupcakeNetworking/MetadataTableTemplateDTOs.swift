@@ -1,4 +1,4 @@
-public struct MetadataTableTemplateDTO: Decodable, Sendable {
+public struct MetadataTableTemplateDTO: Decodable, Sendable, Identifiable {
     public let id: Int64
     public let name: String
     public let description: String?
@@ -7,6 +7,35 @@ public struct MetadataTableTemplateDTO: Decodable, Sendable {
     public let isDefault: Bool
     public let columnCount: Int
     public let labGroup: Int64?
+    public let canEdit: Bool
+    public let canDelete: Bool
+    public let schemaNames: [String]
+
+    public init(
+        id: Int64,
+        name: String,
+        description: String?,
+        ownerUsername: String?,
+        visibility: String,
+        isDefault: Bool,
+        columnCount: Int,
+        labGroup: Int64?,
+        canEdit: Bool,
+        canDelete: Bool,
+        schemaNames: [String]
+    ) {
+        self.id = id
+        self.name = name
+        self.description = description
+        self.ownerUsername = ownerUsername
+        self.visibility = visibility
+        self.isDefault = isDefault
+        self.columnCount = columnCount
+        self.labGroup = labGroup
+        self.canEdit = canEdit
+        self.canDelete = canDelete
+        self.schemaNames = schemaNames
+    }
 }
 
 public struct CreateMetadataTableTemplateRequest: Encodable, Sendable {

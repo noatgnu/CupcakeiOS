@@ -6,11 +6,24 @@ import Testing
 @testable import CupcakeNetworking
 @testable import CupcakeSync
 
-/// One suite, not several — `StubURLProtocol.handler` is shared mutable state, and Swift Testing
-/// parallelizes across *sibling* suites by default even though `.serialized` keeps a single
-/// suite's own tests from racing each other. Splitting these across suites caused exactly that:
-/// one test's response body served to another test's request. All tests touching the stub live
-/// in this one serialized suite instead.
+extension InputStream {
+    /// Drains a request's `httpBodyStream` into `Data`, for inspecting a POST body's actual bytes.
+    func readAllData() -> Data {
+        var result = Data()
+        open()
+        defer { close() }
+        let bufferSize = 4096
+        var buffer = [UInt8](repeating: 0, count: bufferSize)
+        while hasBytesAvailable {
+            let read = self.read(&buffer, maxLength: bufferSize)
+            if read <= 0 { break }
+            result.append(buffer, count: read)
+        }
+        return result
+    }
+}
+
+/// Tests for the `CupcakeSync` services.
 @Suite("CupcakeSync services", .serialized)
 struct SyncServiceTests {
     private func makeInMemoryContainer(for types: [any PersistentModel.Type]) throws -> ModelContainer {
@@ -157,7 +170,6 @@ struct SyncServiceTests {
 
         let container = try makeInMemoryContainer(for: [CachedSession.self, CachedProtocolStep.self, CachedStepAnnotation.self])
         let context = ModelContext(container)
-        // No serverID on either — the standalone-mode case.
         let session = CachedSession(name: "Local Run", enabled: true, isRunning: true, status: "running")
         let step = CachedProtocolStep(stepDescription: "Put on gloves", order: 0)
         context.insert(session)
@@ -177,8 +189,187 @@ struct SyncServiceTests {
         #expect(annotations.first?.stepClientID == step.clientID)
     }
 
-    @Test("uploadAudioAnnotation posts a multipart chunked upload then PATCHes the on-device transcription")
-    func uploadAudioAnnotationUploadsThenPatches() async throws {
+    @Test("createCalculatorAnnotation inserts locally with annotationType calculator, then syncLocallyCreatedCalculatorAnnotation posts annotation_type calculator (not the hardcoded 'text' the sync path used before generalizing)")
+    func createThenSyncCalculatorAnnotationPostsCorrectType() async throws {
+        StubURLProtocol.handler = { request in
+            #expect(request.httpMethod == "POST")
+            #expect(request.url!.path.hasSuffix("/step-annotations"))
+            // `request.httpBody` is nil by transport time; read the stream directly instead.
+            let body = try #require(request.httpBodyStream).readAllData()
+            let sentJSON = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
+            let annotationData = try #require(sentJSON["annotation_data"] as? [String: Any])
+            #expect(annotationData["annotation_type"] as? String == "calculator", "regression check: the sync path must read the stored record's own annotationType, not hardcode \"text\"")
+            let json = Data("""
+            {
+                "id": 101, "session": 7, "step": 10, "annotation": 56,
+                "annotation_text": "[{\\"id\\":\\"calc-1\\",\\"inputPromptFirstValue\\":2,\\"inputPromptSecondValue\\":3,\\"operation\\":\\"+\\",\\"result\\":5,\\"timestamp\\":\\"2026-01-01T00:00:00.000Z\\"}]",
+                "annotation_type": "calculator", "order": 0
+            }
+            """.utf8)
+            let response = HTTPURLResponse(url: request.url!, statusCode: 201, httpVersion: nil, headerFields: nil)!
+            return (response, json)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedSession.self, CachedProtocolStep.self, CachedStepAnnotation.self])
+        let context = ModelContext(container)
+        let session = CachedSession(serverID: 7, name: "Run 1", enabled: true, isRunning: true, status: "running")
+        let step = CachedProtocolStep(serverID: 10, stepDescription: "Put on gloves", order: 0)
+        context.insert(session)
+        context.insert(step)
+        try context.save()
+
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let service = StepAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        let historyJSON = "[{\"id\":\"calc-1\",\"inputPromptFirstValue\":2,\"inputPromptSecondValue\":3,\"operation\":\"+\",\"result\":5,\"timestamp\":\"2026-01-01T00:00:00.000Z\"}]"
+        let clientID = try await service.createCalculatorAnnotation(sessionClientID: session.clientID, stepClientID: step.clientID, historyJSON: historyJSON)
+
+        let beforeSync = try ModelContext(container).fetch(FetchDescriptor<CachedStepAnnotation>(predicate: #Predicate { $0.clientID == clientID }))
+        #expect(beforeSync.first?.annotationType == "calculator")
+        #expect(beforeSync.first?.serverID == nil)
+
+        try await service.syncLocallyCreatedCalculatorAnnotation(clientID: clientID)
+
+        let afterSync = try ModelContext(container).fetch(FetchDescriptor<CachedStepAnnotation>(predicate: #Predicate { $0.clientID == clientID }))
+        #expect(afterSync.first?.serverID == 101)
+        #expect(afterSync.first?.annotationType == "calculator")
+    }
+
+    @Test("createMolarityCalculatorAnnotation inserts locally with annotationType mcalculator, then syncLocallyCreatedMolarityCalculatorAnnotation posts annotation_type mcalculator")
+    func createThenSyncMolarityCalculatorAnnotationPostsCorrectType() async throws {
+        StubURLProtocol.handler = { request in
+            #expect(request.httpMethod == "POST")
+            let body = try #require(request.httpBodyStream).readAllData()
+            let sentJSON = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
+            let annotationData = try #require(sentJSON["annotation_data"] as? [String: Any])
+            #expect(annotationData["annotation_type"] as? String == "mcalculator")
+            let json = Data("""
+            {
+                "id": 102, "session": 7, "step": 10, "annotation": 57,
+                "annotation_text": "[]", "annotation_type": "mcalculator", "order": 0
+            }
+            """.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 201, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedSession.self, CachedProtocolStep.self, CachedStepAnnotation.self])
+        let context = ModelContext(container)
+        let session = CachedSession(serverID: 7, name: "Run 1", enabled: true, isRunning: true, status: "running")
+        let step = CachedProtocolStep(serverID: 10, stepDescription: "Put on gloves", order: 0)
+        context.insert(session)
+        context.insert(step)
+        try context.save()
+
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let service = StepAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        let entry = MolarityHistoryEntry(
+            data: ["concentration": .number(5), "concentrationUnit": .string("mM")],
+            operationType: "dynamic",
+            result: 12.5,
+            calculatedField: "weight"
+        )
+        let historyJSON = String(data: try JSONEncoder().encode([entry]), encoding: .utf8)!
+        let clientID = try await service.createMolarityCalculatorAnnotation(sessionClientID: session.clientID, stepClientID: step.clientID, historyJSON: historyJSON)
+
+        let beforeSync = try ModelContext(container).fetch(FetchDescriptor<CachedStepAnnotation>(predicate: #Predicate { $0.clientID == clientID }))
+        #expect(beforeSync.first?.annotationType == "mcalculator")
+
+        try await service.syncLocallyCreatedMolarityCalculatorAnnotation(clientID: clientID)
+
+        let afterSync = try ModelContext(container).fetch(FetchDescriptor<CachedStepAnnotation>(predicate: #Predicate { $0.clientID == clientID }))
+        #expect(afterSync.first?.serverID == 102)
+    }
+
+    @Test("MolarityHistoryEntry round-trips through JSON with mixed number/string data values, matching the reference app's heterogeneous data dictionary")
+    func molarityHistoryEntryRoundTripsMixedDataTypes() throws {
+        let entry = MolarityHistoryEntry(
+            id: "molarity-1",
+            data: [
+                "concentration": .number(5.5),
+                "concentrationUnit": .string("mM"),
+                "molecularWeight": .null,
+            ],
+            operationType: "dynamic",
+            result: 12.5,
+            timestamp: "2026-01-01T00:00:00.000Z",
+            calculatedField: "weight"
+        )
+        let data = try JSONEncoder().encode(entry)
+        let decoded = try JSONDecoder().decode(MolarityHistoryEntry.self, from: data)
+        #expect(decoded.data["concentration"]?.doubleValue == 5.5)
+        #expect(decoded.data["concentrationUnit"]?.stringValue == "mM")
+        #expect(decoded.data["molecularWeight"] == .null)
+        #expect(decoded.operationType == "dynamic")
+        #expect(decoded.calculatedField == "weight")
+    }
+
+    @Test("createBookingAnnotation makes the 3-call sequence in order (instrument-usage -> step-annotations -> instrument-usage-step-annotations) and inserts a locally-synced record")
+    func createBookingAnnotationMakesThreeCallsInOrder() async throws {
+        nonisolated(unsafe) var callOrder: [String] = []
+        StubURLProtocol.handler = { request in
+            let path = request.url!.path
+            if path.hasSuffix("/instrument-usage") {
+                callOrder.append("instrument-usage")
+                let json = Data("""
+                {"id": 40, "user": 1, "user_username": "testuser", "instrument": 5, "instrument_name": "Centrifuge",
+                 "time_started": "2026-07-11T10:00:00Z", "time_ended": "2026-07-11T12:00:00Z", "usage_hours": "2.00",
+                 "description": "Spin down", "approved": true, "maintenance": false, "approved_by": null,
+                 "remote_id": null, "remote_host": null, "created_at": "2026-07-11T10:00:00Z", "updated_at": "2026-07-11T10:00:00Z"}
+                """.utf8)
+                return (HTTPURLResponse(url: request.url!, statusCode: 201, httpVersion: nil, headerFields: nil)!, json)
+            }
+            if path.hasSuffix("/step-annotations") {
+                callOrder.append("step-annotations")
+                let body = try #require(request.httpBodyStream).readAllData()
+                let sentJSON = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
+                let annotationData = try #require(sentJSON["annotation_data"] as? [String: Any])
+                #expect(annotationData["annotation_type"] as? String == "booking")
+                #expect(annotationData["annotation"] as? String == "Instrument booking: Centrifuge")
+                let json = Data("""
+                {"id": 60, "session": 7, "step": 10, "annotation": 61,
+                 "annotation_text": "Instrument booking: Centrifuge", "annotation_type": "booking", "order": 0}
+                """.utf8)
+                return (HTTPURLResponse(url: request.url!, statusCode: 201, httpVersion: nil, headerFields: nil)!, json)
+            }
+            #expect(path.hasSuffix("/instrument-usage-step-annotations"))
+            callOrder.append("instrument-usage-step-annotations")
+            let body = try #require(request.httpBodyStream).readAllData()
+            let sentJSON = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
+            #expect(sentJSON["step_annotation"] as? Int64 == 60)
+            #expect(sentJSON["instrument_usage"] as? Int64 == 40)
+            let json = Data("""
+            {"id": 1, "step_annotation": 60, "instrument_usage": 40}
+            """.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 201, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedSession.self, CachedProtocolStep.self, CachedStepAnnotation.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let service = StepAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        let clientID = try await service.createBookingAnnotation(
+            sessionServerID: 7,
+            sessionClientID: UUID(),
+            stepServerID: 10,
+            stepClientID: UUID(),
+            instrumentServerID: 5,
+            instrumentName: "Centrifuge",
+            timeStarted: "2026-07-11T10:00:00Z",
+            timeEnded: "2026-07-11T12:00:00Z",
+            usageDescription: "Spin down"
+        )
+
+        #expect(callOrder == ["instrument-usage", "step-annotations", "instrument-usage-step-annotations"])
+
+        let annotations = try ModelContext(container).fetch(FetchDescriptor<CachedStepAnnotation>(predicate: #Predicate { $0.clientID == clientID }))
+        #expect(annotations.first?.serverID == 60)
+        #expect(annotations.first?.annotationType == "booking")
+        #expect(annotations.first?.instrumentUsageServerID == 40)
+    }
+
+    @Test("createAudioAnnotation inserts a local record with no network call, then syncLocallyCreatedAudioAnnotation uploads and PATCHes it")
+    func createThenSyncAudioAnnotationUploadsAndPatches() async throws {
         StubURLProtocol.handler = { request in
             if request.url!.path.hasSuffix("/upload/step-annotation-chunks") {
                 #expect(request.value(forHTTPHeaderField: "Content-Type")?.hasPrefix("multipart/form-data") == true)
@@ -198,6 +389,13 @@ struct SyncServiceTests {
         }
 
         let container = try makeInMemoryContainer(for: [CachedSession.self, CachedProtocolStep.self, CachedStepAnnotation.self])
+        let context = ModelContext(container)
+        let session = CachedSession(serverID: 7, name: "Run 1", enabled: true, isRunning: true, status: "running")
+        let step = CachedProtocolStep(serverID: 10, stepDescription: "Put on gloves", order: 0)
+        context.insert(session)
+        context.insert(step)
+        try context.save()
+
         let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
         let service = StepAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
 
@@ -205,20 +403,540 @@ struct SyncServiceTests {
         try Data([0x00, 0x01, 0x02]).write(to: tempFile)
         defer { try? FileManager.default.removeItem(at: tempFile) }
 
-        let clientID = try await service.uploadAudioAnnotation(
-            sessionServerID: 7,
-            stepServerID: 10,
-            sessionClientID: UUID(),
-            stepClientID: UUID(),
-            fileURL: tempFile,
+        let clientID = try await service.createAudioAnnotation(
+            sessionClientID: session.clientID,
+            stepClientID: step.clientID,
+            recordedFileURL: tempFile,
             transcription: "Gloves are on.",
             language: "en-US",
             translation: nil
         )
 
-        let inserted = try ModelContext(container).fetch(FetchDescriptor<CachedStepAnnotation>(predicate: #Predicate { $0.clientID == clientID }))
-        #expect(inserted.first?.serverID == 300)
-        #expect(inserted.first?.transcription == "Gloves are on.")
+        let beforeSync = try ModelContext(container).fetch(FetchDescriptor<CachedStepAnnotation>(predicate: #Predicate { $0.clientID == clientID }))
+        #expect(beforeSync.first?.serverID == nil, "createAudioAnnotation should insert locally with no serverID yet, before any network call")
+        #expect(beforeSync.first?.pendingFileName != nil)
+
+        try await service.syncLocallyCreatedAudioAnnotation(clientID: clientID)
+
+        let afterSync = try ModelContext(container).fetch(FetchDescriptor<CachedStepAnnotation>(predicate: #Predicate { $0.clientID == clientID }))
+        #expect(afterSync.first?.serverID == 300)
+        #expect(afterSync.first?.transcription == "Gloves are on.")
+        #expect(afterSync.first?.pendingFileName == nil, "the persisted audio file reference should be cleared once synced")
+    }
+
+    @Test("SessionAnnotationSyncService: createAudioAnnotation inserts a local record with no network call, then syncLocallyCreatedAudioAnnotation uploads and PATCHes it")
+    func sessionCreateThenSyncAudioAnnotationUploadsAndPatches() async throws {
+        StubURLProtocol.handler = { request in
+            if request.url!.path.hasSuffix("/upload/session-annotation-chunks") {
+                #expect(request.value(forHTTPHeaderField: "Content-Type")?.hasPrefix("multipart/form-data") == true)
+                let json = Data("""
+                {"annotation_id": 400, "session_annotation_id": 500, "message": "ok"}
+                """.utf8)
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+            }
+            #expect(request.url!.path.hasSuffix("/session-annotations/500"))
+            #expect(request.httpMethod == "PATCH")
+            let json = Data("""
+            {"id": 500, "session": 7, "annotation_text": "", "annotation_type": "audio", "order": 0}
+            """.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedSession.self, CachedSessionAnnotation.self])
+        let context = ModelContext(container)
+        let session = CachedSession(serverID: 7, name: "Run 1", enabled: true, isRunning: true, status: "running")
+        context.insert(session)
+        try context.save()
+
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let service = SessionAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        let tempFile = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).m4a")
+        try Data([0x00, 0x01, 0x02]).write(to: tempFile)
+        defer { try? FileManager.default.removeItem(at: tempFile) }
+
+        let clientID = try await service.createAudioAnnotation(
+            sessionClientID: session.clientID,
+            recordedFileURL: tempFile,
+            transcription: "Session note.",
+            language: "en-US",
+            translation: nil
+        )
+
+        let beforeSync = try ModelContext(container).fetch(FetchDescriptor<CachedSessionAnnotation>(predicate: #Predicate { $0.clientID == clientID }))
+        #expect(beforeSync.first?.serverID == nil)
+
+        try await service.syncLocallyCreatedAudioAnnotation(clientID: clientID)
+
+        let afterSync = try ModelContext(container).fetch(FetchDescriptor<CachedSessionAnnotation>(predicate: #Predicate { $0.clientID == clientID }))
+        #expect(afterSync.first?.serverID == 500)
+        #expect(afterSync.first?.transcription == "Session note.")
+        #expect(afterSync.first?.pendingFileName == nil)
+    }
+
+    @Test("createImageAnnotation inserts a local record with no network call, then syncLocallyCreatedImageAnnotation uploads it with annotation_type=image")
+    func createThenSyncImageAnnotationUploads() async throws {
+        StubURLProtocol.handler = { request in
+            #expect(request.url!.path.hasSuffix("/upload/step-annotation-chunks"))
+            #expect(request.value(forHTTPHeaderField: "Content-Type")?.hasPrefix("multipart/form-data") == true)
+            let json = Data("""
+            {"annotation_id": 200, "step_annotation_id": 300, "message": "ok"}
+            """.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedSession.self, CachedProtocolStep.self, CachedStepAnnotation.self])
+        let context = ModelContext(container)
+        let session = CachedSession(serverID: 7, name: "Run 1", enabled: true, isRunning: true, status: "running")
+        let step = CachedProtocolStep(serverID: 10, stepDescription: "Put on gloves", order: 0)
+        context.insert(session)
+        context.insert(step)
+        try context.save()
+
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let service = StepAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        let clientID = try await service.createImageAnnotation(
+            sessionClientID: session.clientID,
+            stepClientID: step.clientID,
+            imageData: Data([0xFF, 0xD8, 0xFF])
+        )
+
+        let beforeSync = try ModelContext(container).fetch(FetchDescriptor<CachedStepAnnotation>(predicate: #Predicate { $0.clientID == clientID }))
+        #expect(beforeSync.first?.serverID == nil, "createImageAnnotation should insert locally with no serverID yet, before any network call")
+        #expect(beforeSync.first?.annotationType == "image")
+        #expect(beforeSync.first?.pendingFileName != nil)
+
+        try await service.syncLocallyCreatedImageAnnotation(clientID: clientID)
+
+        let afterSync = try ModelContext(container).fetch(FetchDescriptor<CachedStepAnnotation>(predicate: #Predicate { $0.clientID == clientID }))
+        #expect(afterSync.first?.serverID == 300)
+        #expect(afterSync.first?.pendingFileName == nil, "the persisted image file reference should be cleared once synced")
+    }
+
+    @Test("SessionAnnotationSyncService: createImageAnnotation inserts a local record, then syncLocallyCreatedImageAnnotation uploads it")
+    func sessionCreateThenSyncImageAnnotationUploads() async throws {
+        StubURLProtocol.handler = { request in
+            #expect(request.url!.path.hasSuffix("/upload/session-annotation-chunks"))
+            let json = Data("""
+            {"annotation_id": 400, "session_annotation_id": 500, "message": "ok"}
+            """.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedSession.self, CachedSessionAnnotation.self])
+        let context = ModelContext(container)
+        let session = CachedSession(serverID: 7, name: "Run 1", enabled: true, isRunning: true, status: "running")
+        context.insert(session)
+        try context.save()
+
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let service = SessionAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        let clientID = try await service.createImageAnnotation(sessionClientID: session.clientID, imageData: Data([0xFF, 0xD8, 0xFF]))
+
+        let beforeSync = try ModelContext(container).fetch(FetchDescriptor<CachedSessionAnnotation>(predicate: #Predicate { $0.clientID == clientID }))
+        #expect(beforeSync.first?.serverID == nil)
+        #expect(beforeSync.first?.annotationType == "image")
+
+        try await service.syncLocallyCreatedImageAnnotation(clientID: clientID)
+
+        let afterSync = try ModelContext(container).fetch(FetchDescriptor<CachedSessionAnnotation>(predicate: #Predicate { $0.clientID == clientID }))
+        #expect(afterSync.first?.serverID == 500)
+        #expect(afterSync.first?.pendingFileName == nil)
+    }
+
+    @Test("createVideoAnnotation inserts a local record with no network call, then syncLocallyCreatedVideoAnnotation uploads it with annotation_type=video and a MIME type derived from its extension")
+    func createThenSyncVideoAnnotationUploads() async throws {
+        StubURLProtocol.handler = { request in
+            #expect(request.url!.path.hasSuffix("/upload/step-annotation-chunks"))
+            #expect(request.value(forHTTPHeaderField: "Content-Type")?.hasPrefix("multipart/form-data") == true)
+            let json = Data("""
+            {"annotation_id": 200, "step_annotation_id": 300, "message": "ok"}
+            """.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedSession.self, CachedProtocolStep.self, CachedStepAnnotation.self])
+        let context = ModelContext(container)
+        let session = CachedSession(serverID: 7, name: "Run 1", enabled: true, isRunning: true, status: "running")
+        let step = CachedProtocolStep(serverID: 10, stepDescription: "Put on gloves", order: 0)
+        context.insert(session)
+        context.insert(step)
+        try context.save()
+
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let service = StepAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        let clientID = try await service.createVideoAnnotation(
+            sessionClientID: session.clientID,
+            stepClientID: step.clientID,
+            videoData: Data([0x00, 0x00, 0x00, 0x18]),
+            fileExtension: "mov"
+        )
+
+        let beforeSync = try ModelContext(container).fetch(FetchDescriptor<CachedStepAnnotation>(predicate: #Predicate { $0.clientID == clientID }))
+        #expect(beforeSync.first?.serverID == nil, "createVideoAnnotation should insert locally with no serverID yet, before any network call")
+        #expect(beforeSync.first?.annotationType == "video")
+        #expect(beforeSync.first?.pendingFileName?.hasSuffix(".mov") == true)
+
+        try await service.syncLocallyCreatedVideoAnnotation(clientID: clientID)
+
+        let afterSync = try ModelContext(container).fetch(FetchDescriptor<CachedStepAnnotation>(predicate: #Predicate { $0.clientID == clientID }))
+        #expect(afterSync.first?.serverID == 300)
+        #expect(afterSync.first?.pendingFileName == nil, "the persisted video file reference should be cleared once synced")
+    }
+
+    @Test("SessionAnnotationSyncService: createVideoAnnotation inserts a local record, then syncLocallyCreatedVideoAnnotation uploads it")
+    func sessionCreateThenSyncVideoAnnotationUploads() async throws {
+        StubURLProtocol.handler = { request in
+            #expect(request.url!.path.hasSuffix("/upload/session-annotation-chunks"))
+            let json = Data("""
+            {"annotation_id": 400, "session_annotation_id": 500, "message": "ok"}
+            """.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedSession.self, CachedSessionAnnotation.self])
+        let context = ModelContext(container)
+        let session = CachedSession(serverID: 7, name: "Run 1", enabled: true, isRunning: true, status: "running")
+        context.insert(session)
+        try context.save()
+
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let service = SessionAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        let clientID = try await service.createVideoAnnotation(
+            sessionClientID: session.clientID,
+            videoData: Data([0x00, 0x00, 0x00, 0x18]),
+            fileExtension: "mp4"
+        )
+
+        let beforeSync = try ModelContext(container).fetch(FetchDescriptor<CachedSessionAnnotation>(predicate: #Predicate { $0.clientID == clientID }))
+        #expect(beforeSync.first?.serverID == nil)
+        #expect(beforeSync.first?.annotationType == "video")
+
+        try await service.syncLocallyCreatedVideoAnnotation(clientID: clientID)
+
+        let afterSync = try ModelContext(container).fetch(FetchDescriptor<CachedSessionAnnotation>(predicate: #Predicate { $0.clientID == clientID }))
+        #expect(afterSync.first?.serverID == 500)
+        #expect(afterSync.first?.pendingFileName == nil)
+    }
+
+    @Test("StepAnnotationSyncService: createSketchAnnotation inserts a local record, then syncLocallyCreatedSketchAnnotation uploads it")
+    func createThenSyncSketchAnnotationUploads() async throws {
+        StubURLProtocol.handler = { request in
+            #expect(request.url!.path.hasSuffix("/upload/step-annotation-chunks"))
+            #expect(request.value(forHTTPHeaderField: "Content-Type")?.hasPrefix("multipart/form-data") == true)
+            let json = Data("""
+            {"annotation_id": 201, "step_annotation_id": 301, "message": "ok"}
+            """.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedSession.self, CachedProtocolStep.self, CachedStepAnnotation.self])
+        let context = ModelContext(container)
+        let session = CachedSession(serverID: 7, name: "Run 1", enabled: true, isRunning: true, status: "running")
+        let step = CachedProtocolStep(serverID: 10, stepDescription: "Put on gloves", order: 0)
+        context.insert(session)
+        context.insert(step)
+        try context.save()
+
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let service = StepAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        let clientID = try await service.createSketchAnnotation(
+            sessionClientID: session.clientID,
+            stepClientID: step.clientID,
+            sketchData: Data("{}".utf8)
+        )
+
+        let beforeSync = try ModelContext(container).fetch(FetchDescriptor<CachedStepAnnotation>(predicate: #Predicate { $0.clientID == clientID }))
+        #expect(beforeSync.first?.serverID == nil, "createSketchAnnotation should insert locally with no serverID yet, before any network call")
+        #expect(beforeSync.first?.annotationType == "sketch")
+        #expect(beforeSync.first?.pendingFileName?.hasSuffix(".json") == true)
+
+        try await service.syncLocallyCreatedSketchAnnotation(clientID: clientID)
+
+        let afterSync = try ModelContext(container).fetch(FetchDescriptor<CachedStepAnnotation>(predicate: #Predicate { $0.clientID == clientID }))
+        #expect(afterSync.first?.serverID == 301)
+        #expect(afterSync.first?.pendingFileName == nil, "the persisted sketch file reference should be cleared once synced")
+    }
+
+    @Test("SessionAnnotationSyncService: createSketchAnnotation inserts a local record, then syncLocallyCreatedSketchAnnotation uploads it")
+    func sessionCreateThenSyncSketchAnnotationUploads() async throws {
+        StubURLProtocol.handler = { request in
+            #expect(request.url!.path.hasSuffix("/upload/session-annotation-chunks"))
+            let json = Data("""
+            {"annotation_id": 401, "session_annotation_id": 501, "message": "ok"}
+            """.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedSession.self, CachedSessionAnnotation.self])
+        let context = ModelContext(container)
+        let session = CachedSession(serverID: 7, name: "Run 1", enabled: true, isRunning: true, status: "running")
+        context.insert(session)
+        try context.save()
+
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let service = SessionAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        let clientID = try await service.createSketchAnnotation(
+            sessionClientID: session.clientID,
+            sketchData: Data("{}".utf8)
+        )
+
+        let beforeSync = try ModelContext(container).fetch(FetchDescriptor<CachedSessionAnnotation>(predicate: #Predicate { $0.clientID == clientID }))
+        #expect(beforeSync.first?.serverID == nil)
+        #expect(beforeSync.first?.annotationType == "sketch")
+
+        try await service.syncLocallyCreatedSketchAnnotation(clientID: clientID)
+
+        let afterSync = try ModelContext(container).fetch(FetchDescriptor<CachedSessionAnnotation>(predicate: #Predicate { $0.clientID == clientID }))
+        #expect(afterSync.first?.serverID == 501)
+        #expect(afterSync.first?.pendingFileName == nil)
+    }
+
+    @Test("StepAnnotationSyncService: setScratched PATCHes scratched and updates the local record")
+    func stepAnnotationSetScratchedUpdatesLocally() async throws {
+        StubURLProtocol.handler = { request in
+            #expect(request.httpMethod == "PATCH")
+            #expect(request.url!.path.hasSuffix("/step-annotations/55"))
+            let json = Data("""
+            {"id": 55, "session": 7, "step": 10, "annotation": 200, "annotation_text": "Gloves on", "annotation_type": "text", "order": 0, "scratched": true}
+            """.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedSession.self, CachedProtocolStep.self, CachedStepAnnotation.self])
+        let context = ModelContext(container)
+        let session = CachedSession(serverID: 7, name: "Run 1", enabled: true, isRunning: true, status: "running")
+        let step = CachedProtocolStep(serverID: 10, stepDescription: "Put on gloves", order: 0)
+        let annotation = CachedStepAnnotation(serverID: 55, sessionClientID: session.clientID, stepClientID: step.clientID, annotationText: "Gloves on", annotationType: "text")
+        context.insert(session)
+        context.insert(step)
+        context.insert(annotation)
+        try context.save()
+
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let service = StepAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        try await service.setScratched(clientID: annotation.clientID, scratched: true)
+
+        let annotationClientID = annotation.clientID
+        let refetched = try ModelContext(container).fetch(FetchDescriptor<CachedStepAnnotation>(predicate: #Predicate { $0.clientID == annotationClientID }))
+        #expect(refetched.first?.scratched == true)
+    }
+
+    @Test("StepAnnotationSyncService: deleteAnnotation DELETEs and removes the local record")
+    func stepAnnotationDeleteRemovesLocally() async throws {
+        StubURLProtocol.handler = { request in
+            #expect(request.httpMethod == "DELETE")
+            #expect(request.url!.path.hasSuffix("/step-annotations/55"))
+            return (HTTPURLResponse(url: request.url!, statusCode: 204, httpVersion: nil, headerFields: nil)!, Data())
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedSession.self, CachedProtocolStep.self, CachedStepAnnotation.self])
+        let context = ModelContext(container)
+        let session = CachedSession(serverID: 7, name: "Run 1", enabled: true, isRunning: true, status: "running")
+        let step = CachedProtocolStep(serverID: 10, stepDescription: "Put on gloves", order: 0)
+        let annotation = CachedStepAnnotation(serverID: 55, sessionClientID: session.clientID, stepClientID: step.clientID, annotationText: "Gloves on", annotationType: "text")
+        context.insert(session)
+        context.insert(step)
+        context.insert(annotation)
+        try context.save()
+
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let service = StepAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        try await service.deleteAnnotation(clientID: annotation.clientID)
+
+        let annotationClientID = annotation.clientID
+        let refetched = try ModelContext(container).fetch(FetchDescriptor<CachedStepAnnotation>(predicate: #Predicate { $0.clientID == annotationClientID }))
+        #expect(refetched.isEmpty)
+    }
+
+    @Test("SessionAnnotationSyncService: setScratched PATCHes scratched and updates the local record")
+    func sessionAnnotationSetScratchedUpdatesLocally() async throws {
+        StubURLProtocol.handler = { request in
+            #expect(request.httpMethod == "PATCH")
+            #expect(request.url!.path.hasSuffix("/session-annotations/66"))
+            let json = Data("""
+            {"id": 66, "session": 7, "annotation_text": "Note", "annotation_type": "text", "order": 0, "scratched": true}
+            """.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedSession.self, CachedSessionAnnotation.self])
+        let context = ModelContext(container)
+        let session = CachedSession(serverID: 7, name: "Run 1", enabled: true, isRunning: true, status: "running")
+        let annotation = CachedSessionAnnotation(serverID: 66, sessionClientID: session.clientID, annotationText: "Note", annotationType: "text")
+        context.insert(session)
+        context.insert(annotation)
+        try context.save()
+
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let service = SessionAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        try await service.setScratched(clientID: annotation.clientID, scratched: true)
+
+        let annotationClientID = annotation.clientID
+        let refetched = try ModelContext(container).fetch(FetchDescriptor<CachedSessionAnnotation>(predicate: #Predicate { $0.clientID == annotationClientID }))
+        #expect(refetched.first?.scratched == true)
+    }
+
+    @Test("SessionAnnotationSyncService: deleteAnnotation DELETEs and removes the local record")
+    func sessionAnnotationDeleteRemovesLocally() async throws {
+        StubURLProtocol.handler = { request in
+            #expect(request.httpMethod == "DELETE")
+            #expect(request.url!.path.hasSuffix("/session-annotations/66"))
+            return (HTTPURLResponse(url: request.url!, statusCode: 204, httpVersion: nil, headerFields: nil)!, Data())
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedSession.self, CachedSessionAnnotation.self])
+        let context = ModelContext(container)
+        let session = CachedSession(serverID: 7, name: "Run 1", enabled: true, isRunning: true, status: "running")
+        let annotation = CachedSessionAnnotation(serverID: 66, sessionClientID: session.clientID, annotationText: "Note", annotationType: "text")
+        context.insert(session)
+        context.insert(annotation)
+        try context.save()
+
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let service = SessionAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        try await service.deleteAnnotation(clientID: annotation.clientID)
+
+        let annotationClientID = annotation.clientID
+        let refetched = try ModelContext(container).fetch(FetchDescriptor<CachedSessionAnnotation>(predicate: #Predicate { $0.clientID == annotationClientID }))
+        #expect(refetched.isEmpty)
+    }
+
+    @Test("StepAnnotationSyncService: downloadFile fetches a fresh detail record, then downloads the file's bytes and suggested filename")
+    func stepAnnotationDownloadFileFetchesDetailThenBytes() async throws {
+        StubURLProtocol.handler = { request in
+            if request.url!.path.hasSuffix("/step-annotations/55") {
+                let json = Data("""
+                {"id": 55, "session": 7, "step": 10, "annotation": 200, "annotation_text": "Uploaded file: tiny.jpg", "annotation_type": "image", "order": 0, "scratched": false, "file_url": "https://example.test/api/v1/annotations/200/download/?token=abc"}
+                """.utf8)
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+            }
+            let headers = ["Content-Disposition": "attachment; filename=\"tiny.jpg\""]
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: headers)!, Data([0xFF, 0xD8, 0xFF]))
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedSession.self, CachedProtocolStep.self, CachedStepAnnotation.self])
+        let context = ModelContext(container)
+        let session = CachedSession(serverID: 7, name: "Run 1", enabled: true, isRunning: true, status: "running")
+        let step = CachedProtocolStep(serverID: 10, stepDescription: "Put on gloves", order: 0)
+        let annotation = CachedStepAnnotation(serverID: 55, sessionClientID: session.clientID, stepClientID: step.clientID, annotationText: "Uploaded file: tiny.jpg", annotationType: "image")
+        context.insert(session)
+        context.insert(step)
+        context.insert(annotation)
+        try context.save()
+
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let service = StepAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        let result = try await service.downloadFile(clientID: annotation.clientID)
+        #expect(result.data == Data([0xFF, 0xD8, 0xFF]))
+        #expect(result.suggestedFilename == "tiny.jpg")
+    }
+
+    @Test("SessionAnnotationSyncService: downloadFile fetches a fresh detail record, then downloads the file's bytes and suggested filename")
+    func sessionAnnotationDownloadFileFetchesDetailThenBytes() async throws {
+        StubURLProtocol.handler = { request in
+            if request.url!.path.hasSuffix("/session-annotations/66") {
+                let json = Data("""
+                {"id": 66, "session": 7, "annotation_text": "Uploaded file: tiny_sketch.json", "annotation_type": "sketch", "order": 0, "scratched": false, "file_url": "https://example.test/api/v1/annotations/300/download/?token=xyz"}
+                """.utf8)
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+            }
+            let headers = ["Content-Disposition": "attachment; filename=\"tiny_sketch.json\""]
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: headers)!, Data("{}".utf8))
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedSession.self, CachedSessionAnnotation.self])
+        let context = ModelContext(container)
+        let session = CachedSession(serverID: 7, name: "Run 1", enabled: true, isRunning: true, status: "running")
+        let annotation = CachedSessionAnnotation(serverID: 66, sessionClientID: session.clientID, annotationText: "Uploaded file: tiny_sketch.json", annotationType: "sketch")
+        context.insert(session)
+        context.insert(annotation)
+        try context.save()
+
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let service = SessionAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        let result = try await service.downloadFile(clientID: annotation.clientID)
+        #expect(result.data == Data("{}".utf8))
+        #expect(result.suggestedFilename == "tiny_sketch.json")
+    }
+
+    @Test("StepAnnotationSyncService: refreshTranscription updates the cached record from a fresh GET")
+    func stepAnnotationRefreshTranscriptionUpdatesCache() async throws {
+        StubURLProtocol.handler = { request in
+            let json = Data("""
+            {"id": 55, "session": 7, "step": 10, "annotation": 200, "annotation_text": "note", "annotation_type": "audio", "order": 0, "scratched": false, "transcription": "hello world", "language": "en", "translation": null}
+            """.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedSession.self, CachedProtocolStep.self, CachedStepAnnotation.self])
+        let context = ModelContext(container)
+        let session = CachedSession(serverID: 7, name: "Run 1", enabled: true, isRunning: true, status: "running")
+        let step = CachedProtocolStep(serverID: 10, stepDescription: "Put on gloves", order: 0)
+        let annotation = CachedStepAnnotation(serverID: 55, sessionClientID: session.clientID, stepClientID: step.clientID, annotationText: "note", annotationType: "audio")
+        context.insert(session)
+        context.insert(step)
+        context.insert(annotation)
+        try context.save()
+
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let service = StepAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        let applied = try await service.refreshTranscription(serverID: 55)
+        #expect(applied)
+
+        let refetched = try context.fetch(FetchDescriptor<CachedStepAnnotation>()).first
+        #expect(refetched?.transcription == "hello world")
+        #expect(refetched?.language == "en")
+    }
+
+    @Test("StepAnnotationSyncService: refreshTranscription no-ops for an unknown server ID")
+    func stepAnnotationRefreshTranscriptionNoOpsForUnknownID() async throws {
+        let container = try makeInMemoryContainer(for: [CachedSession.self, CachedProtocolStep.self, CachedStepAnnotation.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let service = StepAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        let applied = try await service.refreshTranscription(serverID: 999)
+        #expect(!applied)
+    }
+
+    @Test("SessionAnnotationSyncService: refreshTranscription updates the cached record from a fresh GET")
+    func sessionAnnotationRefreshTranscriptionUpdatesCache() async throws {
+        StubURLProtocol.handler = { request in
+            let json = Data("""
+            {"id": 66, "session": 7, "annotation_text": "note", "annotation_type": "audio", "order": 0, "scratched": false, "transcription": "hi there", "language": "en", "translation": null}
+            """.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedSession.self, CachedSessionAnnotation.self])
+        let context = ModelContext(container)
+        let session = CachedSession(serverID: 7, name: "Run 1", enabled: true, isRunning: true, status: "running")
+        let annotation = CachedSessionAnnotation(serverID: 66, sessionClientID: session.clientID, annotationText: "note", annotationType: "audio")
+        context.insert(session)
+        context.insert(annotation)
+        try context.save()
+
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let service = SessionAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        let applied = try await service.refreshTranscription(serverID: 66)
+        #expect(applied)
+
+        let refetched = try context.fetch(FetchDescriptor<CachedSessionAnnotation>()).first
+        #expect(refetched?.transcription == "hi there")
     }
 
     @Test("InventorySyncService refetches storage objects, reagents, and stored reagents")
@@ -249,6 +967,34 @@ struct SyncServiceTests {
         #expect(try context.fetch(FetchDescriptor<CachedStorageObject>()).first?.objectName == "Freezer A")
         #expect(try context.fetch(FetchDescriptor<CachedReagent>()).first?.name == "NaCl")
         #expect(try context.fetch(FetchDescriptor<CachedStoredReagent>()).first?.currentQuantity == 87.5)
+    }
+
+    @Test("InventorySyncService.searchStoredReagentsWithMolecularWeight hits stored-reagents with search + molecular_weight__isnull=false, and returns [] under the 2-character minimum without a network call")
+    func searchStoredReagentsWithMolecularWeightSendsCorrectQuery() async throws {
+        StubURLProtocol.handler = { request in
+            #expect(request.url!.path.hasSuffix("/stored-reagents"))
+            let query = request.url!.query ?? ""
+            #expect(query.contains("search=NaOH"))
+            #expect(query.contains("molecular_weight__isnull=false"))
+            #expect(query.contains("limit=10"))
+            let json = Data(#"""
+            {"count":1,"next":null,"previous":null,"results":[{"id":2,"reagent":1,"reagent_name":"NaOH","reagent_unit":"mL","storage_object":null,"quantity":10.0,"current_quantity":10.0,"barcode":null,"expiration_date":null,"low_stock_threshold":null,"molecular_weight":"40.0000"}]}
+            """#.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedStorageObject.self, CachedReagent.self, CachedStoredReagent.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let service = InventorySyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        let results = try await service.searchStoredReagentsWithMolecularWeight(search: "NaOH")
+        #expect(results.count == 1)
+        #expect(results.first?.reagentName == "NaOH")
+        #expect(results.first?.molecularWeight == "40.0000")
+
+        // Under the 2-character minimum: no network call at all.
+        let shortResults = try await service.searchStoredReagentsWithMolecularWeight(search: "N")
+        #expect(shortResults.isEmpty)
     }
 
     @Test("InstrumentSyncService refetches instruments and instrument usage")
@@ -396,7 +1142,8 @@ struct SyncServiceTests {
         let instrumentSync = InstrumentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
         let projectSync = ProjectSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
         let instrumentJobSync = InstrumentJobSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
-        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync, projectSync: projectSync, instrumentJobSync: instrumentJobSync)
+        let sessionAnnotationSync = SessionAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, sessionAnnotationSync: sessionAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync, projectSync: projectSync, instrumentJobSync: instrumentJobSync)
 
         let context = ModelContext(container)
         let localProtocol = CachedProtocol(protocolTitle: "Sample Prep", protocolDescription: nil, enabled: false, isLocallyAuthored: true)
@@ -441,7 +1188,8 @@ struct SyncServiceTests {
         let instrumentSync = InstrumentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
         let projectSync = ProjectSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
         let instrumentJobSync = InstrumentJobSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
-        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync, projectSync: projectSync, instrumentJobSync: instrumentJobSync)
+        let sessionAnnotationSync = SessionAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, sessionAnnotationSync: sessionAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync, projectSync: projectSync, instrumentJobSync: instrumentJobSync)
 
         let context = ModelContext(container)
         let localProtocol = CachedProtocol(protocolTitle: "Sample Prep", protocolDescription: nil, enabled: false, isLocallyAuthored: true)
@@ -450,7 +1198,6 @@ struct SyncServiceTests {
         context.insert(localSection)
         try context.save()
 
-        // Enqueued in creation order — the protocol first, then the section that depends on it.
         try await outbox.enqueueCreateProtocol(clientID: localProtocol.clientID, title: "Sample Prep", description: nil, enabled: false)
         try await outbox.enqueueCreateSection(clientID: localSection.clientID)
         await outbox.replayPending()
@@ -481,7 +1228,8 @@ struct SyncServiceTests {
         let instrumentSync = InstrumentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
         let projectSync = ProjectSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
         let instrumentJobSync = InstrumentJobSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
-        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync, projectSync: projectSync, instrumentJobSync: instrumentJobSync)
+        let sessionAnnotationSync = SessionAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, sessionAnnotationSync: sessionAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync, projectSync: projectSync, instrumentJobSync: instrumentJobSync)
 
         let context = ModelContext(container)
         let localProtocol = CachedProtocol(protocolTitle: "Sample Prep", protocolDescription: nil, enabled: false, isLocallyAuthored: true)
@@ -490,11 +1238,6 @@ struct SyncServiceTests {
         context.insert(localSection)
         try context.save()
 
-        // Only the section's entry is queued (simulating: its own creation attempt failed and
-        // got queued, but for whatever reason the protocol's own entry isn't there — e.g. it
-        // synced in a previous, separate replay pass that this test doesn't model). The
-        // dependency check must still key off the *local* protocol record's current serverID,
-        // which is nil here, not assume the protocol is fine just because it has no entry.
         try await outbox.enqueueCreateSection(clientID: localSection.clientID)
         await outbox.replayPending()
 
@@ -523,7 +1266,8 @@ struct SyncServiceTests {
         let instrumentSync = InstrumentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
         let projectSync = ProjectSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
         let instrumentJobSync = InstrumentJobSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
-        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync, projectSync: projectSync, instrumentJobSync: instrumentJobSync)
+        let sessionAnnotationSync = SessionAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, sessionAnnotationSync: sessionAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync, projectSync: projectSync, instrumentJobSync: instrumentJobSync)
 
         let context = ModelContext(container)
         let localProtocol = CachedProtocol(protocolTitle: "Sample Prep", protocolDescription: nil, enabled: false, isLocallyAuthored: true)
@@ -569,12 +1313,13 @@ struct SyncServiceTests {
         let instrumentSync = InstrumentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
         let projectSync = ProjectSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
         let instrumentJobSync = InstrumentJobSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
-        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync, projectSync: projectSync, instrumentJobSync: instrumentJobSync)
+        let sessionAnnotationSync = SessionAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, sessionAnnotationSync: sessionAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync, projectSync: projectSync, instrumentJobSync: instrumentJobSync)
 
         let context = ModelContext(container)
         let localProtocol = CachedProtocol(protocolTitle: "Sample Prep", protocolDescription: nil, enabled: false, isLocallyAuthored: true)
         context.insert(localProtocol)
-        let localSession = CachedSession(name: "Run 1", enabled: true, isRunning: true, status: "running", primaryProtocolClientID: localProtocol.clientID)
+        let localSession = CachedSession(name: "Run 1", enabled: true, isRunning: true, status: "running", protocolClientIDs: [localProtocol.clientID])
         context.insert(localSession)
         try context.save()
 
@@ -605,12 +1350,13 @@ struct SyncServiceTests {
         let instrumentSync = InstrumentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
         let projectSync = ProjectSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
         let instrumentJobSync = InstrumentJobSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
-        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync, projectSync: projectSync, instrumentJobSync: instrumentJobSync)
+        let sessionAnnotationSync = SessionAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, sessionAnnotationSync: sessionAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync, projectSync: projectSync, instrumentJobSync: instrumentJobSync)
 
         let context = ModelContext(container)
         let localProtocol = CachedProtocol(protocolTitle: "Sample Prep", protocolDescription: nil, enabled: false, isLocallyAuthored: true)
         context.insert(localProtocol)
-        let localSession = CachedSession(name: "Run 1", enabled: true, isRunning: true, status: "running", primaryProtocolClientID: localProtocol.clientID)
+        let localSession = CachedSession(name: "Run 1", enabled: true, isRunning: true, status: "running", protocolClientIDs: [localProtocol.clientID])
         context.insert(localSession)
         try context.save()
 
@@ -624,6 +1370,111 @@ struct SyncServiceTests {
 
         let sessions = try context.fetch(FetchDescriptor<CachedSession>())
         #expect(sessions.first?.serverID == nil)
+    }
+
+    @Test("OutboxService retries a session attached to two protocols when only one has synced")
+    func outboxReplayRetriesSessionWithPartiallySyncedProtocols() async throws {
+        StubURLProtocol.handler = { _ in
+            throw URLError(.notConnectedToInternet)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedProtocol.self, CachedProtocolSection.self, CachedProtocolStep.self, CachedSession.self, OutboxEntry.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let protocolSync = ProtocolSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let sessionSync = SessionSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let stepReagentSync = StepReagentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let stepAnnotationSync = StepAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let inventorySync = InventorySyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let instrumentSync = InstrumentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let projectSync = ProjectSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let instrumentJobSync = InstrumentJobSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let sessionAnnotationSync = SessionAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, sessionAnnotationSync: sessionAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync, projectSync: projectSync, instrumentJobSync: instrumentJobSync)
+
+        let context = ModelContext(container)
+        let syncedProtocol = CachedProtocol(serverID: 50, protocolTitle: "Synced", protocolDescription: nil, enabled: false, isLocallyAuthored: true)
+        let unsyncedProtocol = CachedProtocol(protocolTitle: "Not Synced Yet", protocolDescription: nil, enabled: false, isLocallyAuthored: true)
+        context.insert(syncedProtocol)
+        context.insert(unsyncedProtocol)
+        let localSession = CachedSession(
+            name: "Run 1", enabled: true, isRunning: true, status: "running",
+            protocolClientIDs: [syncedProtocol.clientID, unsyncedProtocol.clientID]
+        )
+        context.insert(localSession)
+        try context.save()
+
+        try await outbox.enqueueCreateSession(clientID: localSession.clientID)
+        await outbox.replayPending()
+
+        let entries = try context.fetch(FetchDescriptor<OutboxEntry>())
+        #expect(entries.count == 1, "a session with any unsynced protocol should retry, not be dropped or marked failed")
+        #expect(entries.first?.status == OutboxEntryStatus.pending.rawValue)
+
+        let sessions = try context.fetch(FetchDescriptor<CachedSession>())
+        #expect(sessions.first?.serverID == nil)
+    }
+
+    @Test("syncLocallyCreatedSession succeeds immediately for a protocol-less session")
+    func syncLocallyCreatedSessionZeroProtocolsSucceedsImmediately() async throws {
+        StubURLProtocol.handler = { request in
+            let body = try #require(request.httpBodyStream).readAllData()
+            let sentJSON = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
+            #expect((sentJSON["protocols"] as? [Int64])?.isEmpty == true)
+            let json = Data("""
+            {"id": 20, "unique_id": "abc", "name": "Notes Only", "enabled": true, "processing": false,
+             "started_at": null, "ended_at": null, "is_running": null, "status": "running", "protocols": []}
+            """.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 201, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedProtocol.self, CachedSession.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let service = SessionSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        let context = ModelContext(container)
+        let localSession = CachedSession(name: "Notes Only", enabled: true, isRunning: true, status: "running", protocolClientIDs: [])
+        context.insert(localSession)
+        try context.save()
+
+        let serverID = try await service.syncLocallyCreatedSession(clientID: localSession.clientID)
+        #expect(serverID == 20)
+
+        let sessions = try context.fetch(FetchDescriptor<CachedSession>())
+        #expect(sessions.first?.serverID == 20)
+    }
+
+    @Test("syncLocallyCreatedSession posts every attached protocol's serverID once all have synced")
+    func syncLocallyCreatedSessionMultiProtocolSucceeds() async throws {
+        StubURLProtocol.handler = { request in
+            let body = try #require(request.httpBodyStream).readAllData()
+            let sentJSON = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
+            let protocols = try #require(sentJSON["protocols"] as? [Int64])
+            #expect(Set(protocols) == Set([40, 41]))
+            let json = Data("""
+            {"id": 21, "unique_id": "abc", "name": "Multi", "enabled": true, "processing": false,
+             "started_at": null, "ended_at": null, "is_running": null, "status": "running", "protocols": [40, 41]}
+            """.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 201, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedProtocol.self, CachedSession.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let service = SessionSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        let context = ModelContext(container)
+        let protocolA = CachedProtocol(serverID: 40, protocolTitle: "A", protocolDescription: nil, enabled: false, isLocallyAuthored: true)
+        let protocolB = CachedProtocol(serverID: 41, protocolTitle: "B", protocolDescription: nil, enabled: false, isLocallyAuthored: true)
+        context.insert(protocolA)
+        context.insert(protocolB)
+        let localSession = CachedSession(
+            name: "Multi", enabled: true, isRunning: true, status: "running",
+            protocolClientIDs: [protocolA.clientID, protocolB.clientID]
+        )
+        context.insert(localSession)
+        try context.save()
+
+        let serverID = try await service.syncLocallyCreatedSession(clientID: localSession.clientID)
+        #expect(serverID == 21)
     }
 
     @Test("OutboxService replays a step-reagent once its step has synced, creating the new reagent inline")
@@ -658,7 +1509,8 @@ struct SyncServiceTests {
         let instrumentSync = InstrumentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
         let projectSync = ProjectSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
         let instrumentJobSync = InstrumentJobSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
-        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync, projectSync: projectSync, instrumentJobSync: instrumentJobSync)
+        let sessionAnnotationSync = SessionAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, sessionAnnotationSync: sessionAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync, projectSync: projectSync, instrumentJobSync: instrumentJobSync)
 
         let context = ModelContext(container)
         let localStep = CachedProtocolStep(stepDescription: "Mix", order: 0, stepDuration: nil)
@@ -669,10 +1521,6 @@ struct SyncServiceTests {
         context.insert(localStepReagent)
         try context.save()
 
-        // Simulate the step already having synced in a prior pass — its own outbox entry isn't
-        // modeled here since `ProtocolSyncService`'s own FIFO-ordering behavior is already
-        // covered by the section/step tests above; this test is purely about the reagent's
-        // inline creation and the step-reagent's own dependency check.
         localStep.serverID = 10
         try context.save()
 
@@ -706,7 +1554,8 @@ struct SyncServiceTests {
         let instrumentSync = InstrumentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
         let projectSync = ProjectSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
         let instrumentJobSync = InstrumentJobSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
-        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync, projectSync: projectSync, instrumentJobSync: instrumentJobSync)
+        let sessionAnnotationSync = SessionAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, sessionAnnotationSync: sessionAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync, projectSync: projectSync, instrumentJobSync: instrumentJobSync)
 
         let context = ModelContext(container)
         let localStep = CachedProtocolStep(stepDescription: "Mix", order: 0, stepDuration: nil)
@@ -762,12 +1611,13 @@ struct SyncServiceTests {
         let instrumentSync = InstrumentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
         let projectSync = ProjectSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
         let instrumentJobSync = InstrumentJobSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
-        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync, projectSync: projectSync, instrumentJobSync: instrumentJobSync)
+        let sessionAnnotationSync = SessionAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, sessionAnnotationSync: sessionAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync, projectSync: projectSync, instrumentJobSync: instrumentJobSync)
 
         let context = ModelContext(container)
         let localProtocol = CachedProtocol(protocolTitle: "Sample Prep", protocolDescription: nil, enabled: false, isLocallyAuthored: true)
         context.insert(localProtocol)
-        let localSession = CachedSession(name: "Run 1", enabled: true, isRunning: true, status: "running", primaryProtocolClientID: localProtocol.clientID)
+        let localSession = CachedSession(name: "Run 1", enabled: true, isRunning: true, status: "running", protocolClientIDs: [localProtocol.clientID])
         context.insert(localSession)
         let localStep = CachedProtocolStep(serverID: 10, stepDescription: "Put on gloves", order: 0)
         context.insert(localStep)
@@ -775,8 +1625,6 @@ struct SyncServiceTests {
         context.insert(localAnnotation)
         try context.save()
 
-        // Enqueued in creation order: protocol, then session (depends on it), then the
-        // annotation (depends on the session — the step is already synced in this test).
         try await outbox.enqueueCreateProtocol(clientID: localProtocol.clientID, title: "Sample Prep", description: nil, enabled: false)
         try await outbox.enqueueCreateSession(clientID: localSession.clientID)
         try await outbox.enqueueCreateTextAnnotation(clientID: localAnnotation.clientID)
@@ -805,7 +1653,8 @@ struct SyncServiceTests {
         let instrumentSync = InstrumentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
         let projectSync = ProjectSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
         let instrumentJobSync = InstrumentJobSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
-        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync, projectSync: projectSync, instrumentJobSync: instrumentJobSync)
+        let sessionAnnotationSync = SessionAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, sessionAnnotationSync: sessionAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync, projectSync: projectSync, instrumentJobSync: instrumentJobSync)
 
         let context = ModelContext(container)
         let localSession = CachedSession(name: "Run 1", enabled: true, isRunning: true, status: "running")
@@ -826,6 +1675,198 @@ struct SyncServiceTests {
 
         let annotations = try context.fetch(FetchDescriptor<CachedStepAnnotation>())
         #expect(annotations.first?.serverID == nil)
+    }
+
+    @Test("OutboxService replays a queued audio annotation, uploading the persisted local recording and attaching its serverID")
+    func outboxReplayResolvesAudioAnnotation() async throws {
+        StubURLProtocol.handler = { request in
+            if request.url!.path.hasSuffix("/upload/step-annotation-chunks") {
+                let json = Data("""
+                {"annotation_id": 200, "step_annotation_id": 300, "message": "ok"}
+                """.utf8)
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+            }
+            let json = Data("""
+            {"id": 300, "session": 9, "step": 10, "annotation": 200,
+             "annotation_text": "", "annotation_type": "audio", "order": 0,
+             "transcribed": true, "transcription": "Gloves are on.", "language": "en-US", "translation": null}
+            """.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedProtocol.self, CachedProtocolSection.self, CachedProtocolStep.self, CachedSession.self, CachedStepAnnotation.self, OutboxEntry.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let protocolSync = ProtocolSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let sessionSync = SessionSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let stepReagentSync = StepReagentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let stepAnnotationSync = StepAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let inventorySync = InventorySyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let instrumentSync = InstrumentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let projectSync = ProjectSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let instrumentJobSync = InstrumentJobSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let sessionAnnotationSync = SessionAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, sessionAnnotationSync: sessionAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync, projectSync: projectSync, instrumentJobSync: instrumentJobSync)
+
+        let context = ModelContext(container)
+        let localSession = CachedSession(serverID: 9, name: "Run 1", enabled: true, isRunning: true, status: "running")
+        context.insert(localSession)
+        let localStep = CachedProtocolStep(serverID: 10, stepDescription: "Put on gloves", order: 0)
+        context.insert(localStep)
+        try context.save()
+
+        let tempFile = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).m4a")
+        try Data([0x00, 0x01, 0x02]).write(to: tempFile)
+        defer { try? FileManager.default.removeItem(at: tempFile) }
+
+        let clientID = try await stepAnnotationSync.createAudioAnnotation(
+            sessionClientID: localSession.clientID,
+            stepClientID: localStep.clientID,
+            recordedFileURL: tempFile,
+            transcription: "Gloves are on.",
+            language: "en-US",
+            translation: nil
+        )
+
+        try await outbox.enqueueCreateStepAudioAnnotation(clientID: clientID)
+        await outbox.replayPending()
+
+        let annotations = try context.fetch(FetchDescriptor<CachedStepAnnotation>())
+        #expect(annotations.first?.serverID == 300)
+        #expect(annotations.first?.pendingFileName == nil)
+        #expect(try context.fetch(FetchDescriptor<OutboxEntry>()).isEmpty)
+    }
+
+    @Test("OutboxService replays a queued photo annotation, uploading the persisted local image and attaching its serverID")
+    func outboxReplayResolvesImageAnnotation() async throws {
+        StubURLProtocol.handler = { request in
+            let json = Data("""
+            {"annotation_id": 201, "step_annotation_id": 301, "message": "ok"}
+            """.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedProtocol.self, CachedProtocolSection.self, CachedProtocolStep.self, CachedSession.self, CachedStepAnnotation.self, OutboxEntry.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let protocolSync = ProtocolSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let sessionSync = SessionSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let stepReagentSync = StepReagentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let stepAnnotationSync = StepAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let inventorySync = InventorySyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let instrumentSync = InstrumentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let projectSync = ProjectSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let instrumentJobSync = InstrumentJobSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let sessionAnnotationSync = SessionAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, sessionAnnotationSync: sessionAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync, projectSync: projectSync, instrumentJobSync: instrumentJobSync)
+
+        let context = ModelContext(container)
+        let localSession = CachedSession(serverID: 9, name: "Run 1", enabled: true, isRunning: true, status: "running")
+        context.insert(localSession)
+        let localStep = CachedProtocolStep(serverID: 10, stepDescription: "Put on gloves", order: 0)
+        context.insert(localStep)
+        try context.save()
+
+        let clientID = try await stepAnnotationSync.createImageAnnotation(
+            sessionClientID: localSession.clientID,
+            stepClientID: localStep.clientID,
+            imageData: Data([0xFF, 0xD8, 0xFF])
+        )
+
+        try await outbox.enqueueCreateStepImageAnnotation(clientID: clientID)
+        await outbox.replayPending()
+
+        let annotations = try context.fetch(FetchDescriptor<CachedStepAnnotation>())
+        #expect(annotations.first?.serverID == 301)
+        #expect(annotations.first?.pendingFileName == nil)
+        #expect(try context.fetch(FetchDescriptor<OutboxEntry>()).isEmpty)
+    }
+
+    @Test("OutboxService replays a queued video annotation, uploading the persisted local video and attaching its serverID")
+    func outboxReplayResolvesVideoAnnotation() async throws {
+        StubURLProtocol.handler = { request in
+            let json = Data("""
+            {"annotation_id": 202, "step_annotation_id": 302, "message": "ok"}
+            """.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedProtocol.self, CachedProtocolSection.self, CachedProtocolStep.self, CachedSession.self, CachedStepAnnotation.self, OutboxEntry.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let protocolSync = ProtocolSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let sessionSync = SessionSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let stepReagentSync = StepReagentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let stepAnnotationSync = StepAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let inventorySync = InventorySyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let instrumentSync = InstrumentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let projectSync = ProjectSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let instrumentJobSync = InstrumentJobSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let sessionAnnotationSync = SessionAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, sessionAnnotationSync: sessionAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync, projectSync: projectSync, instrumentJobSync: instrumentJobSync)
+
+        let context = ModelContext(container)
+        let localSession = CachedSession(serverID: 9, name: "Run 1", enabled: true, isRunning: true, status: "running")
+        context.insert(localSession)
+        let localStep = CachedProtocolStep(serverID: 10, stepDescription: "Put on gloves", order: 0)
+        context.insert(localStep)
+        try context.save()
+
+        let clientID = try await stepAnnotationSync.createVideoAnnotation(
+            sessionClientID: localSession.clientID,
+            stepClientID: localStep.clientID,
+            videoData: Data([0x00, 0x00, 0x00, 0x18]),
+            fileExtension: "mov"
+        )
+
+        try await outbox.enqueueCreateStepVideoAnnotation(clientID: clientID)
+        await outbox.replayPending()
+
+        let annotations = try context.fetch(FetchDescriptor<CachedStepAnnotation>())
+        #expect(annotations.first?.serverID == 302)
+        #expect(annotations.first?.pendingFileName == nil)
+        #expect(try context.fetch(FetchDescriptor<OutboxEntry>()).isEmpty)
+    }
+
+    @Test("OutboxService replays a queued sketch annotation, uploading the persisted local sketch JSON and attaching its serverID")
+    func outboxReplayResolvesSketchAnnotation() async throws {
+        StubURLProtocol.handler = { request in
+            let json = Data("""
+            {"annotation_id": 203, "step_annotation_id": 303, "message": "ok"}
+            """.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedProtocol.self, CachedProtocolSection.self, CachedProtocolStep.self, CachedSession.self, CachedStepAnnotation.self, OutboxEntry.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let protocolSync = ProtocolSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let sessionSync = SessionSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let stepReagentSync = StepReagentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let stepAnnotationSync = StepAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let inventorySync = InventorySyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let instrumentSync = InstrumentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let projectSync = ProjectSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let instrumentJobSync = InstrumentJobSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let sessionAnnotationSync = SessionAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, sessionAnnotationSync: sessionAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync, projectSync: projectSync, instrumentJobSync: instrumentJobSync)
+
+        let context = ModelContext(container)
+        let localSession = CachedSession(serverID: 9, name: "Run 1", enabled: true, isRunning: true, status: "running")
+        context.insert(localSession)
+        let localStep = CachedProtocolStep(serverID: 10, stepDescription: "Put on gloves", order: 0)
+        context.insert(localStep)
+        try context.save()
+
+        let clientID = try await stepAnnotationSync.createSketchAnnotation(
+            sessionClientID: localSession.clientID,
+            stepClientID: localStep.clientID,
+            sketchData: Data("{}".utf8)
+        )
+
+        try await outbox.enqueueCreateStepSketchAnnotation(clientID: clientID)
+        await outbox.replayPending()
+
+        let annotations = try context.fetch(FetchDescriptor<CachedStepAnnotation>())
+        #expect(annotations.first?.serverID == 303)
+        #expect(annotations.first?.pendingFileName == nil)
+        #expect(try context.fetch(FetchDescriptor<OutboxEntry>()).isEmpty)
     }
 
     @Test("OutboxService replays a stored reagent once its reagent and storage object have synced")
@@ -849,7 +1890,8 @@ struct SyncServiceTests {
         let instrumentSync = InstrumentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
         let projectSync = ProjectSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
         let instrumentJobSync = InstrumentJobSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
-        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync, projectSync: projectSync, instrumentJobSync: instrumentJobSync)
+        let sessionAnnotationSync = SessionAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, sessionAnnotationSync: sessionAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync, projectSync: projectSync, instrumentJobSync: instrumentJobSync)
 
         let context = ModelContext(container)
         let localStoredReagent = CachedStoredReagent(reagentServerID: 3, reagentName: "NaCl", reagentUnit: "g", storageObjectServerID: 5, storageObjectName: "Fridge A", quantity: 100.0, currentQuantity: 100.0)
@@ -881,10 +1923,10 @@ struct SyncServiceTests {
         let instrumentSync = InstrumentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
         let projectSync = ProjectSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
         let instrumentJobSync = InstrumentJobSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
-        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync, projectSync: projectSync, instrumentJobSync: instrumentJobSync)
+        let sessionAnnotationSync = SessionAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, sessionAnnotationSync: sessionAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync, projectSync: projectSync, instrumentJobSync: instrumentJobSync)
 
         let context = ModelContext(container)
-        // No reagentServerID/storageObjectServerID set — the not-yet-synced case.
         let localStoredReagent = CachedStoredReagent(reagentName: "NaCl", reagentUnit: "g", storageObjectName: "Fridge A", quantity: 100.0, currentQuantity: 100.0)
         context.insert(localStoredReagent)
         try context.save()
@@ -917,7 +1959,8 @@ struct SyncServiceTests {
         let instrumentSync = InstrumentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
         let projectSync = ProjectSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
         let instrumentJobSync = InstrumentJobSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
-        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync, projectSync: projectSync, instrumentJobSync: instrumentJobSync)
+        let sessionAnnotationSync = SessionAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, sessionAnnotationSync: sessionAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync, projectSync: projectSync, instrumentJobSync: instrumentJobSync)
 
         let context = ModelContext(container)
         let localStoredReagent = CachedStoredReagent(serverID: 30, quantity: 100.0, currentQuantity: 100.0)
@@ -951,7 +1994,8 @@ struct SyncServiceTests {
         let instrumentSync = InstrumentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
         let projectSync = ProjectSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
         let instrumentJobSync = InstrumentJobSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
-        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync, projectSync: projectSync, instrumentJobSync: instrumentJobSync)
+        let sessionAnnotationSync = SessionAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, sessionAnnotationSync: sessionAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync, projectSync: projectSync, instrumentJobSync: instrumentJobSync)
 
         let context = ModelContext(container)
         let localStoredReagent = CachedStoredReagent(quantity: 100.0, currentQuantity: 100.0)
@@ -988,7 +2032,8 @@ struct SyncServiceTests {
         let inventorySync = InventorySyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
         let projectSync = ProjectSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
         let instrumentJobSync = InstrumentJobSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
-        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync, projectSync: projectSync, instrumentJobSync: instrumentJobSync)
+        let sessionAnnotationSync = SessionAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, sessionAnnotationSync: sessionAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync, projectSync: projectSync, instrumentJobSync: instrumentJobSync)
 
         let context = ModelContext(container)
         let localUsage = CachedInstrumentUsage(instrumentServerID: 4, instrumentName: "Centrifuge", timeStarted: "2026-01-01T10:00:00Z", usageDescription: "Spin down", approved: false, maintenance: false)
@@ -1032,7 +2077,8 @@ struct SyncServiceTests {
         let instrumentSync = InstrumentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
         let projectSync = ProjectSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
         let instrumentJobSync = InstrumentJobSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
-        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync, projectSync: projectSync, instrumentJobSync: instrumentJobSync)
+        let sessionAnnotationSync = SessionAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, sessionAnnotationSync: sessionAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync, projectSync: projectSync, instrumentJobSync: instrumentJobSync)
 
         let context = ModelContext(container)
         let localProject = CachedProject(projectName: "Proteomics Study")
@@ -1071,7 +2117,8 @@ struct SyncServiceTests {
         let instrumentSync = InstrumentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
         let projectSync = ProjectSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
         let instrumentJobSync = InstrumentJobSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
-        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync, projectSync: projectSync, instrumentJobSync: instrumentJobSync)
+        let sessionAnnotationSync = SessionAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, sessionAnnotationSync: sessionAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync, projectSync: projectSync, instrumentJobSync: instrumentJobSync)
 
         let context = ModelContext(container)
         let localProject = CachedProject(projectName: "Proteomics Study")
@@ -1123,12 +2170,6 @@ struct SyncServiceTests {
 
     @Test("InstrumentJobAnnotationSyncService.createBookingAnnotation sets the job's instrument before booking, or the server-side merge signal silently never fires")
     func createBookingAnnotationSetsInstrumentFirst() async throws {
-        // Confirmed live against a real backend: `merge_instrument_metadata_on_booking`
-        // (`ccm/signals.py`) bails out immediately if `instrument_job.instrument` is unset — and
-        // nothing else in the booking sequence ever sets it. Every other call in this sequence
-        // succeeds regardless, making this the one call whose absence is a silent no-op, not an
-        // error — this test exists specifically to make that ordering a regression, not just a
-        // one-off manual finding.
         nonisolated(unsafe) var sawInstrumentPatchBeforeUsagePost = false
         nonisolated(unsafe) var patchedInstrumentJobPath: String?
 
@@ -1224,6 +2265,429 @@ struct SyncServiceTests {
         #expect(members.first?.username == "testuser")
     }
 
+    @Test("ProjectSyncService.update PATCHes the project and updates the cache")
+    func projectUpdatePatches() async throws {
+        StubURLProtocol.handler = { request in
+            #expect(request.httpMethod == "PATCH")
+            #expect(request.url!.path.hasSuffix("/projects/9"))
+            let json = Data(#"{"id": 9, "project_name": "Renamed", "project_description": "New description"}"#.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedProject.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let projectSync = ProjectSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        let dto = try await projectSync.update(serverID: 9, projectName: "Renamed", projectDescription: "New description")
+        #expect(dto.projectName == "Renamed")
+
+        let cached = try ModelContext(container).fetch(FetchDescriptor<CachedProject>(predicate: #Predicate { $0.serverID == 9 })).first
+        #expect(cached?.projectName == "Renamed")
+    }
+
+    @Test("ProjectSyncService.delete DELETEs the project and removes it from the cache")
+    func projectDeleteRemovesLocal() async throws {
+        StubURLProtocol.handler = { request in
+            #expect(request.httpMethod == "DELETE")
+            #expect(request.url!.path.hasSuffix("/projects/9"))
+            return (HTTPURLResponse(url: request.url!, statusCode: 204, httpVersion: nil, headerFields: nil)!, Data())
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedProject.self])
+        let context = ModelContext(container)
+        context.insert(CachedProject(serverID: 9, projectName: "To Delete", projectDescription: nil))
+        try context.save()
+
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let projectSync = ProjectSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        try await projectSync.delete(serverID: 9)
+
+        let remaining = try context.fetch(FetchDescriptor<CachedProject>())
+        #expect(remaining.isEmpty)
+    }
+
+    @Test("ProtocolSyncService.update PATCHes the protocol and updates the cache")
+    func protocolUpdatePatches() async throws {
+        StubURLProtocol.handler = { request in
+            #expect(request.httpMethod == "PATCH")
+            #expect(request.url!.path.hasSuffix("/protocols/12"))
+            let json = Data(#"{"id": 12, "protocol_title": "Renamed", "protocol_description": "New desc", "enabled": true}"#.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedProtocol.self, CachedProtocolSection.self, CachedProtocolStep.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let protocolSync = ProtocolSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        let dto = try await protocolSync.update(serverID: 12, protocolTitle: "Renamed", protocolDescription: "New desc", enabled: true)
+        #expect(dto.protocolTitle == "Renamed")
+
+        let cached = try ModelContext(container).fetch(FetchDescriptor<CachedProtocol>(predicate: #Predicate { $0.serverID == 12 })).first
+        #expect(cached?.protocolTitle == "Renamed")
+        #expect(cached?.enabled == true)
+    }
+
+    @Test("ProtocolSyncService.delete DELETEs the protocol and removes it from the cache")
+    func protocolDeleteRemovesLocal() async throws {
+        StubURLProtocol.handler = { request in
+            #expect(request.httpMethod == "DELETE")
+            #expect(request.url!.path.hasSuffix("/protocols/12"))
+            return (HTTPURLResponse(url: request.url!, statusCode: 204, httpVersion: nil, headerFields: nil)!, Data())
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedProtocol.self, CachedProtocolSection.self, CachedProtocolStep.self])
+        let context = ModelContext(container)
+        context.insert(CachedProtocol(serverID: 12, protocolTitle: "To Delete", protocolDescription: nil, enabled: false, isLocallyAuthored: true))
+        try context.save()
+
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let protocolSync = ProtocolSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        try await protocolSync.delete(serverID: 12)
+
+        let remaining = try context.fetch(FetchDescriptor<CachedProtocol>())
+        #expect(remaining.isEmpty)
+    }
+
+    @Test("InventorySyncService.createStorageObject POSTs the right body and caches the result")
+    func storageObjectCreateCachesResult() async throws {
+        StubURLProtocol.handler = { request in
+            #expect(request.httpMethod == "POST")
+            let body = try #require(request.httpBodyStream).readAllData()
+            let sentJSON = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
+            #expect(sentJSON["object_name"] as? String == "Test Freezer")
+            #expect(sentJSON["object_type"] as? String == "freezer")
+            let json = Data(#"{"id": 5, "object_type": "freezer", "object_name": "Test Freezer", "object_description": null, "stored_at": null}"#.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 201, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedStorageObject.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let inventorySync = InventorySyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        let dto = try await inventorySync.createStorageObject(objectName: "Test Freezer", objectType: "freezer", objectDescription: nil, storedAt: nil)
+        #expect(dto.id == 5)
+
+        let cached = try ModelContext(container).fetch(FetchDescriptor<CachedStorageObject>(predicate: #Predicate { $0.serverID == 5 })).first
+        #expect(cached?.objectName == "Test Freezer")
+    }
+
+    @Test("InventorySyncService.deleteStorageObject DELETEs and removes it from the cache")
+    func storageObjectDeleteRemovesLocal() async throws {
+        StubURLProtocol.handler = { request in
+            #expect(request.httpMethod == "DELETE")
+            #expect(request.url!.path.hasSuffix("/storage-objects/5"))
+            return (HTTPURLResponse(url: request.url!, statusCode: 204, httpVersion: nil, headerFields: nil)!, Data())
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedStorageObject.self])
+        let context = ModelContext(container)
+        context.insert(CachedStorageObject(serverID: 5, objectType: "freezer", objectName: "To Delete"))
+        try context.save()
+
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let inventorySync = InventorySyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        try await inventorySync.deleteStorageObject(serverID: 5)
+
+        let remaining = try context.fetch(FetchDescriptor<CachedStorageObject>())
+        #expect(remaining.isEmpty)
+    }
+
+    @Test("InstrumentSyncService.createInstrument POSTs the right body and caches the result")
+    func instrumentCreateCachesResult() async throws {
+        StubURLProtocol.handler = { request in
+            #expect(request.httpMethod == "POST")
+            let body = try #require(request.httpBodyStream).readAllData()
+            let sentJSON = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
+            #expect(sentJSON["instrument_name"] as? String == "Test Centrifuge")
+            let json = Data(#"{"id": 9, "instrument_name": "Test Centrifuge", "instrument_description": null, "enabled": true, "accepts_bookings": true, "allow_overlapping_bookings": false, "maintenance_overdue": false}"#.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 201, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedInstrument.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let instrumentSync = InstrumentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        let dto = try await instrumentSync.createInstrument(instrumentName: "Test Centrifuge", instrumentDescription: nil, enabled: true, acceptsBookings: true, allowOverlappingBookings: false)
+        #expect(dto.id == 9)
+
+        let cached = try ModelContext(container).fetch(FetchDescriptor<CachedInstrument>(predicate: #Predicate { $0.serverID == 9 })).first
+        #expect(cached?.instrumentName == "Test Centrifuge")
+    }
+
+    @Test("InstrumentSyncService.updateInstrument PATCHes the right path and updates the cache")
+    func instrumentUpdatePatches() async throws {
+        StubURLProtocol.handler = { request in
+            #expect(request.httpMethod == "PATCH")
+            #expect(request.url!.path.hasSuffix("/instruments/9"))
+            let json = Data(#"{"id": 9, "instrument_name": "Renamed Centrifuge", "instrument_description": null, "enabled": false, "accepts_bookings": true, "allow_overlapping_bookings": false, "maintenance_overdue": false}"#.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedInstrument.self])
+        let context = ModelContext(container)
+        context.insert(CachedInstrument(serverID: 9, instrumentName: "Test Centrifuge", enabled: true, acceptsBookings: true, allowOverlappingBookings: false, maintenanceOverdue: false))
+        try context.save()
+
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let instrumentSync = InstrumentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        try await instrumentSync.updateInstrument(serverID: 9, instrumentName: "Renamed Centrifuge", instrumentDescription: nil, enabled: false, acceptsBookings: true, allowOverlappingBookings: false)
+
+        let cached = try context.fetch(FetchDescriptor<CachedInstrument>(predicate: #Predicate { $0.serverID == 9 })).first
+        #expect(cached?.instrumentName == "Renamed Centrifuge")
+        #expect(cached?.enabled == false)
+    }
+
+    @Test("InstrumentSyncService.deleteInstrument DELETEs and removes it from the cache")
+    func instrumentDeleteRemovesLocal() async throws {
+        StubURLProtocol.handler = { request in
+            #expect(request.httpMethod == "DELETE")
+            #expect(request.url!.path.hasSuffix("/instruments/9"))
+            return (HTTPURLResponse(url: request.url!, statusCode: 204, httpVersion: nil, headerFields: nil)!, Data())
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedInstrument.self])
+        let context = ModelContext(container)
+        context.insert(CachedInstrument(serverID: 9, instrumentName: "To Delete", enabled: true, acceptsBookings: true, allowOverlappingBookings: false, maintenanceOverdue: false))
+        try context.save()
+
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let instrumentSync = InstrumentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        try await instrumentSync.deleteInstrument(serverID: 9)
+
+        let remaining = try context.fetch(FetchDescriptor<CachedInstrument>())
+        #expect(remaining.isEmpty)
+    }
+
+    @Test("ProtocolSyncService.updateSection PATCHes the section and updates the cache")
+    func sectionUpdatePatches() async throws {
+        StubURLProtocol.handler = { request in
+            #expect(request.httpMethod == "PATCH")
+            #expect(request.url!.path.hasSuffix("/sections/14"))
+            let json = Data(#"{"id": 14, "section_description": "Renamed", "order": 0, "section_duration": 300, "steps": []}"#.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedProtocol.self, CachedProtocolSection.self, CachedProtocolStep.self])
+        let context = ModelContext(container)
+        context.insert(CachedProtocolSection(serverID: 14, sectionDescription: "Old", order: 0))
+        try context.save()
+
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let protocolSync = ProtocolSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        try await protocolSync.updateSection(serverID: 14, sectionDescription: "Renamed", sectionDuration: 300)
+
+        let cached = try context.fetch(FetchDescriptor<CachedProtocolSection>(predicate: #Predicate { $0.serverID == 14 })).first
+        #expect(cached?.sectionDescription == "Renamed")
+        #expect(cached?.sectionDuration == 300)
+    }
+
+    @Test("ProtocolSyncService.deleteSection DELETEs the section and removes it from the cache")
+    func sectionDeleteRemovesLocal() async throws {
+        StubURLProtocol.handler = { request in
+            #expect(request.httpMethod == "DELETE")
+            #expect(request.url!.path.hasSuffix("/sections/14"))
+            return (HTTPURLResponse(url: request.url!, statusCode: 204, httpVersion: nil, headerFields: nil)!, Data())
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedProtocol.self, CachedProtocolSection.self, CachedProtocolStep.self])
+        let context = ModelContext(container)
+        context.insert(CachedProtocolSection(serverID: 14, sectionDescription: "To Delete", order: 0))
+        try context.save()
+
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let protocolSync = ProtocolSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        try await protocolSync.deleteSection(serverID: 14)
+
+        let remaining = try context.fetch(FetchDescriptor<CachedProtocolSection>())
+        #expect(remaining.isEmpty)
+    }
+
+    @Test("ProtocolSyncService.updateStep PATCHes the step and updates the cache")
+    func stepUpdatePatches() async throws {
+        StubURLProtocol.handler = { request in
+            #expect(request.httpMethod == "PATCH")
+            #expect(request.url!.path.hasSuffix("/steps/22"))
+            let json = Data(#"{"id": 22, "step_description": "Renamed step", "order": 0, "step_duration": 60}"#.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedProtocol.self, CachedProtocolSection.self, CachedProtocolStep.self])
+        let context = ModelContext(container)
+        context.insert(CachedProtocolStep(serverID: 22, stepDescription: "Old step", order: 0))
+        try context.save()
+
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let protocolSync = ProtocolSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        try await protocolSync.updateStep(serverID: 22, stepDescription: "Renamed step", stepDuration: 60)
+
+        let cached = try context.fetch(FetchDescriptor<CachedProtocolStep>(predicate: #Predicate { $0.serverID == 22 })).first
+        #expect(cached?.stepDescription == "Renamed step")
+        #expect(cached?.stepDuration == 60)
+    }
+
+    @Test("ProtocolSyncService.deleteStep DELETEs the step and removes it from the cache")
+    func stepDeleteRemovesLocal() async throws {
+        StubURLProtocol.handler = { request in
+            #expect(request.httpMethod == "DELETE")
+            #expect(request.url!.path.hasSuffix("/steps/22"))
+            return (HTTPURLResponse(url: request.url!, statusCode: 204, httpVersion: nil, headerFields: nil)!, Data())
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedProtocol.self, CachedProtocolSection.self, CachedProtocolStep.self])
+        let context = ModelContext(container)
+        context.insert(CachedProtocolStep(serverID: 22, stepDescription: "To Delete", order: 0))
+        try context.save()
+
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let protocolSync = ProtocolSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        try await protocolSync.deleteStep(serverID: 22)
+
+        let remaining = try context.fetch(FetchDescriptor<CachedProtocolStep>())
+        #expect(remaining.isEmpty)
+    }
+
+    @Test("StepReagentSyncService.update PATCHes the step-reagent and updates the cache")
+    func stepReagentUpdatePatches() async throws {
+        StubURLProtocol.handler = { request in
+            #expect(request.httpMethod == "PATCH")
+            #expect(request.url!.path.hasSuffix("/step-reagents/3"))
+            let json = Data(#"{"id": 3, "step": 22, "reagent": {"id": 1, "name": "NaOH", "unit": "mL"}, "quantity": 10, "scalable": false, "scalable_factor": 1}"#.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedStepReagent.self, CachedReagent.self])
+        let context = ModelContext(container)
+        context.insert(CachedStepReagent(serverID: 3, stepClientID: UUID(), reagentClientID: UUID(), quantity: 5, scalable: false, scalableFactor: 1))
+        try context.save()
+
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let stepReagentSync = StepReagentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        try await stepReagentSync.update(serverID: 3, quantity: 10, scalable: false, scalableFactor: 1)
+
+        let cached = try context.fetch(FetchDescriptor<CachedStepReagent>(predicate: #Predicate { $0.serverID == 3 })).first
+        #expect(cached?.quantity == 10)
+    }
+
+    @Test("StepReagentSyncService.delete DELETEs the step-reagent and removes it from the cache")
+    func stepReagentDeleteRemovesLocal() async throws {
+        StubURLProtocol.handler = { request in
+            #expect(request.httpMethod == "DELETE")
+            #expect(request.url!.path.hasSuffix("/step-reagents/3"))
+            return (HTTPURLResponse(url: request.url!, statusCode: 204, httpVersion: nil, headerFields: nil)!, Data())
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedStepReagent.self, CachedReagent.self])
+        let context = ModelContext(container)
+        context.insert(CachedStepReagent(serverID: 3, stepClientID: UUID(), reagentClientID: UUID(), quantity: 5, scalable: false, scalableFactor: 1))
+        try context.save()
+
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let stepReagentSync = StepReagentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        try await stepReagentSync.delete(serverID: 3)
+
+        let remaining = try context.fetch(FetchDescriptor<CachedStepReagent>())
+        #expect(remaining.isEmpty)
+    }
+
+    @Test("SessionSyncService.update PATCHes the session and updates the cache")
+    func sessionUpdatePatches() async throws {
+        StubURLProtocol.handler = { request in
+            #expect(request.httpMethod == "PATCH")
+            #expect(request.url!.path.hasSuffix("/sessions/6"))
+            let json = Data(#"{"id": 6, "unique_id": "abc", "name": "Renamed", "enabled": true, "protocols": []}"#.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedSession.self, CachedProtocol.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let sessionSync = SessionSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        let dto = try await sessionSync.update(serverID: 6, name: "Renamed", enabled: true)
+        #expect(dto.name == "Renamed")
+
+        let cached = try ModelContext(container).fetch(FetchDescriptor<CachedSession>(predicate: #Predicate { $0.serverID == 6 })).first
+        #expect(cached?.name == "Renamed")
+        #expect(cached?.enabled == true)
+    }
+
+    @Test("SessionSyncService.delete DELETEs the session and removes it from the cache")
+    func sessionDeleteRemovesLocal() async throws {
+        StubURLProtocol.handler = { request in
+            #expect(request.httpMethod == "DELETE")
+            #expect(request.url!.path.hasSuffix("/sessions/6"))
+            return (HTTPURLResponse(url: request.url!, statusCode: 204, httpVersion: nil, headerFields: nil)!, Data())
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedSession.self, CachedProtocol.self])
+        let context = ModelContext(container)
+        context.insert(CachedSession(serverID: 6, name: "To Delete", enabled: false, isRunning: nil, status: "draft"))
+        try context.save()
+
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let sessionSync = SessionSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        try await sessionSync.delete(serverID: 6)
+
+        let remaining = try context.fetch(FetchDescriptor<CachedSession>())
+        #expect(remaining.isEmpty)
+    }
+
+    @Test("LabGroupSyncService.setPermission POSTs a new grant when none exists yet")
+    func setPermissionCreatesWhenNoneExists() async throws {
+        StubURLProtocol.handler = { request in
+            if request.httpMethod == "GET" {
+                let json = Data(#"{"count": 0, "next": null, "previous": null, "results": []}"#.utf8)
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+            }
+            #expect(request.httpMethod == "POST")
+            let json = Data(#"{"id": 5, "user": 2, "user_username": "alice", "lab_group": 1, "can_view": true, "can_invite": false, "can_manage": false, "can_process_jobs": true}"#.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 201, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedLabGroup.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let labGroupSync = LabGroupSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        let dto = try await labGroupSync.setPermission(userServerID: 2, labGroupServerID: 1, canView: true, canInvite: false, canManage: false, canProcessJobs: true)
+        #expect(dto.id == 5)
+        #expect(dto.canProcessJobs)
+    }
+
+    @Test("LabGroupSyncService.setPermission PATCHes an existing grant rather than risking a duplicate POST")
+    func setPermissionPatchesWhenAlreadyExists() async throws {
+        nonisolated(unsafe) var sawPost = false
+        StubURLProtocol.handler = { request in
+            if request.httpMethod == "GET" {
+                let json = Data(#"{"count": 1, "next": null, "previous": null, "results": [{"id": 5, "user": 2, "user_username": "alice", "lab_group": 1, "can_view": true, "can_invite": false, "can_manage": false, "can_process_jobs": false}]}"#.utf8)
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+            }
+            if request.httpMethod == "POST" { sawPost = true }
+            #expect(request.httpMethod == "PATCH")
+            #expect(request.url!.path.hasSuffix("/lab-group-permissions/5"))
+            let json = Data(#"{"id": 5, "user": 2, "user_username": "alice", "lab_group": 1, "can_view": true, "can_invite": true, "can_manage": false, "can_process_jobs": true}"#.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedLabGroup.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let labGroupSync = LabGroupSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        let dto = try await labGroupSync.setPermission(userServerID: 2, labGroupServerID: 1, canView: true, canInvite: true, canManage: false, canProcessJobs: true)
+        #expect(dto.canInvite)
+        #expect(!sawPost, "must never POST a duplicate permission grant once one is known to exist")
+    }
+
     @Test("InstrumentJobSyncService.updateStaff PATCHes the job's staff list and updates the cache")
     func updateStaffPatchesJob() async throws {
         StubURLProtocol.handler = { request in
@@ -1252,6 +2716,41 @@ struct SyncServiceTests {
         let jobs = try context.fetch(FetchDescriptor<CachedInstrumentJob>())
         #expect(jobs.first?.staffServerIDs == [1])
         #expect(jobs.first?.staffUsernames == ["testuser"])
+    }
+
+    @Test("InstrumentJobSyncService.updateFunderCostCenter PATCHes both fields and updates the cache")
+    func updateFunderCostCenterPatchesJob() async throws {
+        StubURLProtocol.handler = { request in
+            #expect(request.httpMethod == "PATCH")
+            #expect(request.url!.path.hasSuffix("/instrument-jobs/88"))
+            let body = try #require(request.httpBodyStream).readAllData()
+            let sentJSON = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
+            #expect(sentJSON["funder"] as? String == "NIH Grant 12345")
+            #expect(sentJSON["cost_center"] as? String == "CC-9001")
+            let json = Data("""
+            {"id": 88, "job_name": "Run 2", "job_type": "analysis", "status": "draft",
+             "project": null, "instrument": null, "submitted_at": null, "completed_at": null,
+             "lab_group": null, "staff": [], "staff_usernames": [],
+             "funder": "NIH Grant 12345", "cost_center": "CC-9001"}
+            """.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedInstrumentJob.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let instrumentJobSync = InstrumentJobSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        let context = ModelContext(container)
+        let job = CachedInstrumentJob(serverID: 88, jobName: "Run 2", status: "draft")
+        context.insert(job)
+        try context.save()
+
+        let dto = try await instrumentJobSync.updateFunderCostCenter(jobServerID: 88, funder: "NIH Grant 12345", costCenter: "CC-9001")
+        #expect(dto.funder == "NIH Grant 12345")
+
+        let jobs = try context.fetch(FetchDescriptor<CachedInstrumentJob>())
+        #expect(jobs.first?.funder == "NIH Grant 12345")
+        #expect(jobs.first?.costCenter == "CC-9001")
     }
 
     @Test("MetadataColumnSyncService.updateColumnValue POSTs the value and updates the cached column in place")
@@ -1444,6 +2943,43 @@ struct SyncServiceTests {
         #expect(suggestions.first?.displayName == "LTQ Orbitrap")
     }
 
+    @Test("MetadataColumnSyncService.fetchOntologySuggestions decodes a Unimod suggestion's full_data, including specifications")
+    func fetchOntologySuggestionsDecodesUnimodFullData() async throws {
+        StubURLProtocol.handler = { request in
+            let json = Data("""
+            {"ontology_type": "unimod", "suggestions": [
+                {"id": "UNIMOD:35", "value": "UNIMOD:35", "display_name": "Oxidation",
+                 "description": "Oxidation or hydroxylation", "ontology_type": "unimod",
+                 "full_data": {
+                     "accession": "UNIMOD:35", "name": "Oxidation", "definition": "Oxidation or hydroxylation",
+                     "delta_mono_mass": "15.994915", "delta_composition": "O",
+                     "specifications": {
+                         "1": {"site": "M", "position": "Anywhere", "classification": "Post-translational", "hidden": "0"},
+                         "2": {"site": "C", "position": "Anywhere", "classification": "Artefact", "hidden": "1"}
+                     }
+                 }}
+            ]}
+            """.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedMetadataColumn.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let metadataColumnSync = MetadataColumnSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        let suggestions = try await metadataColumnSync.fetchOntologySuggestions(
+            ontologyType: "unimod",
+            customFilters: nil,
+            search: "oxidation"
+        )
+        let fullData = try #require(suggestions.first?.fullData)
+        #expect(fullData.accession == "UNIMOD:35")
+        #expect(fullData.deltaMonoMass == "15.994915")
+        #expect(fullData.deltaComposition == "O")
+        #expect(fullData.specifications["1"]?["site"] == "M")
+        #expect(fullData.specifications["2"]?["hidden"] == "1")
+    }
+
     @Test("MetadataColumnSyncService.addColumn posts column_data to add_column_with_auto_reorder")
     func addColumnPostsColumnData() async throws {
         StubURLProtocol.handler = { request in
@@ -1517,7 +3053,8 @@ struct SyncServiceTests {
             #expect(request.url!.path.hasSuffix("/metadata-table-templates"))
             let json = Data("""
             {"id": 10, "name": "New Blank", "description": null, "owner_username": "testuser",
-             "visibility": "private", "is_default": false, "column_count": 0, "lab_group": null}
+             "visibility": "private", "is_default": false, "column_count": 0, "lab_group": null,
+             "can_edit": true, "can_delete": true, "schema_names": []}
             """.utf8)
             return (HTTPURLResponse(url: request.url!, statusCode: 201, httpVersion: nil, headerFields: nil)!, json)
         }
@@ -1537,7 +3074,8 @@ struct SyncServiceTests {
             #expect(request.url!.path.hasSuffix("/metadata-table-templates/create_from_schema"))
             let json = Data("""
             {"id": 11, "name": "From Schema", "description": null, "owner_username": "testuser",
-             "visibility": "private", "is_default": false, "column_count": 9, "lab_group": null}
+             "visibility": "private", "is_default": false, "column_count": 9, "lab_group": null,
+             "can_edit": true, "can_delete": true, "schema_names": ["minimum"]}
             """.utf8)
             return (HTTPURLResponse(url: request.url!, statusCode: 201, httpVersion: nil, headerFields: nil)!, json)
         }
@@ -1549,6 +3087,50 @@ struct SyncServiceTests {
         let template = try await templateSync.createFromSchemas(name: "From Schema", schemaNames: ["minimum"], description: nil, labGroupServerID: nil)
         #expect(template.id == 11)
         #expect(template.columnCount == 9)
+    }
+
+    @Test("MetadataTableTemplateSyncService.update PATCHes the template and reports schema origin")
+    func updateTableTemplateHitsCorrectPath() async throws {
+        StubURLProtocol.handler = { request in
+            #expect(request.httpMethod == "PATCH")
+            #expect(request.url!.path.hasSuffix("/metadata-table-templates/12"))
+            let json = Data("""
+            {"id": 12, "name": "Renamed", "description": null, "owner_username": "testuser",
+             "visibility": "private", "is_default": false, "column_count": 9, "lab_group": null,
+             "can_edit": true, "can_delete": true, "schema_names": ["minimum"]}
+            """.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedMetadataTableTemplate.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let templateSync = MetadataTableTemplateSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        let template = try await templateSync.update(templateServerID: 12, request: CreateMetadataTableTemplateRequest(name: "Renamed"))
+        #expect(template.name == "Renamed")
+        #expect(template.schemaNames == ["minimum"])
+    }
+
+    @Test("MetadataTableTemplateSyncService.delete hits DELETE and removes the cached row")
+    func deleteTableTemplateHitsCorrectPathAndClearsCache() async throws {
+        StubURLProtocol.handler = { request in
+            #expect(request.httpMethod == "DELETE")
+            #expect(request.url!.path.hasSuffix("/metadata-table-templates/13"))
+            return (HTTPURLResponse(url: request.url!, statusCode: 204, httpVersion: nil, headerFields: nil)!, Data())
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedMetadataTableTemplate.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let templateSync = MetadataTableTemplateSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        let context = ModelContext(container)
+        context.insert(CachedMetadataTableTemplate(serverID: 13, name: "To Delete"))
+        try context.save()
+
+        try await templateSync.delete(templateServerID: 13)
+
+        let remaining = try context.fetch(FetchDescriptor<CachedMetadataTableTemplate>())
+        #expect(remaining.isEmpty)
     }
 
     @Test("MetadataColumnTemplateSyncService.myTemplates decodes a plain array response")
@@ -1605,4 +3187,817 @@ struct SyncServiceTests {
 
         try await templateSync.delete(templateServerID: 401)
     }
+
+    @Test("AnnotationFolderSyncService.fetchRootFolders resolves each session-attached folder's own details")
+    func fetchRootFoldersResolvesFolderDetails() async throws {
+        StubURLProtocol.handler = { request in
+            if request.url!.path.hasSuffix("/session-annotation-folders") {
+                #expect(request.url!.query?.contains("session=1") == true)
+                let json = Data("""
+                {"count": 1, "next": null, "previous": null, "results": [{"id": 1, "session": 1, "folder": 4}]}
+                """.utf8)
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+            }
+            #expect(request.url!.path.hasSuffix("/annotation-folders/4"))
+            let json = Data("""
+            {"id": 4, "folder_name": "Root Folder", "parent_folder": null, "full_path": "Root Folder",
+             "child_folders_count": 1, "annotations_count": 0, "can_edit": true, "can_delete": true}
+            """.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedAnnotationFolder.self, CachedFolderAnnotation.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let folderSync = AnnotationFolderSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        let folders = try await folderSync.fetchRootFolders(sessionServerID: 1)
+        #expect(folders.count == 1)
+        #expect(folders.first?.folderName == "Root Folder")
+    }
+
+    @Test("AnnotationFolderSyncService.fetchChildren decodes both nested folders and annotations")
+    func fetchChildrenDecodesFoldersAndAnnotations() async throws {
+        StubURLProtocol.handler = { request in
+            #expect(request.url!.path.hasSuffix("/annotation-folders/4/children"))
+            let json = Data("""
+            {"folders": [{"id": 5, "folder_name": "Child Folder", "parent_folder": 4, "full_path": "Root/Child",
+                          "child_folders_count": 0, "annotations_count": 0, "can_edit": true, "can_delete": true}],
+             "annotations": [{"id": 9, "annotation": "Folder note", "annotation_type": "text", "folder": 5,
+                              "transcribed": false, "transcription": null, "language": null, "translation": null}]}
+            """.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedAnnotationFolder.self, CachedFolderAnnotation.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let folderSync = AnnotationFolderSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        let response = try await folderSync.fetchChildren(folderServerID: 4)
+        #expect(response.folders.count == 1)
+        #expect(response.folders.first?.folderName == "Child Folder")
+        #expect(response.annotations.count == 1)
+        #expect(response.annotations.first?.annotation == "Folder note")
+    }
+
+    @Test("AnnotationFolderSyncService.fetchRootFolders falls back to the cache when unreachable, having cached on an earlier successful fetch")
+    func fetchRootFoldersFallsBackToCacheWhenOffline() async throws {
+        let container = try makeInMemoryContainer(for: [CachedAnnotationFolder.self, CachedFolderAnnotation.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let folderSync = AnnotationFolderSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        StubURLProtocol.handler = { request in
+            if request.url!.path.hasSuffix("/session-annotation-folders") {
+                let json = Data("""
+                {"count": 1, "next": null, "previous": null, "results": [{"id": 1, "session": 1, "folder": 4}]}
+                """.utf8)
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+            }
+            let json = Data("""
+            {"id": 4, "folder_name": "Root Folder", "parent_folder": null, "full_path": "Root Folder",
+             "child_folders_count": 0, "annotations_count": 0, "can_edit": true, "can_delete": true}
+            """.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+        }
+        let onlineFolders = try await folderSync.fetchRootFolders(sessionServerID: 1)
+        #expect(onlineFolders.count == 1)
+
+        StubURLProtocol.handler = { _ in
+            throw URLError(.notConnectedToInternet)
+        }
+        let offlineFolders = try await folderSync.fetchRootFolders(sessionServerID: 1)
+        #expect(offlineFolders.count == 1, "the previously-cached root folder should still be browsable offline")
+        #expect(offlineFolders.first?.folderName == "Root Folder")
+    }
+
+    @Test("AnnotationFolderSyncService.fetchChildren falls back to the cache when unreachable, having cached on an earlier successful fetch")
+    func fetchChildrenFallsBackToCacheWhenOffline() async throws {
+        let container = try makeInMemoryContainer(for: [CachedAnnotationFolder.self, CachedFolderAnnotation.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let folderSync = AnnotationFolderSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        StubURLProtocol.handler = { request in
+            let json = Data("""
+            {"folders": [{"id": 5, "folder_name": "Child Folder", "parent_folder": 4, "full_path": "Root/Child",
+                          "child_folders_count": 0, "annotations_count": 0, "can_edit": true, "can_delete": true}],
+             "annotations": [{"id": 9, "annotation": "Folder note", "annotation_type": "text", "folder": 5,
+                              "transcribed": false, "transcription": null, "language": null, "translation": null}]}
+            """.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+        }
+        let onlineResponse = try await folderSync.fetchChildren(folderServerID: 4)
+        #expect(onlineResponse.folders.count == 1)
+
+        StubURLProtocol.handler = { _ in
+            throw URLError(.notConnectedToInternet)
+        }
+        let offlineResponse = try await folderSync.fetchChildren(folderServerID: 4)
+        #expect(offlineResponse.folders.count == 1, "the previously-cached child folder should still be browsable offline")
+        #expect(offlineResponse.folders.first?.folderName == "Child Folder")
+        #expect(offlineResponse.annotations.count == 1)
+        #expect(offlineResponse.annotations.first?.annotation == "Folder note")
+    }
+
+    @Test("AnnotationFolderSyncService.createRootFolder creates the folder then attaches it to the session")
+    func createRootFolderCreatesThenAttaches() async throws {
+        StubURLProtocol.handler = { request in
+            if request.url!.path.hasSuffix("/annotation-folders") {
+                let json = Data("""
+                {"id": 6, "folder_name": "New Folder", "parent_folder": null, "full_path": "New Folder",
+                 "child_folders_count": 0, "annotations_count": 0, "can_edit": true, "can_delete": true}
+                """.utf8)
+                return (HTTPURLResponse(url: request.url!, statusCode: 201, httpVersion: nil, headerFields: nil)!, json)
+            }
+            #expect(request.url!.path.hasSuffix("/session-annotation-folders"))
+            let json = Data("""
+            {"id": 2, "session": 1, "folder": 6}
+            """.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 201, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedAnnotationFolder.self, CachedFolderAnnotation.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let folderSync = AnnotationFolderSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        let folder = try await folderSync.createRootFolder(sessionServerID: 1, folderName: "New Folder")
+        #expect(folder.id == 6)
+    }
+
+    @Test("AnnotationFolderSyncService.renameFolder PATCHes the folder's detail endpoint")
+    func renameFolderPatchesFolderName() async throws {
+        StubURLProtocol.handler = { request in
+            #expect(request.httpMethod == "PATCH")
+            #expect(request.url!.path.hasSuffix("/annotation-folders/6"))
+            let json = Data("""
+            {"id": 6, "folder_name": "Renamed", "parent_folder": null, "full_path": "Renamed",
+             "child_folders_count": 0, "annotations_count": 0, "can_edit": true, "can_delete": true}
+            """.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedAnnotationFolder.self, CachedFolderAnnotation.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let folderSync = AnnotationFolderSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        let folder = try await folderSync.renameFolder(folderServerID: 6, folderName: "Renamed")
+        #expect(folder.folderName == "Renamed")
+    }
+
+    @Test("AnnotationFolderSyncService.moveFolder PATCHes the folder's detail endpoint with a new parent")
+    func moveFolderPatchesParentFolder() async throws {
+        StubURLProtocol.handler = { request in
+            #expect(request.httpMethod == "PATCH")
+            #expect(request.url!.path.hasSuffix("/annotation-folders/6"))
+            let json = Data("""
+            {"id": 6, "folder_name": "Subfolder", "parent_folder": 9, "full_path": "Parent/Subfolder",
+             "child_folders_count": 0, "annotations_count": 0, "can_edit": true, "can_delete": true}
+            """.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedAnnotationFolder.self, CachedFolderAnnotation.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let folderSync = AnnotationFolderSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        let folder = try await folderSync.moveFolder(folderServerID: 6, newParentServerID: 9)
+        #expect(folder.parentFolder == 9)
+    }
+
+    @Test("LocalNotebookImportService counts and imports every not-yet-synced local record, resolving parent dependencies")
+    func localNotebookImportServiceImportsAllLocalRecords() async throws {
+        StubURLProtocol.handler = { request in
+            if request.url!.path.hasSuffix("/protocols") {
+                let json = Data("""
+                {"id": 77, "protocol_title": "Sample Prep", "protocol_description": null, "enabled": false, "sections": []}
+                """.utf8)
+                return (HTTPURLResponse(url: request.url!, statusCode: 201, httpVersion: nil, headerFields: nil)!, json)
+            } else if request.url!.path.hasSuffix("/sections") {
+                let json = Data("""
+                {"id": 5, "section_description": "Setup", "order": 0, "section_duration": null, "steps": []}
+                """.utf8)
+                return (HTTPURLResponse(url: request.url!, statusCode: 201, httpVersion: nil, headerFields: nil)!, json)
+            }
+            let json = Data("""
+            {"id": 12, "project_name": "Proteomics Study", "project_description": null}
+            """.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 201, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let container = try makeInMemoryContainer(for: [
+            CachedProtocol.self, CachedProtocolSection.self, CachedProtocolStep.self, CachedSession.self,
+            CachedStepReagent.self, CachedReagent.self, CachedStepAnnotation.self, CachedSessionAnnotation.self,
+            CachedStoredReagent.self, CachedReagentAction.self, CachedInstrumentUsage.self, CachedProject.self,
+            CachedInstrumentJob.self, OutboxEntry.self,
+        ])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let protocolSync = ProtocolSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let sessionSync = SessionSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let stepReagentSync = StepReagentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let stepAnnotationSync = StepAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let inventorySync = InventorySyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let instrumentSync = InstrumentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let projectSync = ProjectSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let instrumentJobSync = InstrumentJobSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let sessionAnnotationSync = SessionAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, sessionAnnotationSync: sessionAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync, projectSync: projectSync, instrumentJobSync: instrumentJobSync)
+        let importSync = LocalNotebookImportService(modelContainer: container, outboxSync: outbox)
+
+        let context = ModelContext(container)
+        let localProtocol = CachedProtocol(protocolTitle: "Sample Prep", protocolDescription: nil, enabled: false, isLocallyAuthored: true)
+        context.insert(localProtocol)
+        let localSection = CachedProtocolSection(sectionDescription: "Setup", order: 0, protocolModel: localProtocol)
+        context.insert(localSection)
+        let localProject = CachedProject(projectName: "Proteomics Study", projectDescription: nil)
+        context.insert(localProject)
+        try context.save()
+
+        let count = try await importSync.countLocalOnlyRecords()
+        #expect(count == 3, "the protocol, its section, and the project are all not-yet-synced")
+
+        await importSync.importAll()
+
+        let protocols = try context.fetch(FetchDescriptor<CachedProtocol>())
+        #expect(protocols.first?.serverID == 77)
+        let sections = try context.fetch(FetchDescriptor<CachedProtocolSection>())
+        #expect(sections.first?.serverID == 5)
+        let projects = try context.fetch(FetchDescriptor<CachedProject>())
+        #expect(projects.first?.serverID == 12)
+
+        let remainingCount = try await importSync.countLocalOnlyRecords()
+        #expect(remainingCount == 0, "everything should have synced and no longer count as local-only")
+    }
+
+    @Test("TranscriptionNotificationService.webSocketURL derives ws:// from an http:// API base and preserves the port")
+    func transcriptionWebSocketURLDerivesFromHTTPBase() {
+        let apiBaseURL = URL(string: "http://127.0.0.1:8002/api/v1/")!
+        let wsURL = TranscriptionNotificationService.webSocketURL(from: apiBaseURL, token: "abc123")
+        #expect(wsURL?.absoluteString == "ws://127.0.0.1:8002/ws/ccc/notifications/?token=abc123")
+    }
+
+    @Test("TranscriptionNotificationService.webSocketURL derives wss:// from an https:// API base")
+    func transcriptionWebSocketURLDerivesFromHTTPSBase() {
+        let apiBaseURL = URL(string: "https://cupcake.proteo.info/api/v1/")!
+        let wsURL = TranscriptionNotificationService.webSocketURL(from: apiBaseURL, token: "abc123")
+        #expect(wsURL?.absoluteString == "wss://cupcake.proteo.info/ws/ccc/notifications/?token=abc123")
+    }
+
+    @Test("TranscriptionNotificationService.originHeader matches the API base's scheme, host, and port")
+    func transcriptionOriginHeaderMatchesAPIBase() {
+        #expect(TranscriptionNotificationService.originHeader(for: URL(string: "http://127.0.0.1:8002/api/v1/")!) == "http://127.0.0.1:8002")
+        #expect(TranscriptionNotificationService.originHeader(for: URL(string: "https://cupcake.proteo.info/api/v1/")!) == "https://cupcake.proteo.info")
+    }
+
+    @Test("TranscriptionNotificationService.parseEvent decodes started, completed, and failed messages")
+    func transcriptionParseEventDecodesAllThreeTypes() {
+        let started = TranscriptionNotificationService.parseEvent(from: #"{"type":"transcription.started","annotation_id":42}"#)
+        #expect(started == .started(annotationServerID: 42))
+
+        let completed = TranscriptionNotificationService.parseEvent(from: #"{"type":"transcription.completed","annotation_id":42,"language":"en"}"#)
+        #expect(completed == .completed(annotationServerID: 42))
+
+        let failed = TranscriptionNotificationService.parseEvent(from: #"{"type":"transcription.failed","annotation_id":42,"error":"boom"}"#)
+        #expect(failed == .failed(annotationServerID: 42, error: "boom"))
+    }
+
+    @Test("TranscriptionNotificationService.parseEvent ignores unrelated message types")
+    func transcriptionParseEventIgnoresUnrelatedMessages() {
+        let connectionEstablished = TranscriptionNotificationService.parseEvent(from: #"{"type":"connection.established","user_id":1}"#)
+        #expect(connectionEstablished == nil)
+
+        let malformed = TranscriptionNotificationService.parseEvent(from: "not json")
+        #expect(malformed == nil)
+    }
+
+    @Test("TimeKeeperNotificationService.webSocketURL derives ws:// from an http:// API base and preserves the port")
+    func timeKeeperWebSocketURLDerivesFromHTTPBase() {
+        let apiBaseURL = URL(string: "http://127.0.0.1:8002/api/v1/")!
+        let wsURL = TimeKeeperNotificationService.webSocketURL(from: apiBaseURL, token: "abc123")
+        #expect(wsURL?.absoluteString == "ws://127.0.0.1:8002/ws/ccrv/timekeepers/?token=abc123")
+    }
+
+    @Test("TimeKeeperNotificationService.webSocketURL derives wss:// from an https:// API base")
+    func timeKeeperWebSocketURLDerivesFromHTTPSBase() {
+        let apiBaseURL = URL(string: "https://cupcake.proteo.info/api/v1/")!
+        let wsURL = TimeKeeperNotificationService.webSocketURL(from: apiBaseURL, token: "abc123")
+        #expect(wsURL?.absoluteString == "wss://cupcake.proteo.info/ws/ccrv/timekeepers/?token=abc123")
+    }
+
+    @Test("TimeKeeperNotificationService.originHeader matches the API base's scheme, host, and port")
+    func timeKeeperOriginHeaderMatchesAPIBase() {
+        #expect(TimeKeeperNotificationService.originHeader(for: URL(string: "http://127.0.0.1:8002/api/v1/")!) == "http://127.0.0.1:8002")
+        #expect(TimeKeeperNotificationService.originHeader(for: URL(string: "https://cupcake.proteo.info/api/v1/")!) == "https://cupcake.proteo.info")
+    }
+
+    @Test("TimeKeeperNotificationService.parseEvent decodes started, stopped, and updated messages")
+    func timeKeeperParseEventDecodesAllThreeTypes() {
+        // The real wire shape sends `timekeeperId`/`sessionId`/`stepId` as JSON strings, not numbers.
+        let started = TimeKeeperNotificationService.parseEvent(from: #"{"type":"timekeeper.started","timekeeperId":"1","sessionId":"7","stepId":"10","startTime":"2026-07-11T10:00:00Z","timestamp":"2026-07-11T10:00:00Z"}"#)
+        #expect(started == .started(timeKeeperServerID: 1, sessionServerID: 7, stepServerID: 10, startTime: "2026-07-11T10:00:00Z"))
+
+        let stopped = TimeKeeperNotificationService.parseEvent(from: #"{"type":"timekeeper.stopped","timekeeperId":"1","sessionId":"7","stepId":"10","duration":250,"durationFormatted":"4:10","timestamp":"2026-07-11T10:01:00Z"}"#)
+        #expect(stopped == .stopped(timeKeeperServerID: 1, sessionServerID: 7, stepServerID: 10, duration: 250))
+
+        let updated = TimeKeeperNotificationService.parseEvent(from: #"{"type":"timekeeper.updated","timekeeperId":"1","sessionId":"7","stepId":"10","started":true,"duration":300,"timestamp":"2026-07-11T10:02:00Z"}"#)
+        #expect(updated == .updated(timeKeeperServerID: 1, sessionServerID: 7, stepServerID: 10, started: true, duration: 300))
+    }
+
+    @Test("TimeKeeperNotificationService.parseEvent ignores unrelated message types")
+    func timeKeeperParseEventIgnoresUnrelatedMessages() {
+        let connectionEstablished = TimeKeeperNotificationService.parseEvent(from: #"{"type":"ccrv.connection.established","userId":1}"#)
+        #expect(connectionEstablished == nil)
+
+        let malformed = TimeKeeperNotificationService.parseEvent(from: "not json")
+        #expect(malformed == nil)
+    }
+
+    @Test("TimeKeeperNotificationService.Event.sessionServerID extracts the session id from any event case")
+    func timeKeeperEventSessionServerIDExtractsFromAnyCase() {
+        #expect(TimeKeeperNotificationService.Event.started(timeKeeperServerID: 1, sessionServerID: 7, stepServerID: nil, startTime: nil).sessionServerID == 7)
+        #expect(TimeKeeperNotificationService.Event.stopped(timeKeeperServerID: 1, sessionServerID: 7, stepServerID: nil, duration: nil).sessionServerID == 7)
+        #expect(TimeKeeperNotificationService.Event.updated(timeKeeperServerID: 1, sessionServerID: 7, stepServerID: nil, started: nil, duration: nil).sessionServerID == 7)
+    }
+
+    @Test("TimeKeeperSyncService.fetchTimeKeepers returns DTOs without writing to the cache")
+    func timeKeeperFetchTimeKeepersDoesNotWriteCache() async throws {
+        StubURLProtocol.handler = { request in
+            #expect(request.url?.query?.contains("session=7") == true)
+            let json = Data("""
+            {"count": 1, "next": null, "previous": null, "results": [
+                {"id": 1, "session": 7, "step": 10, "started": true, "start_time": "2026-07-11T10:00:00Z", "current_duration": 250, "original_duration": 300}
+            ]}
+            """.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedSession.self, CachedTimeKeeper.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let service = TimeKeeperSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        let dtos = try await service.fetchTimeKeepers(sessionServerID: 7)
+        #expect(dtos.count == 1)
+        #expect(dtos.first?.currentDuration == 250)
+
+        let cached = try ModelContext(container).fetch(FetchDescriptor<CachedTimeKeeper>())
+        #expect(cached.isEmpty, "fetchTimeKeepers is a pure network call — the caller applies results to its own context")
+    }
+
+    @Test("TimeKeeperSyncService.create POSTs session/step/durations and caches the result")
+    func timeKeeperCreateCachesResult() async throws {
+        StubURLProtocol.handler = { request in
+            let body = try #require(request.httpBodyStream).readAllData()
+            let sentJSON = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
+            #expect(sentJSON["session"] as? Int64 == 7)
+            #expect(sentJSON["step"] as? Int64 == 10)
+            #expect(sentJSON["current_duration"] as? Int == 300)
+            #expect(sentJSON["original_duration"] as? Int == 300)
+            let json = Data("""
+            {"id": 1, "session": 7, "step": 10, "started": false, "start_time": null, "current_duration": 300, "original_duration": 300}
+            """.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 201, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedSession.self, CachedProtocolStep.self, CachedTimeKeeper.self])
+        let context = ModelContext(container)
+        let session = CachedSession(serverID: 7, name: "Run 1", enabled: true, isRunning: true, status: "running")
+        let step = CachedProtocolStep(serverID: 10, stepDescription: "Incubate", order: 0)
+        context.insert(session)
+        context.insert(step)
+        try context.save()
+
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let service = TimeKeeperSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        let serverID = try await service.create(sessionServerID: 7, sessionClientID: session.clientID, stepServerID: 10, stepClientID: step.clientID, durationSeconds: 300)
+        #expect(serverID == 1)
+
+        let cached = try context.fetch(FetchDescriptor<CachedTimeKeeper>()).first
+        #expect(cached?.currentDuration == 300)
+        #expect(cached?.started == false)
+    }
+
+    @Test("TimeKeeperSyncService.startTimer/stopTimer/resetTimer hit the right action endpoints and update the cache")
+    func timeKeeperActionsUpdateCache() async throws {
+        nonisolated(unsafe) var hitPaths: [String] = []
+        StubURLProtocol.handler = { request in
+            hitPaths.append(request.url!.path)
+            let json = Data("""
+            {"time_keeper": {"id": 1, "session": 7, "step": 10, "started": true, "start_time": "2026-07-11T10:00:00Z", "current_duration": 300, "original_duration": 300}}
+            """.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedSession.self, CachedTimeKeeper.self])
+        let context = ModelContext(container)
+        let session = CachedSession(serverID: 7, name: "Run 1", enabled: true, isRunning: true, status: "running")
+        context.insert(session)
+        try context.save()
+
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let service = TimeKeeperSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        let dto = try await service.startTimer(serverID: 1)
+        #expect(dto.started)
+        #expect(hitPaths.last?.hasSuffix("/time-keepers/1/start_timer") == true)
+
+        let cached = try context.fetch(FetchDescriptor<CachedTimeKeeper>()).first
+        #expect(cached?.started == true)
+        #expect(cached?.startTime == "2026-07-11T10:00:00Z")
+    }
+
+    @Test("ProtocolSyncService.fetchProtocolIDs hits the right filtered-browsing endpoint")
+    func protocolFetchProtocolIDsHitsRightEndpoint() async throws {
+        nonisolated(unsafe) var hitPath: String?
+        StubURLProtocol.handler = { request in
+            hitPath = request.url!.path
+            let json = Data("""
+            [{"id": 10, "protocol_title": "A", "enabled": true, "sections": []}, {"id": 11, "protocol_title": "B", "enabled": true, "sections": []}]
+            """.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedProtocol.self, CachedProtocolSection.self, CachedProtocolStep.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let service = ProtocolSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        let ids = try await service.fetchProtocolIDs(filter: .myProtocols)
+        #expect(ids == [10, 11])
+        #expect(hitPath?.hasSuffix("/protocols/my_protocols") == true)
+    }
+
+    @Test("ProtocolSyncService.importFromProtocolsIO POSTs the URL and caches the imported protocol")
+    func protocolImportFromProtocolsIOCachesResult() async throws {
+        StubURLProtocol.handler = { request in
+            let body = try #require(request.httpBodyStream).readAllData()
+            let sentJSON = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
+            #expect(sentJSON["url"] as? String == "https://www.protocols.io/view/example")
+            let json = Data("""
+            {"id": 99, "protocol_title": "Imported Protocol", "enabled": false, "sections": []}
+            """.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 201, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedProtocol.self, CachedProtocolSection.self, CachedProtocolStep.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let service = ProtocolSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        let clientID = try await service.importFromProtocolsIO(url: "https://www.protocols.io/view/example")
+
+        let context = ModelContext(container)
+        let cached = try context.fetch(FetchDescriptor<CachedProtocol>(predicate: #Predicate { $0.clientID == clientID })).first
+        #expect(cached?.serverID == 99)
+        #expect(cached?.protocolTitle == "Imported Protocol")
+    }
+
+    @Test("ProtocolSyncService.fetchExportURL parses the signed download URL")
+    func protocolFetchExportURLParsesResponse() async throws {
+        StubURLProtocol.handler = { request in
+            #expect(request.url!.path.hasSuffix("/protocols/40/get_export_url"))
+            let json = Data(#"{"download_url": "https://example.test/api/v1/protocols/40/export_html/?token=abc"}"#.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedProtocol.self, CachedProtocolSection.self, CachedProtocolStep.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let service = ProtocolSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        let url = try await service.fetchExportURL(protocolServerID: 40, sessionServerID: nil)
+        #expect(url.absoluteString == "https://example.test/api/v1/protocols/40/export_html/?token=abc")
+    }
+
+    @Test("MaintenanceLogSyncService.create POSTs the right body and caches the result")
+    func maintenanceLogCreateCachesResult() async throws {
+        StubURLProtocol.handler = { request in
+            let body = try #require(request.httpBodyStream).readAllData()
+            let sentJSON = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
+            #expect(sentJSON["instrument"] as? Int64 == 1)
+            #expect(sentJSON["maintenance_type"] as? String == "routine")
+            #expect(sentJSON["status"] as? String == "pending")
+            let json = Data("""
+            {"id": 5, "instrument": 1, "instrument_name": "Test Centrifuge", "maintenance_date": "2026-07-12T10:00:00Z",
+             "maintenance_type": "routine", "status": "pending", "maintenance_description": "Routine check", "maintenance_notes": null, "is_template": false}
+            """.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 201, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedMaintenanceLog.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let service = MaintenanceLogSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        let serverID = try await service.create(
+            instrumentServerID: 1,
+            maintenanceDate: "2026-07-12T10:00:00Z",
+            maintenanceType: "routine",
+            status: "pending",
+            maintenanceDescription: "Routine check",
+            maintenanceNotes: nil
+        )
+        #expect(serverID == 5)
+
+        let cached = try ModelContext(container).fetch(FetchDescriptor<CachedMaintenanceLog>()).first
+        #expect(cached?.instrumentName == "Test Centrifuge")
+        #expect(cached?.status == "pending")
+    }
+
+    @Test("MaintenanceLogSyncService.updateStatus PATCHes status and updates the cache")
+    func maintenanceLogUpdateStatusUpdatesCache() async throws {
+        StubURLProtocol.handler = { request in
+            let body = try #require(request.httpBodyStream).readAllData()
+            let sentJSON = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
+            #expect(sentJSON["status"] as? String == "completed")
+            let json = Data("""
+            {"id": 5, "instrument": 1, "instrument_name": "Test Centrifuge", "maintenance_date": null,
+             "maintenance_type": "routine", "status": "completed", "maintenance_description": null, "maintenance_notes": null, "is_template": false}
+            """.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedMaintenanceLog.self])
+        let context = ModelContext(container)
+        context.insert(CachedMaintenanceLog(serverID: 5, instrumentServerID: 1, instrumentName: "Test Centrifuge", status: "pending"))
+        try context.save()
+
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let service = MaintenanceLogSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        let dto = try await service.updateStatus(serverID: 5, status: "completed")
+        #expect(dto.status == "completed")
+
+        let cached = try context.fetch(FetchDescriptor<CachedMaintenanceLog>()).first
+        #expect(cached?.status == "completed")
+    }
+
+    @Test("StepVariationSyncService.create POSTs the right body and caches the result")
+    func stepVariationCreateCachesResult() async throws {
+        StubURLProtocol.handler = { request in
+            let body = try #require(request.httpBodyStream).readAllData()
+            let sentJSON = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
+            #expect(sentJSON["step"] as? Int64 == 6)
+            #expect(sentJSON["variation_duration"] as? Int == 1200)
+            let json = Data("""
+            {"id": 1, "step": 6, "variation_description": "For larger samples, extend incubation.", "variation_duration": 1200}
+            """.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 201, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedStepVariation.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let service = StepVariationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        let serverID = try await service.create(stepServerID: 6, variationDescription: "For larger samples, extend incubation.", variationDuration: 1200)
+        #expect(serverID == 1)
+
+        let cached = try ModelContext(container).fetch(FetchDescriptor<CachedStepVariation>()).first
+        #expect(cached?.variationDuration == 1200)
+    }
+
+    @Test("StepVariationSyncService.create scopes a variation to a session when given one, and refetch filters by it")
+    func stepVariationCreateAndRefetchScopeToSession() async throws {
+        StubURLProtocol.handler = { request in
+            if request.httpMethod == "POST" {
+                let body = try #require(request.httpBodyStream).readAllData()
+                let sentJSON = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
+                #expect(sentJSON["step"] as? Int64 == 6)
+                #expect(sentJSON["session"] as? Int64 == 10)
+                let json = Data("""
+                {"id": 2, "step": 6, "session": 10, "variation_description": "For one experiment only", "variation_duration": 600}
+                """.utf8)
+                return (HTTPURLResponse(url: request.url!, statusCode: 201, httpVersion: nil, headerFields: nil)!, json)
+            }
+            #expect(request.url?.query?.contains("session=10") == true)
+            let json = Data("""
+            {"count": 1, "next": null, "previous": null, "results": [
+                {"id": 2, "step": 6, "session": 10, "variation_description": "For one experiment only", "variation_duration": 600}
+            ]}
+            """.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedStepVariation.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let service = StepVariationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        let serverID = try await service.create(stepServerID: 6, sessionServerID: 10, variationDescription: "For one experiment only", variationDuration: 600)
+        #expect(serverID == 2)
+
+        var cached = try ModelContext(container).fetch(FetchDescriptor<CachedStepVariation>()).first
+        #expect(cached?.sessionServerID == 10)
+
+        try await service.refetch(stepServerID: 6, sessionServerID: 10)
+        cached = try ModelContext(container).fetch(FetchDescriptor<CachedStepVariation>()).first
+        #expect(cached?.sessionServerID == 10)
+    }
+
+    @Test("ProtocolRatingSyncService.rate creates a new rating when none exists yet")
+    func protocolRatingCreatesWhenNoneExists() async throws {
+        StubURLProtocol.handler = { request in
+            if request.httpMethod == "GET" {
+                let json = Data(#"{"count": 0, "next": null, "previous": null, "results": []}"#.utf8)
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+            }
+            #expect(request.httpMethod == "POST")
+            let json = Data(#"{"id": 1, "protocol": 40, "complexity_rating": 5, "duration_rating": 3}"#.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 201, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedProtocolRating.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let service = ProtocolRatingSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        let dto = try await service.rate(protocolServerID: 40, userID: 1, complexityRating: 5, durationRating: 3)
+        #expect(dto.id == 1)
+
+        let cached = try ModelContext(container).fetch(FetchDescriptor<CachedProtocolRating>()).first
+        #expect(cached?.complexityRating == 5)
+    }
+
+    @Test("ProtocolRatingSyncService.rate PATCHes the existing rating rather than risking a duplicate POST")
+    func protocolRatingPatchesWhenAlreadyExists() async throws {
+        nonisolated(unsafe) var sawPost = false
+        StubURLProtocol.handler = { request in
+            if request.httpMethod == "GET" {
+                let json = Data(#"{"count": 1, "next": null, "previous": null, "results": [{"id": 7, "protocol": 40, "complexity_rating": 2, "duration_rating": 2}]}"#.utf8)
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+            }
+            if request.httpMethod == "POST" { sawPost = true }
+            #expect(request.httpMethod == "PATCH")
+            #expect(request.url!.path.hasSuffix("/ratings/7"))
+            let json = Data(#"{"id": 7, "protocol": 40, "complexity_rating": 8, "duration_rating": 9}"#.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedProtocolRating.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let service = ProtocolRatingSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        let dto = try await service.rate(protocolServerID: 40, userID: 1, complexityRating: 8, durationRating: 9)
+        #expect(dto.complexityRating == 8)
+        #expect(!sawPost, "must never POST a duplicate rating once one is known to exist")
+    }
+
+    @Test("StoredReagentAnnotationSyncService.create posts the annotation_data shortcut and caches the result")
+    func storedReagentAnnotationCreateCachesResult() async throws {
+        StubURLProtocol.handler = { request in
+            let body = try #require(request.httpBodyStream).readAllData()
+            let sentJSON = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
+            #expect(sentJSON["stored_reagent"] as? Int64 == 1)
+            #expect(sentJSON["folder"] as? Int64 == 2)
+            let annotationData = try #require(sentJSON["annotation_data"] as? [String: Any])
+            #expect(annotationData["annotation"] as? String == "MSDS sheet notes")
+            let json = Data("""
+            {"id": 9, "stored_reagent": 1, "folder": 2, "folder_name": "Certificates",
+             "annotation_text": "MSDS sheet notes", "annotation_type": "text", "scratched": false}
+            """.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 201, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedStoredReagentAnnotation.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let service = StoredReagentAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        let serverID = try await service.create(storedReagentServerID: 1, folderServerID: 2, text: "MSDS sheet notes")
+        #expect(serverID == 9)
+
+        let cached = try ModelContext(container).fetch(FetchDescriptor<CachedStoredReagentAnnotation>()).first
+        #expect(cached?.folderName == "Certificates")
+        #expect(cached?.annotationText == "MSDS sheet notes")
+    }
+
+    @Test("StoredReagentAnnotationSyncService.fetchDocumentFolders filters to MSDS/Certificates/Manuals")
+    func storedReagentAnnotationFetchDocumentFoldersFilters() async throws {
+        StubURLProtocol.handler = { request in
+            #expect(request.url!.query?.contains("resource_type=file") == true)
+            let json = Data("""
+            {"count": 4, "next": null, "previous": null, "results": [
+              {"id": 1, "folder_name": "MSDS", "can_edit": true, "can_delete": true},
+              {"id": 2, "folder_name": "Certificates", "can_edit": true, "can_delete": true},
+              {"id": 3, "folder_name": "Manuals", "can_edit": true, "can_delete": true},
+              {"id": 4, "folder_name": "Unrelated", "can_edit": true, "can_delete": true}
+            ]}
+            """.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedStoredReagentAnnotation.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let service = StoredReagentAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        let folders = try await service.fetchDocumentFolders()
+        #expect(folders.count == 3)
+        #expect(folders.map(\.folderName).sorted() == ["Certificates", "MSDS", "Manuals"].sorted())
+    }
+
+    @Test("ReagentSubscriptionSyncService.subscribe creates a new subscription when none exists, always sending user explicitly")
+    func reagentSubscriptionCreatesWhenNoneExists() async throws {
+        StubURLProtocol.handler = { request in
+            if request.httpMethod == "GET" {
+                let json = Data(#"{"count": 0, "next": null, "previous": null, "results": []}"#.utf8)
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+            }
+            #expect(request.httpMethod == "POST")
+            let body = try #require(request.httpBodyStream).readAllData()
+            let sentJSON = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
+            #expect(sentJSON["user"] as? Int64 == 1, "must always send user explicitly — perform_create's auto-assign runs after required-field validation")
+            let json = Data(#"{"id": 3, "user": 1, "stored_reagent": 1, "notify_on_low_stock": true, "notify_on_expiry": false}"#.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 201, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedReagentSubscription.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let service = ReagentSubscriptionSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        let dto = try await service.subscribe(storedReagentServerID: 1, userID: 1, notifyOnLowStock: true, notifyOnExpiry: false)
+        #expect(dto.id == 3)
+
+        let cached = try ModelContext(container).fetch(FetchDescriptor<CachedReagentSubscription>()).first
+        #expect(cached?.notifyOnLowStock == true)
+    }
+
+    @Test("ReagentSubscriptionSyncService.subscribe PATCHes the existing subscription rather than risking a duplicate POST")
+    func reagentSubscriptionPatchesWhenAlreadyExists() async throws {
+        nonisolated(unsafe) var sawPost = false
+        StubURLProtocol.handler = { request in
+            if request.httpMethod == "GET" {
+                let json = Data(#"{"count": 1, "next": null, "previous": null, "results": [{"id": 5, "user": 1, "stored_reagent": 1, "notify_on_low_stock": true, "notify_on_expiry": false}]}"#.utf8)
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+            }
+            if request.httpMethod == "POST" { sawPost = true }
+            #expect(request.httpMethod == "PATCH")
+            #expect(request.url!.path.hasSuffix("/reagent-subscriptions/5"))
+            let json = Data(#"{"id": 5, "user": 1, "stored_reagent": 1, "notify_on_low_stock": false, "notify_on_expiry": true}"#.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedReagentSubscription.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let service = ReagentSubscriptionSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        let dto = try await service.subscribe(storedReagentServerID: 1, userID: 1, notifyOnLowStock: false, notifyOnExpiry: true)
+        #expect(dto.notifyOnExpiry == true)
+        #expect(!sawPost, "must never POST a duplicate subscription once one is known to exist")
+    }
+
+    @Test("SamplePoolSyncService.create POSTs the right body and caches the result")
+    func samplePoolCreateCachesResult() async throws {
+        StubURLProtocol.handler = { request in
+            let body = try #require(request.httpBodyStream).readAllData()
+            let sentJSON = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
+            #expect(sentJSON["metadata_table"] as? Int64 == 6)
+            #expect(sentJSON["pool_name"] as? String == "Pool A")
+            #expect(sentJSON["pooled_only_samples"] as? [Int] == [1, 2])
+            #expect(sentJSON["pooled_and_independent_samples"] as? [Int] == [3])
+            let json = Data("""
+            {"id": 1, "pool_name": "Pool A", "pool_description": "First pool", "pooled_only_samples": [1, 2],
+             "pooled_and_independent_samples": [3], "is_reference": false, "sdrf_value": "SN=sample 1,sample 2,sample 3",
+             "metadata_table": 6, "total_samples": 3}
+            """.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 201, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedSamplePool.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let service = SamplePoolSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        let serverID = try await service.create(
+            metadataTableServerID: 6,
+            poolName: "Pool A",
+            poolDescription: "First pool",
+            pooledOnlySamples: [1, 2],
+            pooledAndIndependentSamples: [3],
+            isReference: false
+        )
+        #expect(serverID == 1)
+
+        let cached = try ModelContext(container).fetch(FetchDescriptor<CachedSamplePool>()).first
+        #expect(cached?.totalSamples == 3)
+        #expect(cached?.sdrfValue == "SN=sample 1,sample 2,sample 3")
+    }
+
+    @Test("SamplePoolSyncService.update PATCHes the right path and updates the cache")
+    func samplePoolUpdateUpdatesCache() async throws {
+        StubURLProtocol.handler = { request in
+            #expect(request.httpMethod == "PATCH")
+            #expect(request.url!.path.hasSuffix("/sample-pools/1"))
+            let json = Data("""
+            {"id": 1, "pool_name": "Pool A Renamed", "pool_description": "First pool", "pooled_only_samples": [1, 2],
+             "pooled_and_independent_samples": [3], "is_reference": true, "sdrf_value": "SN=sample 1,sample 2,sample 3",
+             "metadata_table": 6, "total_samples": 3}
+            """.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedSamplePool.self])
+        let context = ModelContext(container)
+        context.insert(CachedSamplePool(serverID: 1, metadataTableServerID: 6, poolName: "Pool A", pooledOnlySamples: [1, 2], pooledAndIndependentSamples: [3]))
+        try context.save()
+
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let service = SamplePoolSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        let dto = try await service.update(serverID: 1, poolName: "Pool A Renamed", poolDescription: "First pool", pooledOnlySamples: [1, 2], pooledAndIndependentSamples: [3], isReference: true)
+        #expect(dto.poolName == "Pool A Renamed")
+
+        let cached = try context.fetch(FetchDescriptor<CachedSamplePool>()).first
+        #expect(cached?.poolName == "Pool A Renamed")
+        #expect(cached?.isReference == true)
+    }
+
 }

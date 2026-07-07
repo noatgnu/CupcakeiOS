@@ -1,8 +1,6 @@
 import Foundation
 
-/// Step/section durations are stored in seconds and can be large (a "2160 min" overnight
-/// incubation step) — breaking into days/hours/minutes reads naturally where a raw minute count
-/// doesn't.
+/// Formats a duration in seconds as a natural days/hours/minutes string.
 enum HumanReadableDuration {
     static func format(seconds: Int) -> String {
         formatter.string(from: TimeInterval(seconds)) ?? "\(seconds)s"

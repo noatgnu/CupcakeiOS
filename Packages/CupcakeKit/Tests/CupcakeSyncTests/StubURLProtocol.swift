@@ -1,8 +1,6 @@
 import Foundation
 
-/// Local copy of CupcakeNetworkingTests' stub — kept small and duplicated rather than shared
-/// across test targets until a third target needs it (SPM has no lightweight way to share
-/// test-only helpers between test targets without a new product).
+/// Local copy of CupcakeNetworkingTests' stub, duplicated since SPM can't easily share test-only helpers.
 final class StubURLProtocol: URLProtocol, @unchecked Sendable {
     nonisolated(unsafe) static var handler: (@Sendable (URLRequest) throws -> (HTTPURLResponse, Data))?
 

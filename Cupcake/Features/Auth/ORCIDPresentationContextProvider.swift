@@ -15,10 +15,7 @@ final class ORCIDPresentationContextProvider: NSObject, ASWebAuthenticationPrese
             .flatMap { $0.windows }
             .first { $0.isKeyWindow } ?? ASPresentationAnchor()
         #elseif os(macOS)
-        // `keyWindow`/`mainWindow` can both be nil at this exact moment (e.g. driven by
-        // XCUITest, where the window may not hold key status the way normal interactive use
-        // does) — fall back to any visible, on-screen window before the last-resort phantom
-        // anchor, which would make the sheet silently fail to appear at all.
+        // Falls back to any visible window if keyWindow/mainWindow are both nil.
         NSApplication.shared.keyWindow
             ?? NSApplication.shared.mainWindow
             ?? NSApplication.shared.windows.first { $0.isVisible }

@@ -4,12 +4,7 @@ import CupcakeSync
 import SwiftData
 import SwiftUI
 
-/// Matches the reference web app's standalone project management (`home/projects.ts`) — projects
-/// are created there, not inline here. This sheet only picks from already-created projects,
-/// mirroring `job-submission.ts` step 1's field set minus its inline-creation fallback.
-///
-/// Always created locally first, then synced immediately when signed in — a genuine
-/// unreachability failure queues it in the outbox, same pattern as every other create flow.
+/// Creates a job, picking from already-created projects. Created locally then synced or queued.
 struct NewJobSheet: View {
     @Environment(AppSession.self) private var appSession
     @Environment(\.dismiss) private var dismiss

@@ -1,10 +1,7 @@
 import CupcakeNetworking
 import Foundation
 
-/// The single entry point the app UI calls. Username/password authenticates exactly once,
-/// immediately exchanged for a `write`-permission `DeviceToken` that's used for all REST traffic
-/// afterward — the JWT pair from `login` is discarded once the exchange succeeds, not retained
-/// for refresh.
+/// Authenticates once, exchanging the resulting JWT for a `write`-permission `DeviceToken` used for all REST traffic.
 public actor AuthManager {
     private let authService: AuthService
     private let keychain: KeychainStore
@@ -14,9 +11,7 @@ public actor AuthManager {
         self.keychain = keychain
     }
 
-    /// `deviceLabel` should identify the physical device (e.g. its `UIDevice.current.name` /
-    /// `Host.current().localizedName`) so a user reviewing `/home/devices` on the web app later
-    /// can tell which entry to revoke.
+    /// `deviceLabel` should identify the physical device for later review on `/home/devices`.
     @discardableResult
     public func signIn(username: String, password: String, deviceLabel: String) async throws -> DeviceTokenDTO {
         let login = try await authService.login(username: username, password: password)
@@ -33,9 +28,7 @@ public actor AuthManager {
         authService.orcidLoginURL()
     }
 
-    /// Call once `ASWebAuthenticationSession`'s callback hands back `cupcake://oauth-callback?auth_code=...`
-    /// — same exchange-for-device-token tail as `signIn`, just starting from an ORCID auth code
-    /// instead of a password.
+    /// Same exchange-for-device-token tail as `signIn`, starting from an ORCID auth code.
     @discardableResult
     public func completeORCIDSignIn(authCode: String, deviceLabel: String) async throws -> DeviceTokenDTO {
         let login = try await authService.exchangeAuthCode(authCode)

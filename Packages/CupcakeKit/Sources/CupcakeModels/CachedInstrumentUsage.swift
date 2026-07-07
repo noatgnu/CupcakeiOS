@@ -1,9 +1,7 @@
 import Foundation
 import SwiftData
 
-/// A booking request — offline-createable from Phase 3 on, so this uses the same
-/// client-generated-identity pattern as `CachedStoredReagent`. Approval always happens
-/// server-side later regardless of where the booking was created.
+/// A booking request, offline-createable. Approval always happens server-side later.
 @Model
 public final class CachedInstrumentUsage {
     @Attribute(.unique) public var clientID: UUID

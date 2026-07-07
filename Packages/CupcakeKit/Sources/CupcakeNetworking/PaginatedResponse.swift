@@ -1,8 +1,6 @@
 import Foundation
 
-/// DRF `LimitOffsetPagination` envelope. Every list endpoint in the backend returns this shape,
-/// with `limit`/`offset` query params (not `page`/`page_size`) — confirmed against
-/// `cupcake_vanilla/settings.py`'s `DEFAULT_PAGINATION_CLASS`.
+/// DRF `LimitOffsetPagination` envelope used by every list endpoint (`limit`/`offset` query params).
 public struct PaginatedResponse<Result: Decodable & Sendable>: Decodable, Sendable {
     public let count: Int
     public let next: String?

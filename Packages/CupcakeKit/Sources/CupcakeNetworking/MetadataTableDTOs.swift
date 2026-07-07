@@ -1,5 +1,10 @@
-/// Verified against `ccv/models.py:1291-1374` (`MetadataColumn`) and `MetadataColumnSerializer`
-/// (`ccv/serializers.py:170-207`).
+/// A per-sample-range value override, e.g. `{"samples": "1-3,7", "value": "..."}`.
+public struct MetadataColumnModifierDTO: Codable, Sendable {
+    public let samples: String
+    public let value: String
+}
+
+/// `GET metadata-columns/` response shape.
 public struct MetadataColumnDTO: Decodable, Sendable {
     public let id: Int64
     public let name: String
@@ -14,12 +19,33 @@ public struct MetadataColumnDTO: Decodable, Sendable {
     public let readonly: Bool
     public let ontologyType: String?
     public let staffOnly: Bool
+    public let modifiers: [MetadataColumnModifierDTO]
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(Int64.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        displayName = try container.decodeIfPresent(String.self, forKey: .displayName)
+        type = try container.decode(String.self, forKey: .type)
+        columnPosition = try container.decodeIfPresent(Int.self, forKey: .columnPosition)
+        value = try container.decodeIfPresent(String.self, forKey: .value)
+        notApplicable = try container.decode(Bool.self, forKey: .notApplicable)
+        notAvailable = try container.decode(Bool.self, forKey: .notAvailable)
+        mandatory = try container.decode(Bool.self, forKey: .mandatory)
+        hidden = try container.decode(Bool.self, forKey: .hidden)
+        readonly = try container.decode(Bool.self, forKey: .readonly)
+        ontologyType = try container.decodeIfPresent(String.self, forKey: .ontologyType)
+        staffOnly = try container.decode(Bool.self, forKey: .staffOnly)
+        modifiers = try container.decodeIfPresent([MetadataColumnModifierDTO].self, forKey: .modifiers) ?? []
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, displayName, type, columnPosition, value, notApplicable, notAvailable
+        case mandatory, hidden, readonly, ontologyType, staffOnly, modifiers
+    }
 }
 
-/// Verified against `ccv/models.py:23-244` (`BaseMetadataTable`/`MetadataTable`) and
-/// `MetadataTableSerializer` (`ccv/serializers.py:36-98`). `columns` is a nested read-only field
-/// on every `MetadataTable` response — no separate `metadata-columns/` call is needed to read a
-/// table's columns.
+/// `GET metadata-tables/` response shape. `columns` is a nested read-only field, no separate call needed.
 public struct MetadataTableDTO: Decodable, Sendable {
     public let id: Int64
     public let name: String
@@ -33,8 +59,7 @@ public struct MetadataTableDTO: Decodable, Sendable {
     public let columns: [MetadataColumnDTO]
 }
 
-/// `POST instrument-jobs/{id}/create_metadata_from_template/` response — does **not** return the
-/// updated `InstrumentJob` itself, only the new table and the job's id (`ccm/viewsets.py:588-669`).
+/// `POST instrument-jobs/{id}/create_metadata_from_template/` response — does not return the updated `InstrumentJob` itself.
 public struct CreateMetadataFromTemplateResponse: Decodable, Sendable {
     public let message: String
     public let metadataTable: MetadataTableDTO
@@ -54,11 +79,7 @@ public struct CreateMetadataFromTemplateRequest: Encodable, Sendable {
     }
 }
 
-/// `POST metadata-columns/{id}/update_column_value/` body. Field set/behavior verified directly
-/// against `ccv/viewsets.py:1400-1460` (not assumed from the Angular frontend alone): `.default`
-/// sets the column's own default value; `.sampleSpecific` requires `sampleIndices` (1-based sample
-/// numbers) and stores per-sample overrides via modifiers; `.replaceAll` isn't yet exposed by this
-/// app's v1 slice (deferred alongside bulk/pattern autofill).
+/// `POST metadata-columns/{id}/update_column_value/` body's value type. `.replaceAll` isn't yet exposed by this app.
 public enum ColumnValueUpdateType: String, Encodable, Sendable {
     case `default`
     case sampleSpecific = "sample_specific"
@@ -77,25 +98,28 @@ public struct UpdateColumnValueRequest: Encodable, Sendable {
     }
 }
 
-/// Only `column` is actually consumed — `message`/`changes`/`value_type` exist on the real
-/// response but this app's v1 slice has no use for them yet (no undo/diff UI).
+/// Only `column` is consumed; the response also carries `message`/`changes`/`value_type`, unused here.
 public struct UpdateColumnValueResponse: Decodable, Sendable {
     public let column: MetadataColumnDTO
 }
 
-/// `GET metadata-columns/ontology_suggestions/?column_id=&search=&limit=&search_type=` (or the
-/// `column-templates/` equivalent). Verified against `ccv/ontology_registry.py`'s
-/// `OntologyDescriptor.build_search_queryset` response envelope, not assumed. `fullData` varies by
-/// ontology type (e.g. Unimod's `deltaMonoMass`/`deltaComposition`/specifications) — left as a
-/// generic JSON blob (`[String: JSONValue]`) rather than typed per-ontology, since this app's v1
-/// slice only needs `value`/`displayName` for plain-text columns, not the SDRF special-syntax
-/// auto-fill behavior the reference web app's modification/cleavage inputs use.
+/// A Unimod ontology suggestion's extra detail fields.
+public struct UnimodFullData: Decodable, Sendable {
+    public let accession: String?
+    public let name: String?
+    public let definition: String?
+    public let deltaMonoMass: String?
+    public let deltaComposition: String?
+    public let specifications: [String: [String: String]]
+}
+
 public struct OntologySuggestionDTO: Decodable, Sendable, Identifiable {
     public let id: String
     public let value: String
     public let displayName: String
     public let description: String?
     public let ontologyType: String
+    public let fullData: UnimodFullData?
 }
 
 public struct OntologySuggestionsResponse: Decodable, Sendable {

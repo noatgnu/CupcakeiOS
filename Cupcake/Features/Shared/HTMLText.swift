@@ -6,16 +6,7 @@ import UIKit
 import AppKit
 #endif
 
-/// Step/section/protocol descriptions and annotations authored via the reference web app's
-/// rich-text editor are stored as HTML server-side, not plain text — displaying them with a
-/// plain `Text(string)` shows the raw markup (`<span class="component-amount">1 mg</span>`)
-/// instead of rendering it. `NSAttributedString`'s HTML import must run on the main thread
-/// (Apple's own documented constraint), which is where SwiftUI view bodies already run.
-///
-/// `.defaultAttributes` only sets a fallback baseline — the web editor's own HTML/CSS still
-/// specifies an explicit font that overrides it, so every run's font is force-substituted with
-/// a system-font equivalent afterward instead (preserving bold/italic via the original font's
-/// symbolic traits, not preserving the original family/size).
+/// Renders server-stored HTML descriptions/annotations, force-substituting a system font while preserving bold/italic.
 struct HTMLText: View {
     let html: String
 
@@ -27,9 +18,7 @@ struct HTMLText: View {
         }
     }
 
-    /// Locally-authored content (this app has no rich-text editor) never contains a `<` at all —
-    /// skip the genuinely expensive `NSAttributedString` HTML-import pipeline entirely for it,
-    /// rather than paying that cost on every render for text that was never going to need it.
+    /// Skips the expensive HTML-import pipeline entirely for plain text with no `<` at all.
     private static func attributedString(from html: String) -> AttributedString? {
         guard html.contains("<") else { return nil }
         guard let data = html.data(using: .utf8) else { return nil }
@@ -75,8 +64,7 @@ struct HTMLText: View {
         #endif
     }
 
-    /// For contexts that need a plain `String` (navigation titles, section header text) rather
-    /// than a styled `View` — strips markup instead of rendering it.
+    /// Strips markup for contexts that need a plain `String` rather than a styled `View`.
     static func plainText(from html: String) -> String {
         attributedString(from: html).map { String($0.characters) } ?? html
     }
