@@ -1,7 +1,6 @@
 import Foundation
 import SwiftData
 
-/// A per-sample-range value override, e.g. samples `"1-3,7"` use `value` instead of the column's default.
 public struct MetadataColumnModifier: Codable, Sendable, Hashable {
     public var samples: String
     public var value: String

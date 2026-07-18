@@ -1,7 +1,6 @@
 import CupcakeModels
 import SwiftUI
 
-/// Holds `SketchCanvasView`'s live stroke-construction state, testable independently of drag gestures.
 @Observable
 final class SketchEditorModel {
     private(set) var strokes: [SketchStroke] = []
@@ -55,7 +54,6 @@ final class SketchEditorModel {
     }
 }
 
-/// Freehand sketch canvas producing a JSON vector-stroke schema, not a rendered image.
 struct SketchCanvasView: View {
     let onSave: (Data) -> Void
     let onCancel: () -> Void
@@ -154,7 +152,6 @@ struct SketchCanvasView: View {
     }
 }
 
-/// Shared stroke-drawing logic used by both the live canvas and read-only sketch previews.
 enum SketchRenderer {
     static func draw(strokes: [SketchStroke], eraserColor: Color, in context: GraphicsContext) {
         for stroke in strokes {
@@ -171,7 +168,6 @@ enum SketchRenderer {
 }
 
 extension Color {
-    /// Parses a "#RRGGBB" hex string; falls back to black for anything unrecognized.
     init(hex: String) {
         var hexString = hex.trimmingCharacters(in: .whitespacesAndNewlines)
         hexString.removeAll { $0 == "#" }

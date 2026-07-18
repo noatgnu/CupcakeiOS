@@ -13,7 +13,6 @@ struct AuthDTOsTests {
 
     @Test("decodes the literal auth/login/ response shape")
     func decodesLoginResponse() throws {
-        // Matches ccc/authentication.py:login_view's JsonResponse verbatim.
         let json = Data("""
         {
             "access_token": "jwt-access",
@@ -42,7 +41,6 @@ struct AuthDTOsTests {
 
     @Test("decodes the literal device-tokens/ create response shape")
     func decodesDeviceTokenResponse() throws {
-        // Matches ccc/device_token/serializer.py's field list verbatim.
         let json = Data("""
         {
             "id": 7,

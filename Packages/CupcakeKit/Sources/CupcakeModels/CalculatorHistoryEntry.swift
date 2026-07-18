@@ -1,6 +1,5 @@
 import Foundation
 
-/// A single calculator operation, encoded with plain camelCase keys as opaque JSON in `annotation_text`.
 public struct CalculatorHistoryEntry: Codable, Sendable, Identifiable, Equatable {
     public var id: String
     public var inputPromptFirstValue: Double

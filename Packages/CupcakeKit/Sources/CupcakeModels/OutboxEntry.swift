@@ -1,7 +1,6 @@
 import Foundation
 import SwiftData
 
-/// A queued create operation that couldn't reach the server yet, retried later by `OutboxService.replayPending()`.
 @Model
 public final class OutboxEntry {
     @Attribute(.unique) public var id: UUID
@@ -12,7 +11,6 @@ public final class OutboxEntry {
     public var retryCount: Int
     public var lastError: String?
     public var createdAt: Date
-    /// Strict FIFO replay order, assigned by `OutboxStore.enqueue`; not derived from `createdAt`.
     public var sequence: Int
 
     public init(
@@ -43,7 +41,6 @@ public enum OutboxEntryStatus: String, Sendable {
     case failed
 }
 
-/// One case per outbox-eligible create operation.
 public enum OutboxOperationType: String, Sendable {
     case createProtocol
     case createSection
@@ -66,7 +63,6 @@ public enum OutboxOperationType: String, Sendable {
     case createSessionSketchAnnotation
 }
 
-/// `OutboxEntry.payloadJSON` for `OutboxOperationType.createProtocol`.
 public struct CreateProtocolPayload: Codable, Sendable {
     public var title: String
     public var description: String?
@@ -79,7 +75,6 @@ public struct CreateProtocolPayload: Codable, Sendable {
     }
 }
 
-/// `OutboxEntry.payloadJSON` for operations that need no field snapshot at all.
 public struct EmptyOutboxPayload: Codable, Sendable {
     public init() {}
 }

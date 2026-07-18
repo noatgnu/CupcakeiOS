@@ -1,4 +1,3 @@
-/// `GET steps/` response shape. `stepDuration` is in seconds, not minutes.
 public struct ProtocolStepDTO: Decodable, Sendable {
     public let id: Int64
     public let stepDescription: String
@@ -6,7 +5,6 @@ public struct ProtocolStepDTO: Decodable, Sendable {
     public let stepDuration: Int?
 }
 
-/// `sectionDuration` (seconds) — same provenance as `ProtocolStepDTO.stepDuration`.
 public struct ProtocolSectionDTO: Decodable, Sendable {
     public let id: Int64
     public let sectionDescription: String?
@@ -15,13 +13,14 @@ public struct ProtocolSectionDTO: Decodable, Sendable {
     public let steps: [ProtocolStepDTO]
 }
 
-/// `sections` is absent entirely from `POST protocols/`'s create response; defaults to `[]` when absent.
 public struct ProtocolDTO: Decodable, Sendable {
     public let id: Int64
     public let protocolTitle: String
     public let protocolDescription: String?
     public let enabled: Bool
     public let sections: [ProtocolSectionDTO]
+    public let createdAt: String?
+    public let updatedAt: String?
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -30,14 +29,15 @@ public struct ProtocolDTO: Decodable, Sendable {
         protocolDescription = try container.decodeIfPresent(String.self, forKey: .protocolDescription)
         enabled = try container.decode(Bool.self, forKey: .enabled)
         sections = try container.decodeIfPresent([ProtocolSectionDTO].self, forKey: .sections) ?? []
+        createdAt = try container.decodeIfPresent(String.self, forKey: .createdAt)
+        updatedAt = try container.decodeIfPresent(String.self, forKey: .updatedAt)
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, protocolTitle, protocolDescription, enabled, sections
+        case id, protocolTitle, protocolDescription, enabled, sections, createdAt, updatedAt
     }
 }
 
-/// `POST protocols/` body. `owner` is server-assigned. `enabled` means "public," not soft-delete.
 public struct CreateProtocolRequest: Encodable, Sendable {
     public var protocolTitle: String
     public var protocolDescription: String?
@@ -50,7 +50,6 @@ public struct CreateProtocolRequest: Encodable, Sendable {
     }
 }
 
-/// `PATCH protocols/{id}/` body.
 public struct UpdateProtocolRequest: Encodable, Sendable {
     public var protocolTitle: String
     public var protocolDescription: String?
@@ -63,7 +62,6 @@ public struct UpdateProtocolRequest: Encodable, Sendable {
     }
 }
 
-/// `POST sections/` body. `order` is not server-auto-incremented; the caller must supply the next value.
 public struct CreateProtocolSectionRequest: Encodable, Sendable {
     public var protocol_: Int64
     public var sectionDescription: String?
@@ -83,7 +81,6 @@ public struct CreateProtocolSectionRequest: Encodable, Sendable {
     }
 }
 
-/// `PATCH sections/{id}/` body.
 public struct UpdateProtocolSectionRequest: Encodable, Sendable {
     public var sectionDescription: String?
     public var sectionDuration: Int?
@@ -94,7 +91,6 @@ public struct UpdateProtocolSectionRequest: Encodable, Sendable {
     }
 }
 
-/// `POST steps/` body. A step requires both a `protocol` FK and a `step_section` FK.
 public struct CreateProtocolStepRequest: Encodable, Sendable {
     public var protocol_: Int64
     public var stepSection: Int64
@@ -116,7 +112,6 @@ public struct CreateProtocolStepRequest: Encodable, Sendable {
     }
 }
 
-/// `PATCH steps/{id}/` body.
 public struct UpdateProtocolStepRequest: Encodable, Sendable {
     public var stepDescription: String
     public var stepDuration: Int?

@@ -3,7 +3,6 @@ import CupcakeNetworking
 import CupcakeSync
 import SwiftUI
 
-/// A multi-column lab-group permission table (Member | View | Invite | Manage | Process Jobs).
 struct LabGroupPermissionsView: View {
     @Environment(AppSession.self) private var appSession
     @Environment(\.dismiss) private var dismiss

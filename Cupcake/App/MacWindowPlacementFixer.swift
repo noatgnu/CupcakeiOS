@@ -1,9 +1,7 @@
 #if os(macOS)
 import AppKit
 
-/// Clamps every window's frame to its screen's visible bounds right after it becomes key.
 final class MacWindowPlacementFixer: NSObject, NSApplicationDelegate {
-    /// Disables macOS's automatic window/scene-state restoration to avoid stale ghost windows.
     func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool { false }
 
     func applicationDidFinishLaunching(_ notification: Notification) {

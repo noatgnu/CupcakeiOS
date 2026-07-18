@@ -3,7 +3,6 @@ import CupcakeNetworking
 import Foundation
 import SwiftData
 
-/// Named subsets of a `MetadataTable`'s samples, pooled for SDRF export. Online-only. Callers must enforce the overlap/range validation client-side; the server crashes with a raw 500 on an invalid request instead of a clean 400.
 public actor SamplePoolSyncService {
     private let apiClient: APIClient
     private let deviceToken: @Sendable () -> String?
@@ -32,6 +31,23 @@ public actor SamplePoolSyncService {
             guard let nextURLString = page.next, let nextURL = URL(string: nextURLString) else { break }
             page = try await apiClient.get(absoluteURL: nextURL, authorizationHeader: authorization)
         }
+    }
+
+    public func fetchDetail(metadataTableServerID: Int64) async throws -> [SamplePoolDTO] {
+        guard let token = deviceToken() else { return [] }
+        let authorization = "DeviceToken \(token)"
+        var results: [SamplePoolDTO] = []
+        var page: PaginatedResponse<SamplePoolDTO> = try await apiClient.get(
+            "sample-pools/",
+            query: [URLQueryItem(name: "metadata_table_id", value: String(metadataTableServerID))],
+            authorizationHeader: authorization
+        )
+        while true {
+            results.append(contentsOf: page.results)
+            guard let nextURLString = page.next, let nextURL = URL(string: nextURLString) else { break }
+            page = try await apiClient.get(absoluteURL: nextURL, authorizationHeader: authorization)
+        }
+        return results
     }
 
     @discardableResult

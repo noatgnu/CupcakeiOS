@@ -2,7 +2,6 @@ import CupcakeModels
 import Foundation
 import SwiftData
 
-/// Enqueues every not-yet-synced local record into the outbox and replays it.
 public actor LocalNotebookImportService {
     private let outboxSync: OutboxService
     private let store: LocalNotebookImportStore

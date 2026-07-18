@@ -14,6 +14,8 @@ public final class CachedMetadataTableTemplate {
     public var canEdit: Bool
     public var canDelete: Bool
     public var schemaNames: [String]
+    public var createdAt: Date
+    public var updatedAt: Date
 
     public init(
         serverID: Int64,
@@ -26,7 +28,9 @@ public final class CachedMetadataTableTemplate {
         labGroupServerID: Int64? = nil,
         canEdit: Bool = false,
         canDelete: Bool = false,
-        schemaNames: [String] = []
+        schemaNames: [String] = [],
+        createdAt: Date = Date(),
+        updatedAt: Date = Date()
     ) {
         self.serverID = serverID
         self.name = name
@@ -39,5 +43,7 @@ public final class CachedMetadataTableTemplate {
         self.canEdit = canEdit
         self.canDelete = canDelete
         self.schemaNames = schemaNames
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
     }
 }

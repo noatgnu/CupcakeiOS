@@ -5,15 +5,22 @@ import SwiftUI
 struct JobListView: View {
     let ontologyStore: ModelContainer
 
-    @Query(sort: \CachedInstrumentJob.jobName) private var jobs: [CachedInstrumentJob]
+    @Environment(AppSession.self) private var appSession
+    @Environment(\.openWindow) private var openWindow
+    @Query(sort: \CachedInstrumentJob.createdAt, order: .reverse) private var jobs: [CachedInstrumentJob]
     @Query private var projects: [CachedProject]
+    @Query private var labGroups: [CachedLabGroup]
 
     @State private var isShowingNewJobSheet = false
     @State private var isShowingProjects = false
+    @State private var isShowingTableTemplateManagement = false
+    @State private var isShowingColumnTemplateManagement = false
+    @State private var isShowingMetadataTablesBrowser = false
     @State private var selectedJobID: UUID?
     @State private var pathStack: [BreadcrumbSegment] = [BreadcrumbSegment(id: nil, name: "All Jobs")]
     @State private var searchText = ""
     @State private var statusFilter: JobStatusFilter = .all
+    @State private var modeFilter: JobModeFilter = .personal
 
     private enum JobStatusFilter: String, CaseIterable {
         case all = "All"
@@ -35,8 +42,30 @@ struct JobListView: View {
         }
     }
 
+    private enum JobModeFilter: String, CaseIterable {
+        case personal = "Personal"
+        case assigned = "Assigned"
+    }
+
+    private var myLabGroupServerIDs: Set<Int64> {
+        Set(labGroups.compactMap(\.serverID))
+    }
+
+    private func matchesMode(_ job: CachedInstrumentJob) -> Bool {
+        switch modeFilter {
+        case .personal:
+            return job.ownerServerID == nil || job.ownerServerID == appSession.currentUserID
+        case .assigned:
+            let isStaffAssigned = appSession.currentUserID.map { job.staffServerIDs.contains($0) } ?? false
+            let isInMyLabGroup = job.labGroupServerID.map { myLabGroupServerIDs.contains($0) } ?? false
+            let isLabGroupSubmitted = isInMyLabGroup && (job.status != "draft")
+            return isStaffAssigned || isLabGroupSubmitted
+        }
+    }
+
     private var filteredJobs: [CachedInstrumentJob] {
         jobs
+            .filter(matchesMode)
             .filter { statusFilter.rawStatus == nil || $0.status == statusFilter.rawStatus }
             .filter { searchText.isEmpty || $0.jobName?.localizedCaseInsensitiveContains(searchText) == true }
     }
@@ -82,6 +111,42 @@ struct JobListView: View {
                 }
                 ToolbarItem {
                     Button {
+                        if PlatformWindowPreference.prefersSeparateWindow {
+                            PlatformWindowPreference.openOrFocusWindow(id: "table-template-manager", using: openWindow)
+                        } else {
+                            isShowingTableTemplateManagement = true
+                        }
+                    } label: {
+                        Label("Table Templates", systemImage: "folder.badge.gearshape")
+                    }
+                    .accessibilityIdentifier("manageMetadataTableTemplatesButton")
+                }
+                ToolbarItem {
+                    Button {
+                        if PlatformWindowPreference.prefersSeparateWindow {
+                            PlatformWindowPreference.openOrFocusWindow(id: "column-template-manager", using: openWindow)
+                        } else {
+                            isShowingColumnTemplateManagement = true
+                        }
+                    } label: {
+                        Label("Column Templates", systemImage: "square.stack.3d.up")
+                    }
+                    .accessibilityIdentifier("manageColumnTemplatesButton")
+                }
+                ToolbarItem {
+                    Button {
+                        if PlatformWindowPreference.prefersSeparateWindow {
+                            PlatformWindowPreference.openOrFocusWindow(id: "metadata-tables-browser", using: openWindow)
+                        } else {
+                            isShowingMetadataTablesBrowser = true
+                        }
+                    } label: {
+                        Label("Metadata Tables", systemImage: "tablecells")
+                    }
+                    .accessibilityIdentifier("metadataTablesBrowserButton")
+                }
+                ToolbarItem {
+                    Button {
                         isShowingNewJobSheet = true
                     } label: {
                         Label("New Job", systemImage: "plus")
@@ -103,6 +168,43 @@ struct JobListView: View {
                 }
                 .frame(minWidth: 360, minHeight: 500)
             }
+            .sheet(isPresented: $isShowingTableTemplateManagement) {
+                NavigationStack {
+                    TableTemplateManagementView(ontologyStore: ontologyStore)
+                        .toolbar {
+                            ToolbarItem(placement: .cancellationAction) {
+                                Button("Done") { isShowingTableTemplateManagement = false }
+                                    .accessibilityIdentifier("doneButton")
+                            }
+                        }
+                }
+            }
+            .sheet(isPresented: $isShowingColumnTemplateManagement) {
+                NavigationStack {
+                    ColumnTemplateManagementSheet()
+                        .toolbar {
+                            ToolbarItem(placement: .cancellationAction) {
+                                Button("Done") { isShowingColumnTemplateManagement = false }
+                            }
+                        }
+                }
+            }
+            .sheet(isPresented: $isShowingMetadataTablesBrowser) {
+                NavigationStack {
+                    MetadataTablesBrowserView(ontologyStore: ontologyStore)
+                        .toolbar {
+                            ToolbarItem(placement: .cancellationAction) {
+                                Button("Done") { isShowingMetadataTablesBrowser = false }
+                            }
+                        }
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .newJobRequested)) { _ in
+                isShowingNewJobSheet = true
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .newProjectRequested)) { _ in
+                isShowingProjects = true
+            }
         } detail: {
             if let selectedJobID {
                 JobDetailView(jobClientID: selectedJobID, ontologyStore: ontologyStore)
@@ -116,6 +218,13 @@ struct JobListView: View {
             }
         } sidebarHeader: {
             VStack(spacing: 8) {
+                Picker("Mode", selection: $modeFilter) {
+                    ForEach(JobModeFilter.allCases, id: \.self) { mode in
+                        Text(mode.rawValue).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .accessibilityIdentifier("jobModeFilterPicker")
                 TextField("Search jobs", text: $searchText)
                     .accessibilityIdentifier("jobSearchField")
                 HStack {

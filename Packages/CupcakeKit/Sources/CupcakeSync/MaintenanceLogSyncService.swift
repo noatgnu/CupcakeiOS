@@ -3,7 +3,6 @@ import CupcakeNetworking
 import Foundation
 import SwiftData
 
-/// Instrument maintenance logs. Online-only, requiring server-checked `can_manage` permission.
 public actor MaintenanceLogSyncService {
     private let apiClient: APIClient
     private let deviceToken: @Sendable () -> String?

@@ -40,7 +40,6 @@ struct ProtocolDTOsTests {
 
     @Test("decodes a real POST protocols/ create response, which omits `sections` entirely")
     func decodesCreateResponseMissingSections() throws {
-        // Captured verbatim from a real 201 response body, which has no `sections` key at all.
         let json = Data("""
         {
             "id": 16,

@@ -4,10 +4,9 @@ import CupcakeSync
 import SwiftData
 import SwiftUI
 
-/// A standalone projects list with its own create action.
 struct ProjectListView: View {
     @Environment(AppSession.self) private var appSession
-    @Query(sort: \CachedProject.projectName) private var projects: [CachedProject]
+    @Query(sort: \CachedProject.createdAt, order: .reverse) private var projects: [CachedProject]
     @State private var isShowingNewProjectSheet = false
     @State private var isShowingEditProjectSheet = false
     @State private var selectedProjectID: UUID?

@@ -1,7 +1,6 @@
 import Foundation
 import SwiftData
 
-/// A protocol, either read-only reference data or authored by this app. `isLocallyAuthored`, not `serverID == nil`, governs editability.
 @Model
 public final class CachedProtocol {
     @Attribute(.unique) public var clientID: UUID
@@ -10,6 +9,8 @@ public final class CachedProtocol {
     public var protocolDescription: String?
     public var enabled: Bool
     public var isLocallyAuthored: Bool
+    public var createdAt: Date
+    public var updatedAt: Date
 
     @Relationship(deleteRule: .cascade, inverse: \CachedProtocolSection.protocolModel)
     public var sections: [CachedProtocolSection] = []
@@ -20,7 +21,9 @@ public final class CachedProtocol {
         protocolTitle: String,
         protocolDescription: String? = nil,
         enabled: Bool,
-        isLocallyAuthored: Bool = false
+        isLocallyAuthored: Bool = false,
+        createdAt: Date = Date(),
+        updatedAt: Date = Date()
     ) {
         self.clientID = clientID
         self.serverID = serverID
@@ -28,5 +31,7 @@ public final class CachedProtocol {
         self.protocolDescription = protocolDescription
         self.enabled = enabled
         self.isLocallyAuthored = isLocallyAuthored
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
     }
 }

@@ -1,7 +1,6 @@
 import Foundation
 import SwiftData
 
-/// A per-session/step countdown timer, server-authoritative and keyed by `serverID`.
 @Model
 public final class CachedTimeKeeper {
     @Attribute(.unique) public var serverID: Int64

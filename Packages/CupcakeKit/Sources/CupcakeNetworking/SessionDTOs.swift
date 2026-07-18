@@ -1,4 +1,3 @@
-/// `GET sessions/` response shape. `isRunning` can serialize as JSON `null` for an unstarted session, and `status` is absent from the create response.
 public struct SessionDTO: Decodable, Sendable {
     public let id: Int64
     public let uniqueId: String
@@ -11,7 +10,6 @@ public struct SessionDTO: Decodable, Sendable {
     public let protocols: [Int64]
 }
 
-/// `POST sessions/` body. `owner`/`unique_id` are server-assigned.
 public struct CreateSessionRequest: Encodable, Sendable {
     public var name: String
     public var enabled: Bool
@@ -24,7 +22,6 @@ public struct CreateSessionRequest: Encodable, Sendable {
     }
 }
 
-/// `PATCH sessions/{id}/` body — name/visibility only.
 public struct UpdateSessionRequest: Encodable, Sendable {
     public var name: String
     public var enabled: Bool

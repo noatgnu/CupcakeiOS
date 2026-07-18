@@ -3,7 +3,6 @@ import CupcakeNetworking
 import Foundation
 import SwiftData
 
-/// Notes/documents attached to a stored reagent, filed into a predefined folder. Online-only.
 public actor StoredReagentAnnotationSyncService {
     private let apiClient: APIClient
     private let deviceToken: @Sendable () -> String?
@@ -19,7 +18,6 @@ public actor StoredReagentAnnotationSyncService {
         self.store = StoredReagentAnnotationStore(modelContainer: modelContainer)
     }
 
-    /// The three document folders (MSDS/Certificates/Manuals) for the signed-in user.
     public func fetchDocumentFolders() async throws -> [AnnotationFolderDTO] {
         guard let token = deviceToken() else { return [] }
         let page: PaginatedResponse<AnnotationFolderDTO> = try await apiClient.get(

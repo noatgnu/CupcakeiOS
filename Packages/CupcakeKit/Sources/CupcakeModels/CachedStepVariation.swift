@@ -1,7 +1,6 @@
 import Foundation
 import SwiftData
 
-/// A session-scoped alternate description/duration for a step. Server-ID-keyed, online-only.
 @Model
 public final class CachedStepVariation {
     @Attribute(.unique) public var serverID: Int64

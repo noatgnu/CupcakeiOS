@@ -1,14 +1,12 @@
 import CupcakeNetworking
 import Foundation
 
-/// Live cross-device push updates for `TimeKeeper` start/stop/reset, over one shared WebSocket connection.
 public actor TimeKeeperNotificationService {
     public enum Event: Sendable, Equatable {
         case started(timeKeeperServerID: Int64, sessionServerID: Int64?, stepServerID: Int64?, startTime: String?)
         case stopped(timeKeeperServerID: Int64, sessionServerID: Int64?, stepServerID: Int64?, duration: Int?)
         case updated(timeKeeperServerID: Int64, sessionServerID: Int64?, stepServerID: Int64?, started: Bool?, duration: Int?)
 
-        /// The session this event's timekeeper belongs to, if the server supplied one.
         public var sessionServerID: Int64? {
             switch self {
             case .started(_, let sessionServerID, _, _),
@@ -89,7 +87,6 @@ public actor TimeKeeperNotificationService {
         }
     }
 
-    /// Parses either a JSON number or string, since the consumer sends these IDs as strings.
     private static func int64(from json: [String: Any], key: String) -> Int64? {
         if let number = json[key] as? Int { return Int64(number) }
         if let string = json[key] as? String { return Int64(string) }

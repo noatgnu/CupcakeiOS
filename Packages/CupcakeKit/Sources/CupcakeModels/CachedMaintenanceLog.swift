@@ -1,7 +1,6 @@
 import Foundation
 import SwiftData
 
-/// A maintenance record for an instrument. Server-ID-keyed, online-only (requires `can_manage`).
 @Model
 public final class CachedMaintenanceLog {
     @Attribute(.unique) public var serverID: Int64

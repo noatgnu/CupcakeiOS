@@ -38,7 +38,6 @@ enum AnnotationScope {
     case session
 }
 
-/// One entry point with a type-picker, routing to `SessionDetailView`'s existing handlers.
 struct AddAnnotationSheet: View {
     let scope: AnnotationScope
     let sessionServerID: Int64?
@@ -49,12 +48,14 @@ struct AddAnnotationSheet: View {
     let onPickVideo: (Data, String) -> Void
     let onSaveSketch: (Data) -> Void
     let onSaveAudio: (URL, String?, String?, String?) async throws -> Void
+    let onSaveVideo: (URL, String?, String?, String?) async throws -> Void
     let onSaveCalculator: (Data) -> Void
     let onSaveMolarityCalculator: (Data) -> Void
 
     @Environment(\.dismiss) private var dismiss
     @State private var selectedKind: AnnotationKind?
     @State private var textDraft = ""
+    @State private var isShowingVideoRecorder = false
 
     private var availableKinds: [AnnotationKind] {
         switch scope {
@@ -71,6 +72,9 @@ struct AddAnnotationSheet: View {
 
     var body: some View {
         Group {
+            if isShowingVideoRecorder {
+                RecordMediaAnnotationSheet(initialMode: .video, onSaveLocally: saveRecordedMedia, onSaved: { dismiss() })
+            } else {
             switch selectedKind {
             case nil:
                 kindPicker
@@ -86,6 +90,12 @@ struct AddAnnotationSheet: View {
                 }
             case .video:
                 filePickerScreen(title: "Add Video") {
+                    Button {
+                        isShowingVideoRecorder = true
+                    } label: {
+                        Label("Record Video…", systemImage: "video.fill")
+                    }
+                    .accessibilityIdentifier("recordVideoButton")
                     VideoAnnotationButton(label: "Choose Video…") { data, fileExtension in
                         onPickVideo(data, fileExtension)
                         dismiss()
@@ -98,7 +108,7 @@ struct AddAnnotationSheet: View {
                     dismiss()
                 }, onCancel: { dismiss() })
             case .audio:
-                RecordAudioAnnotationSheet(onSaveLocally: onSaveAudio, onSaved: { dismiss() })
+                RecordMediaAnnotationSheet(initialMode: .audio, onSaveLocally: saveRecordedMedia, onSaved: { dismiss() })
             case .calculator:
                 CalculatorAnnotationView(onSave: { data in
                     onSaveCalculator(data)
@@ -118,6 +128,7 @@ struct AddAnnotationSheet: View {
                         stepClientID: step.clientID
                     )
                 }
+            }
             }
         }
     }
@@ -165,6 +176,13 @@ struct AddAnnotationSheet: View {
             }
         }
         .frame(minWidth: 320, minHeight: 240)
+    }
+
+    private func saveRecordedMedia(mode: RecordingMode, url: URL, transcription: String?, language: String?, translation: String?) async throws {
+        switch mode {
+        case .audio: try await onSaveAudio(url, transcription, language, translation)
+        case .video: try await onSaveVideo(url, transcription, language, translation)
+        }
     }
 
     @ViewBuilder

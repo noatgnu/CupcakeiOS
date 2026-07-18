@@ -3,7 +3,6 @@ import CupcakeNetworking
 import CupcakeSync
 import SwiftUI
 
-/// Assigns staff from the job's lab group's direct members, surfacing the server's rejection message verbatim.
 struct StaffAssignmentSheet: View {
     @Environment(AppSession.self) private var appSession
     @Environment(\.dismiss) private var dismiss
@@ -20,6 +19,12 @@ struct StaffAssignmentSheet: View {
     @State private var errorMessage: String?
     @State private var isShowingError = false
     @State private var isShowingPermissions = false
+    @State private var searchText = ""
+
+    private var filteredMembers: [UserDTO] {
+        guard !searchText.isEmpty else { return members }
+        return members.filter { $0.username.localizedCaseInsensitiveContains(searchText) }
+    }
 
     init(jobClientID: UUID, jobServerID: Int64, labGroupServerID: Int64, initiallySelectedStaffIDs: Set<Int64>) {
         self.jobClientID = jobClientID
@@ -38,8 +43,10 @@ struct StaffAssignmentSheet: View {
                     Text("This lab group has no direct members.")
                         .foregroundStyle(.secondary)
                 } else {
+                    TextField("Search members", text: $searchText)
+                        .accessibilityIdentifier("staffMemberSearchField")
                     Section("Lab Group Members") {
-                        ForEach(members) { member in
+                        ForEach(filteredMembers) { member in
                             Button {
                                 toggle(member.id)
                             } label: {

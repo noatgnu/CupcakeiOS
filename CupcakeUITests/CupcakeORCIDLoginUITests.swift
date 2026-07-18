@@ -1,11 +1,6 @@
-//
-//  CupcakeORCIDLoginUITests.swift
-//  CupcakeUITests
-//
 
 import XCTest
 
-/// Not part of the regular automated suite — needs a real human completing ORCID login by hand.
 final class CupcakeORCIDLoginUITests: XCTestCase {
     override func setUpWithError() throws {
         continueAfterFailure = false
@@ -21,7 +16,6 @@ final class CupcakeORCIDLoginUITests: XCTestCase {
         XCTAssertTrue(orcidButton.waitForExistence(timeout: 5), "Login screen should show a Sign in with ORCID button")
         orcidButton.tap()
 
-        // Complete the ORCID login by hand; poll up to 3 minutes for the app to land on its main tabs.
         let deadline = Date().addingTimeInterval(180)
         var reachedMainTabs = false
         while Date() < deadline {

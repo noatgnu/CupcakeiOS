@@ -2,7 +2,6 @@ import CupcakeNetworking
 import CupcakeSync
 import SwiftUI
 
-/// Imports a protocol from a protocols.io URL. Online-only.
 struct ImportProtocolFromURLSheet: View {
     @Environment(AppSession.self) private var appSession
     @Environment(\.dismiss) private var dismiss

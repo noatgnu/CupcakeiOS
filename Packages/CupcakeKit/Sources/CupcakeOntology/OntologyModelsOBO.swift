@@ -1,9 +1,7 @@
 import Foundation
 import SwiftData
 
-// The remaining 8 ontology `type_key`s.
 
-/// `tax_id, scientific_name, common_name, synonyms, rank, parent_tax_id`.
 @Model
 public final class CachedNCBITaxonomy {
     @Attribute(.unique) public var taxId: Int
@@ -38,7 +36,6 @@ extension CachedNCBITaxonomy: OntologyRowDecodable {
     }
 }
 
-/// `identifier, name, definition, ..., mass, ...`. `mass` is a `DecimalField`, kept as text.
 @Model
 public final class CachedChEBICompound {
     @Attribute(.unique) public var identifier: String
@@ -104,7 +101,6 @@ extension CachedChEBICompound: OntologyRowDecodable {
     }
 }
 
-/// `identifier, name, definition, synonyms, xrefs, parent_terms, replacement_term`.
 @Model
 public final class CachedMondoDisease {
     @Attribute(.unique) public var identifier: String
@@ -142,7 +138,6 @@ extension CachedMondoDisease: OntologyRowDecodable {
     }
 }
 
-/// `identifier, name, definition, synonyms, xrefs, parent_terms, part_of, replacement_term`.
 @Model
 public final class CachedUberonAnatomy {
     @Attribute(.unique) public var identifier: String
@@ -192,7 +187,6 @@ extension CachedUberonAnatomy: OntologyRowDecodable {
     }
 }
 
-/// `identifier, name, definition, synonyms, accession, cell_line, source, parent_terms, part_of, develops_from, replacement_term`.
 @Model
 public final class CachedCellOntology {
     @Attribute(.unique) public var identifier: String
@@ -254,7 +248,6 @@ extension CachedCellOntology: OntologyRowDecodable {
     }
 }
 
-/// `identifier, name, definition, synonyms, parent_terms, category, replacement_term`.
 @Model
 public final class CachedPSIMSOntology {
     @Attribute(.unique) public var identifier: String
@@ -292,7 +285,6 @@ extension CachedPSIMSOntology: OntologyRowDecodable {
     }
 }
 
-/// `identifier, name, definition, synonyms, xrefs, parent_terms, part_of, replacement_term`.
 @Model
 public final class CachedBTOTerm {
     @Attribute(.unique) public var identifier: String
@@ -342,7 +334,6 @@ extension CachedBTOTerm: OntologyRowDecodable {
     }
 }
 
-/// `identifier, name, definition, synonyms, xrefs, parent_terms, replacement_term`.
 @Model
 public final class CachedDiseaseOntologyTerm {
     @Attribute(.unique) public var identifier: String

@@ -1,4 +1,3 @@
-/// `GET instrument-job-annotations/` response shape.
 public struct InstrumentJobAnnotationDTO: Decodable, Sendable {
     public let id: Int64
     public let instrumentJob: Int64
@@ -8,7 +7,6 @@ public struct InstrumentJobAnnotationDTO: Decodable, Sendable {
     public let order: Int
 }
 
-/// `POST instrument-job-annotations/` body. Booking annotations always send `role: "staff"`.
 public struct CreateInstrumentJobAnnotationRequest: Encodable, Sendable {
     public var instrumentJob: Int64
     public var annotationData: AnnotationDataRequest
@@ -21,7 +19,6 @@ public struct CreateInstrumentJobAnnotationRequest: Encodable, Sendable {
     }
 }
 
-/// Purely a display/lookup link; not consulted by the metadata-merge signal itself.
 public struct InstrumentUsageJobAnnotationDTO: Decodable, Sendable {
     public let id: Int64
     public let instrumentJobAnnotation: Int64
@@ -38,7 +35,6 @@ public struct CreateInstrumentUsageJobAnnotationRequest: Encodable, Sendable {
     }
 }
 
-/// The step-annotation analogue of `InstrumentUsageJobAnnotationDTO`.
 public struct InstrumentUsageStepAnnotationDTO: Decodable, Sendable {
     public let id: Int64
     public let stepAnnotation: Int64

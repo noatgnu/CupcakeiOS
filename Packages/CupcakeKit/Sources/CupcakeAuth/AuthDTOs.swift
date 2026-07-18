@@ -1,4 +1,3 @@
-/// `POST auth/login/` request body.
 public struct LoginRequest: Encodable, Sendable {
     public var username: String
     public var password: String
@@ -11,7 +10,6 @@ public struct LoginRequest: Encodable, Sendable {
     }
 }
 
-/// `POST auth/login/` response. Field names are `access_token`/`refresh_token`, not the plain SimpleJWT shape.
 public struct LoginResponse: Decodable, Sendable {
     public let accessToken: String
     public let refreshToken: String
@@ -28,7 +26,6 @@ public struct AuthUserDTO: Decodable, Sendable {
     public let isSuperuser: Bool
 }
 
-/// `POST device-tokens/` request body. `token`/`user` are server-assigned and never sent.
 public struct DeviceTokenCreateRequest: Encodable, Sendable {
     public var label: String
     public var description: String
@@ -41,7 +38,6 @@ public struct DeviceTokenCreateRequest: Encodable, Sendable {
     }
 }
 
-/// `POST auth/exchange-code/` request body — trades the ORCID callback's opaque code for real JWTs.
 public struct ExchangeAuthCodeRequest: Encodable, Sendable {
     public var authCode: String
 
@@ -50,7 +46,6 @@ public struct ExchangeAuthCodeRequest: Encodable, Sendable {
     }
 }
 
-/// `DeviceToken` as returned by the backend. Timestamps are kept as raw strings, not `Date`.
 public struct DeviceTokenDTO: Decodable, Sendable {
     public let id: Int
     public let token: String

@@ -1,9 +1,7 @@
 import Foundation
 import SwiftData
 
-// Ontology reference data lives in its own `CupcakeOntologyStore` container, read-only and independently rebuildable per table.
 
-/// `identifier, accession, synonyms, cross_references`.
 @Model
 public final class CachedTissue {
     @Attribute(.unique) public var identifier: String
@@ -27,7 +25,6 @@ extension CachedTissue: OntologyRowDecodable {
     }
 }
 
-/// `id, code, taxon, official_name, common_name, synonym` — `code` is this table's natural unique key.
 @Model
 public final class CachedSpecies {
     @Attribute(.unique) public var code: String
@@ -59,7 +56,6 @@ extension CachedSpecies: OntologyRowDecodable {
     }
 }
 
-/// `identifier, acronym, accession, definition, synonyms, cross_references, keywords`.
 @Model
 public final class CachedHumanDisease {
     @Attribute(.unique) public var identifier: String
@@ -97,7 +93,6 @@ extension CachedHumanDisease: OntologyRowDecodable {
     }
 }
 
-/// `location_identifier, topology_identifier, ..., accession, ...`. `accession` is this table's unique key.
 @Model
 public final class CachedSubcellularLocation {
     @Attribute(.unique) public var accession: String
@@ -171,7 +166,6 @@ extension CachedSubcellularLocation: OntologyRowDecodable {
     }
 }
 
-/// `accession, name, definition, additional_data` — `additional_data` is JSON, kept as raw text.
 @Model
 public final class CachedUnimod {
     @Attribute(.unique) public var accession: String
@@ -195,7 +189,6 @@ extension CachedUnimod: OntologyRowDecodable {
     }
 }
 
-/// `accession, name, definition, term_type`.
 @Model
 public final class CachedMSUniqueVocabularies {
     @Attribute(.unique) public var accession: String
@@ -219,7 +212,6 @@ extension CachedMSUniqueVocabularies: OntologyRowDecodable {
     }
 }
 
-/// Tracks what's actually been imported, independent of the manifest describing what's available.
 @Model
 public final class OntologyImportState {
     @Attribute(.unique) public var typeKey: String

@@ -1,6 +1,5 @@
 import Foundation
 
-/// Shared `ws://`/`wss://` URL and Origin-header derivation for this app's WebSocket services.
 enum WebSocketURLBuilder {
     static func url(from apiBaseURL: URL, path: String, token: String) -> URL? {
         guard var components = URLComponents(url: apiBaseURL, resolvingAgainstBaseURL: false) else { return nil }

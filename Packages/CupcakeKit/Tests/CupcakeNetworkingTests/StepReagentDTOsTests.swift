@@ -7,7 +7,6 @@ import Testing
 struct StepReagentDTOsTests {
     @Test("decodes the literal StepReagentSerializer shape, including the nested reagent object")
     func decodesStepReagent() throws {
-        // `reagent` is a nested object on read, not a bare id.
         let json = Data("""
         {
             "id": 1, "step": 10,

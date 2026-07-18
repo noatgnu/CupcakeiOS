@@ -12,7 +12,6 @@ struct BreadcrumbBar: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            // Hidden at the root level, where there's nowhere to go back to.
             if segments.count > 1 {
                 Button {
                     onGoBack()
@@ -31,13 +30,19 @@ struct BreadcrumbBar: View {
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
                         }
-                        Button(segment.name) {
-                            onSelect(index)
+                        if index == segments.count - 1 {
+                            Text(segment.name)
+                                .font(.body.bold())
+                                .foregroundStyle(.primary)
+                                .accessibilityIdentifier("breadcrumbSegment_\(segment.name)")
+                        } else {
+                            Button(segment.name) {
+                                onSelect(index)
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(.secondary)
+                            .accessibilityIdentifier("breadcrumbSegment_\(segment.name)")
                         }
-                        .buttonStyle(.plain)
-                        .font(index == segments.count - 1 ? .body.bold() : .body)
-                        .foregroundStyle(index == segments.count - 1 ? .primary : .secondary)
-                        .accessibilityIdentifier("breadcrumbSegment_\(segment.name)")
                     }
                 }
             }

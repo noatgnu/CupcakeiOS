@@ -6,21 +6,34 @@ import UIKit
 import AppKit
 #endif
 
-/// Renders server-stored HTML descriptions/annotations, force-substituting a system font while preserving bold/italic.
 struct HTMLText: View {
     let html: String
 
+    @State private var parsed: AttributedString?
+
     var body: some View {
-        if let attributed = Self.attributedString(from: html) {
-            Text(attributed)
-        } else {
-            Text(html)
+        Group {
+            if let resolved = parsed ?? Self.cachedAttributedString(from: html) {
+                Text(resolved)
+            } else {
+                Text(html)
+            }
+        }
+        .task(id: html) {
+            guard html.contains("<"), Self.cachedAttributedString(from: html) == nil else { return }
+            parsed = await Self.parseAndCache(html: html)
         }
     }
 
-    /// Skips the expensive HTML-import pipeline entirely for plain text with no `<` at all.
-    private static func attributedString(from html: String) -> AttributedString? {
-        guard html.contains("<") else { return nil }
+    private static let cache = NSCache<NSString, NSAttributedString>()
+
+    private static func cachedAttributedString(from html: String) -> AttributedString? {
+        guard let cached = cache.object(forKey: html as NSString) else { return nil }
+        return AttributedString(cached)
+    }
+
+    @MainActor
+    private static func parseAndCache(html: String) async -> AttributedString? {
         guard let data = html.data(using: .utf8) else { return nil }
         guard let nsAttributed = try? NSMutableAttributedString(
             data: data,
@@ -32,6 +45,7 @@ struct HTMLText: View {
         nsAttributed.enumerateAttribute(.font, in: fullRange) { value, range, _ in
             nsAttributed.addAttribute(.font, value: Self.systemFont(matching: value as? PlatformFont), range: range)
         }
+        cache.setObject(nsAttributed, forKey: html as NSString)
         return AttributedString(nsAttributed)
     }
 
@@ -64,8 +78,17 @@ struct HTMLText: View {
         #endif
     }
 
-    /// Strips markup for contexts that need a plain `String` rather than a styled `View`.
     static func plainText(from html: String) -> String {
-        attributedString(from: html).map { String($0.characters) } ?? html
+        guard html.contains("<") else { return html }
+        if let cached = cachedAttributedString(from: html) {
+            return String(cached.characters)
+        }
+        guard let data = html.data(using: .utf8),
+              let nsAttributed = try? NSAttributedString(
+                data: data,
+                options: [.documentType: NSAttributedString.DocumentType.html, .characterEncoding: String.Encoding.utf8.rawValue],
+                documentAttributes: nil
+              ) else { return html }
+        return nsAttributed.string
     }
 }

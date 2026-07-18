@@ -1,7 +1,6 @@
 import Foundation
 import SwiftData
 
-/// Factory for the ontology `ModelContainer`, a separate store from the app's main `CupcakeStore`.
 public enum CupcakeOntologyStore {
     public static func makeContainer(inMemoryOnly: Bool = false) throws -> ModelContainer {
         let schema = Schema(OntologyRegistry.allModelTypes + [OntologyImportState.self])
@@ -9,7 +8,6 @@ public enum CupcakeOntologyStore {
         if inMemoryOnly {
             configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
         } else {
-            // Must not default to the unconfigured `Application Support/default.store` path, to avoid colliding with the main store.
             let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             try? FileManager.default.createDirectory(at: appSupport, withIntermediateDirectories: true)
             let storeURL = appSupport.appendingPathComponent("CupcakeOntologyStore.store")
@@ -19,20 +17,16 @@ public enum CupcakeOntologyStore {
     }
 }
 
-/// A single ontology/column-template/schema `@Model` type's row-mapping, letting `OntologyImportService` handle all of them through one shared, generic import path.
 public protocol OntologyRowDecodable: PersistentModel {
     static var typeKey: String { get }
     static var sqlTableName: String { get }
-    /// `nil` if the row is missing something this type treats as required; such rows are skipped.
     init?(row: [String: String?])
 }
 
 extension OntologyRowDecodable {
-    /// Coincides with `typeKey` except for `CachedColumnTemplate`/`CachedSDRFSchema`.
     public static var sqlTableName: String { typeKey }
 }
 
-/// Orchestrates fetch -> decompress -> parse -> upsert for one ontology table at a time.
 public actor OntologyImportService {
     private let releaseClient: OntologyReleaseClient
     private let store: OntologyStore
@@ -46,7 +40,6 @@ public actor OntologyImportService {
         try await releaseClient.fetchManifest()
     }
 
-    /// Downloads, decompresses, and imports one table, fully replacing whatever was previously imported.
     public func importTable<T: OntologyRowDecodable>(_ type: T.Type, table: OntologyManifestTable) async throws {
         let decompressed = try await releaseClient.downloadTable(table)
         let tempFile = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".sqlite")
@@ -78,7 +71,6 @@ public struct OntologyImportStateSnapshot: Sendable {
 
 @ModelActor
 actor OntologyStore {
-    /// Returns the number of rows actually inserted; malformed rows are silently skipped.
     @discardableResult
     func replace<T: OntologyRowDecodable>(_ type: T.Type, rows: [[String: String?]]) throws -> Int {
         try modelContext.delete(model: T.self)

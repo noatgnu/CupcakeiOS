@@ -1,7 +1,6 @@
 import Foundation
 import SwiftData
 
-/// A named subset of a `MetadataTable`'s samples, pooled for SDRF export. Server-ID-keyed, online-only.
 @Model
 public final class CachedSamplePool {
     @Attribute(.unique) public var serverID: Int64

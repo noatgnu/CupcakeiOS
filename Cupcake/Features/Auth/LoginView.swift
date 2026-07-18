@@ -1,7 +1,6 @@
 import CupcakeNetworking
 import SwiftUI
 
-/// Login form for server URL/username/password, or standalone/ORCID entry points.
 struct LoginView: View {
     @Environment(AppSession.self) private var appSession
 

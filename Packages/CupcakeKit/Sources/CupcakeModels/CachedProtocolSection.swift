@@ -7,7 +7,6 @@ public final class CachedProtocolSection {
     public var serverID: Int64?
     public var sectionDescription: String?
     public var order: Int
-    /// Seconds. Auto-summed from its steps' durations in this app, rather than independently editable.
     public var sectionDuration: Int?
     public var protocolModel: CachedProtocol?
 

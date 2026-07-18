@@ -1,17 +1,19 @@
 import SwiftUI
 
-/// A `List` that renders either its rows or an empty-state placeholder.
 struct ExplorerList<EmptyContent: View, RowContent: View>: View {
     let isEmpty: Bool
+    var accessibilityIdentifier: String?
     @ViewBuilder let emptyContent: () -> EmptyContent
     @ViewBuilder let rows: () -> RowContent
 
     init(
         isEmpty: Bool,
+        accessibilityIdentifier: String? = nil,
         @ViewBuilder emptyContent: @escaping () -> EmptyContent,
         @ViewBuilder rows: @escaping () -> RowContent
     ) {
         self.isEmpty = isEmpty
+        self.accessibilityIdentifier = accessibilityIdentifier
         self.emptyContent = emptyContent
         self.rows = rows
     }
@@ -21,9 +23,11 @@ struct ExplorerList<EmptyContent: View, RowContent: View>: View {
         emptyTitle: String,
         emptySystemImage: String,
         emptyMessage: String,
+        accessibilityIdentifier: String? = nil,
         @ViewBuilder rows: @escaping () -> RowContent
     ) where EmptyContent == ContentUnavailableView<Label<Text, Image>, Text?, EmptyView> {
         self.isEmpty = isEmpty
+        self.accessibilityIdentifier = accessibilityIdentifier
         self.emptyContent = {
             ContentUnavailableView(emptyTitle, systemImage: emptySystemImage, description: Text(emptyMessage))
         }
@@ -40,11 +44,11 @@ struct ExplorerList<EmptyContent: View, RowContent: View>: View {
                 rows()
             }
         }
+        .accessibilityIdentifier(accessibilityIdentifier ?? "")
         .contentMargins(.top, 12, for: .scrollContent)
     }
 }
 
-/// A selection-driven variant of `ExplorerList` for `List(selection:)` sidebars.
 struct SelectableExplorerList<SelectionValue: Hashable, EmptyContent: View, RowContent: View>: View {
     let selection: Binding<SelectionValue?>
     let isEmpty: Bool

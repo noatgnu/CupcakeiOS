@@ -1,9 +1,3 @@
-//
-//  CupcakeUITests.swift
-//  CupcakeUITests
-//
-//  Created by Toan Phung on 04/07/2026.
-//
 
 import XCTest
 

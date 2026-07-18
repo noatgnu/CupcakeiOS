@@ -14,12 +14,16 @@ struct FavouritesManagementSheet: View {
     @State private var isLoading = false
     @State private var errorMessage: String?
     @State private var isShowingError = false
+    @State private var personalPage = 0
+    @State private var labGroupPage = 0
+    @State private var globalPage = 0
+    private let pageSize = 20
 
     var body: some View {
         Form {
-            favouritesSection("Personal", favourites: personalFavourites)
-            favouritesSection("Lab Group", favourites: labGroupFavourites, showLabGroupName: true)
-            favouritesSection("Global", favourites: globalFavourites)
+            favouritesSection("Personal", favourites: personalFavourites, page: $personalPage)
+            favouritesSection("Lab Group", favourites: labGroupFavourites, page: $labGroupPage, showLabGroupName: true)
+            favouritesSection("Global", favourites: globalFavourites, page: $globalPage)
             if !isLoading && personalFavourites.isEmpty && labGroupFavourites.isEmpty && globalFavourites.isEmpty {
                 Text("No favourites yet.")
                     .foregroundStyle(.secondary)
@@ -38,10 +42,13 @@ struct FavouritesManagementSheet: View {
     }
 
     @ViewBuilder
-    private func favouritesSection(_ title: String, favourites: [FavouriteMetadataOptionDTO], showLabGroupName: Bool = false) -> some View {
+    private func favouritesSection(_ title: String, favourites: [FavouriteMetadataOptionDTO], page: Binding<Int>, showLabGroupName: Bool = false) -> some View {
         if !favourites.isEmpty {
-            Section(title) {
-                ForEach(favourites) { favourite in
+            let totalPages = max(1, Int(ceil(Double(favourites.count) / Double(pageSize))))
+            let start = page.wrappedValue * pageSize
+            let paged = start < favourites.count ? Array(favourites[start..<min(start + pageSize, favourites.count)]) : []
+            Section("\(title) (\(favourites.count))") {
+                ForEach(paged) { favourite in
                     VStack(alignment: .leading, spacing: 2) {
                         Text(favourite.displayValue ?? favourite.value ?? "")
                         Text(showLabGroupName ? "\(favourite.name) · \(favourite.labGroupName ?? "")" : favourite.name)
@@ -51,7 +58,20 @@ struct FavouritesManagementSheet: View {
                     .accessibilityIdentifier("favouriteRow_\(favourite.id)")
                 }
                 .onDelete { offsets in
-                    Task { await deleteFavourites(favourites, at: offsets) }
+                    Task { await deleteFavourites(paged, at: offsets) }
+                }
+                if totalPages > 1 {
+                    HStack {
+                        Button("Previous") { page.wrappedValue -= 1 }
+                            .disabled(page.wrappedValue == 0)
+                        Spacer()
+                        Text("Page \(page.wrappedValue + 1) of \(totalPages)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Next") { page.wrappedValue += 1 }
+                            .disabled(page.wrappedValue >= totalPages - 1)
+                    }
                 }
             }
         }

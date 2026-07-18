@@ -5,7 +5,6 @@ import CupcakeSync
 import SwiftData
 import SwiftUI
 
-/// Maps Unimod specification fields to this app's fixed SDRF `PP`/`MT` option lists.
 enum UnimodMapping {
     private static let knownPositions = ["Anywhere", "Protein N-term", "Protein C-term", "Any N-term", "Any C-term"]
     private static let classificationToModificationType: [String: String] = [
@@ -26,21 +25,18 @@ enum UnimodMapping {
     }
 }
 
-/// Identifies which cell (a column, optionally scoped to one sample) to edit via a `.sheet(item:)`.
 struct MetadataCellEditTarget: Identifiable {
     let column: CachedMetadataColumn
     let sampleIndex: Int?
     var id: String { "\(column.serverID)_\(sampleIndex.map(String.init) ?? "default")" }
 }
 
-/// Identifies which metadata column to edit when `MetadataValueEditSheet` opens as its own window.
 struct MetadataValueEditWindowID: Codable, Hashable {
     let columnServerID: Int64
     let sampleIndex: Int?
     let projectServerID: Int64?
 }
 
-/// Resolves a `MetadataValueEditWindowID` to the live column and hosts `MetadataValueEditSheet`.
 struct MetadataValueEditWindowContent: View {
     let windowID: MetadataValueEditWindowID?
     let ontologyStore: ModelContainer
@@ -188,8 +184,11 @@ struct MetadataValueEditSheet: View {
                                             .foregroundStyle(.secondary)
                                     }
                                 }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
+                            .accessibilityIdentifier("ontologySuggestionRow_\(suggestion.displayName)")
                         }
                     }
                 }
@@ -200,8 +199,11 @@ struct MetadataValueEditSheet: View {
                                 applySpecification(entry.spec)
                             } label: {
                                 Text(specificationSummary(entry.spec))
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
+                            .accessibilityIdentifier("specificationRow_\(entry.key)")
                         }
                     }
                 }
@@ -218,7 +220,7 @@ struct MetadataValueEditSheet: View {
                     }
                     Button("Manage My Favourites…") {
                         if PlatformWindowPreference.prefersSeparateWindow {
-                            openWindow(id: "favourites-manager")
+                            PlatformWindowPreference.openOrFocusWindow(id: "favourites-manager", using: openWindow)
                         } else {
                             isShowingFavouritesManagementSheet = true
                         }
@@ -232,6 +234,8 @@ struct MetadataValueEditSheet: View {
                                 value = historyValue
                             } label: {
                                 Text(historyValue)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
                         }
@@ -306,6 +310,8 @@ struct MetadataValueEditSheet: View {
                         value = favourite.displayValue ?? favourite.value ?? ""
                     } label: {
                         Text(favourite.displayValue ?? favourite.value ?? "")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                 }

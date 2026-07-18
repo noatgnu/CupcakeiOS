@@ -1,7 +1,3 @@
-//
-//  CupcakeOfflineFlowUITests.swift
-//  CupcakeUITests
-//
 
 import XCTest
 
@@ -9,10 +5,46 @@ import XCTest
 import UIKit
 #endif
 
-/// Exercises the standalone/offline flow end-to-end through the real UI.
 final class CupcakeOfflineFlowUITests: XCTestCase {
     override func setUpWithError() throws {
         continueAfterFailure = false
+    }
+
+    @MainActor
+    func testReenteringSameProtocolAfterBackNavigatesCorrectly() throws {
+        #if os(iOS)
+        guard UIDevice.current.userInterfaceIdiom == .phone else {
+            throw XCTSkip("This regression is specific to compact width's push navigation — regular width (iPad/Mac) shows detail inline with nothing to pop.")
+        }
+        #else
+        throw XCTSkip("This regression is specific to compact width's push navigation — regular width (iPad/Mac) shows detail inline with nothing to pop.")
+        #endif
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing-reset-state"]
+        app.launch()
+
+        let continueOfflineButton = app.buttons["continueOfflineButton"]
+        XCTAssertTrue(continueOfflineButton.waitForExistence(timeout: 5))
+        continueOfflineButton.tap()
+
+        tapToolbarButton("newProtocolButton", label: "New Protocol", in: app)
+        let titleField = app.textFields["newProtocolTitleField"]
+        XCTAssertTrue(titleField.waitForExistence(timeout: 5))
+        titleField.tap()
+        titleField.typeText("Reentry Test")
+        app.buttons["createProtocolButton"].tap()
+
+        let protocolRow = app.staticTexts["Reentry Test"]
+        XCTAssertTrue(protocolRow.waitForExistence(timeout: 5))
+        protocolRow.tap()
+
+        XCTAssertTrue(app.navigationBars["Reentry Test"].waitForExistence(timeout: 5), "Should navigate into the protocol on first tap")
+
+        navigateBack(in: app)
+        XCTAssertTrue(protocolRow.waitForExistence(timeout: 5), "Should be back at the protocol list")
+
+        protocolRow.tap()
+        XCTAssertTrue(app.navigationBars["Reentry Test"].waitForExistence(timeout: 5), "Re-entering the same protocol after backing out should navigate in again, not freeze")
     }
 
     @MainActor
@@ -55,13 +87,7 @@ final class CupcakeOfflineFlowUITests: XCTestCase {
 
         let addStepButton = app.buttons["addStepButton"].firstMatch
         XCTAssertTrue(addStepButton.waitForExistence(timeout: 5))
-        var stepField = firstExisting(app.textViews["addTextSheetField"], app.textFields["addTextSheetField"], timeout: 0)
-        for _ in 0..<3 {
-            if stepField.exists { break }
-            addStepButton.tap()
-            stepField = firstExisting(app.textViews["addTextSheetField"], app.textFields["addTextSheetField"], timeout: 3)
-        }
-        XCTAssertTrue(stepField.exists)
+        let stepField = openAddStepSheet(tapping: addStepButton, in: app)
         stepField.tap()
         stepField.typeText("Run the assay")
 
@@ -76,6 +102,7 @@ final class CupcakeOfflineFlowUITests: XCTestCase {
         XCTAssertTrue(elementContaining("15m", in: app).waitForExistence(timeout: 5), "The manually-added step should show its entered duration")
         XCTAssertTrue(app.staticTexts["Analysis (15m)"].waitForExistence(timeout: 5), "The section's duration should auto-update to the sum of its steps' durations")
 
+        elementContaining("Run the assay", in: app).tap()
         app.buttons["attachReagentButton"].firstMatch.tap()
 
         let reagentNameField = app.textFields["reagentNameField"]
@@ -91,13 +118,11 @@ final class CupcakeOfflineFlowUITests: XCTestCase {
 
         app.buttons["saveReagentButton"].tap()
 
-        XCTAssertTrue(elementContaining("NaOH: 10 mL", in: app).waitForExistence(timeout: 5), "The attached reagent should appear under its step")
+        XCTAssertTrue(elementContaining("NaOH: 10 mL", in: app).waitForExistence(timeout: 5), "The attached reagent should appear in the step's own detail screen")
+        navigateBack(in: app)
 
-        tapToolbarButton("newSessionButton", label: "New Session", in: app)
-
-        let startSessionButton = app.buttons["startSessionButton"]
-        XCTAssertTrue(startSessionButton.waitForExistence(timeout: 5))
-        startSessionButton.tap()
+        openStartSessionSheet(in: app)
+        app.buttons["startSessionButton"].tap()
 
         let addStepAnnotationButton = app.buttons["addStepAnnotationButton"].firstMatch
         XCTAssertTrue(addStepAnnotationButton.waitForExistence(timeout: 5))
@@ -146,7 +171,6 @@ final class CupcakeOfflineFlowUITests: XCTestCase {
         continueOfflineButton.tap()
 
         tapTab("Protocols", in: app)
-        // macOS reaches Settings via Cmd+, instead of a toolbar button.
         #if os(macOS)
         app.typeKey(",", modifierFlags: .command)
         #else
@@ -240,11 +264,11 @@ final class CupcakeOfflineFlowUITests: XCTestCase {
 
         tapTab("Inventory", in: app)
 
-        let shelfRow = firstExisting(app.staticTexts["Test Shelf"], app.buttons["Test Shelf"])
+        let shelfRow = app.buttons["storageLocationRow_Test Shelf"]
         XCTAssertTrue(shelfRow.waitForExistence(timeout: 5))
         shelfRow.tap()
 
-        tapToolbarButton("addStoredReagentButton", label: "Add Reagent", in: app)
+        tapMenuItem("storageAddMenu", item: "Add Reagent", in: app)
 
         let reagentNameField = app.textFields["newStoredReagentNameField"]
         XCTAssertTrue(reagentNameField.waitForExistence(timeout: 5))
@@ -303,7 +327,6 @@ final class CupcakeOfflineFlowUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Spin down samples"].waitForExistence(timeout: 5), "The newly-created booking should appear in the instrument's Bookings section")
     }
 
-    /// Sketch rendering correctness is covered separately in `CupcakeTests`; this only confirms the UI is reachable.
     @MainActor
     func testCalculatorMolarityAndSketchAnnotationsOffline() throws {
         let app = XCUIApplication()
@@ -339,13 +362,7 @@ final class CupcakeOfflineFlowUITests: XCTestCase {
 
         let addStepButton = app.buttons["addStepButton"].firstMatch
         XCTAssertTrue(addStepButton.waitForExistence(timeout: 5))
-        var stepField = firstExisting(app.textViews["addTextSheetField"], app.textFields["addTextSheetField"], timeout: 0)
-        for _ in 0..<3 {
-            if stepField.exists { break }
-            addStepButton.tap()
-            stepField = firstExisting(app.textViews["addTextSheetField"], app.textFields["addTextSheetField"], timeout: 3)
-        }
-        XCTAssertTrue(stepField.exists)
+        let stepField = openAddStepSheet(tapping: addStepButton, in: app)
         stepField.tap()
         stepField.typeText("Mix reagents")
 
@@ -357,6 +374,7 @@ final class CupcakeOfflineFlowUITests: XCTestCase {
         app.buttons["addTextSheetSaveButton"].tap()
         XCTAssertTrue(elementContaining("Mix reagents", in: app).waitForExistence(timeout: 5))
 
+        elementContaining("Mix reagents", in: app).tap()
         app.buttons["attachReagentButton"].firstMatch.tap()
         let reagentNameField = app.textFields["reagentNameField"]
         XCTAssertTrue(reagentNameField.waitForExistence(timeout: 5))
@@ -368,17 +386,11 @@ final class CupcakeOfflineFlowUITests: XCTestCase {
         reagentQuantityField.typeText("10")
         app.buttons["saveReagentButton"].tap()
         XCTAssertTrue(elementContaining("NaOH: 10 mL", in: app).waitForExistence(timeout: 5))
+        navigateBack(in: app)
 
-        let startSessionButton = app.buttons["startSessionButton"]
-        for _ in 0..<3 {
-            if startSessionButton.exists { break }
-            tapToolbarButton("newSessionButton", label: "New Session", in: app)
-            _ = startSessionButton.waitForExistence(timeout: 3)
-        }
-        XCTAssertTrue(startSessionButton.exists, "\"New Session\" never opened the start-session sheet after repeated taps")
-        startSessionButton.tap()
+        openStartSessionSheet(in: app)
+        app.buttons["startSessionButton"].tap()
 
-        // Molarity calculator: fill concentration/volume/molecular weight, solve for weight.
         let addStepAnnotationButton = app.buttons["addStepAnnotationButton"].firstMatch
         XCTAssertTrue(addStepAnnotationButton.waitForExistence(timeout: 5))
         addStepAnnotationButton.tap()
@@ -408,7 +420,6 @@ final class CupcakeOfflineFlowUITests: XCTestCase {
         saveMolarityButton.tap()
         XCTAssertTrue(elementContaining("Molarity calculator note", in: app).waitForExistence(timeout: 5), "The saved molarity calculation should appear as a local annotation row immediately, offline")
 
-        // Calculator: 7 + 3 = 10, save, confirm the local-only annotation row appears.
         XCTAssertTrue(addStepAnnotationButton.waitForExistence(timeout: 5))
         addStepAnnotationButton.tap()
         let calculatorKindButton = app.buttons["annotationKind_calculator"].firstMatch
@@ -430,7 +441,6 @@ final class CupcakeOfflineFlowUITests: XCTestCase {
         app.buttons["saveCalculatorButton"].tap()
         XCTAssertTrue(elementContaining("Calculator note", in: app).waitForExistence(timeout: 5), "The saved calculator history should appear as a local annotation row immediately, offline")
 
-        // Photo/Video: PhotosPicker is a separate process XCUIApplication can't drive — just confirm the entry points exist.
         XCTAssertTrue(addStepAnnotationButton.waitForExistence(timeout: 5))
         addStepAnnotationButton.tap()
         let photoKindButton = app.buttons["annotationKind_photo"].firstMatch
@@ -440,7 +450,6 @@ final class CupcakeOfflineFlowUITests: XCTestCase {
         XCTAssertTrue(videoKindButton.waitForExistence(timeout: 5))
         XCTAssertTrue(videoKindButton.isEnabled)
 
-        // Sketch editor: confirm it opens with its canvas/controls reachable through the UI.
         let sketchKindButton = app.buttons["annotationKind_sketch"].firstMatch
         XCTAssertTrue(sketchKindButton.waitForExistence(timeout: 5))
         sketchKindButton.tap()
@@ -455,6 +464,100 @@ final class CupcakeOfflineFlowUITests: XCTestCase {
 
         firstExisting(app.navigationBars.buttons["Cancel"], app.buttons["Cancel"]).tap()
     }
+
+    @MainActor
+    func testAudioAndVideoRecordingAnnotationsOffline() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing-reset-state"]
+        app.launch()
+
+        addUIInterruptionMonitor(withDescription: "Microphone/Camera permission") { alert in
+            let allowButton = alert.buttons.matching(NSPredicate(format: "label CONTAINS[c] 'allow' OR label CONTAINS[c] 'ok'")).firstMatch
+            guard allowButton.exists else { return false }
+            allowButton.tap()
+            return true
+        }
+
+        let continueOfflineButton = app.buttons["continueOfflineButton"]
+        XCTAssertTrue(continueOfflineButton.waitForExistence(timeout: 5))
+        continueOfflineButton.tap()
+
+        tapToolbarButton("newProtocolButton", label: "New Protocol", in: app)
+        let titleField = app.textFields["newProtocolTitleField"]
+        XCTAssertTrue(titleField.waitForExistence(timeout: 5))
+        titleField.tap()
+        titleField.typeText("Recording Types Test")
+        app.buttons["createProtocolButton"].tap()
+
+        let protocolRow = app.staticTexts["Recording Types Test"]
+        XCTAssertTrue(protocolRow.waitForExistence(timeout: 5))
+        protocolRow.tap()
+
+        tapToolbarButton("addSectionButton", label: "Add Section", in: app)
+        XCTAssertTrue(app.staticTexts["New Section 1"].waitForExistence(timeout: 5))
+
+        let addStepButton = app.buttons["addStepButton"].firstMatch
+        XCTAssertTrue(addStepButton.waitForExistence(timeout: 5))
+        let stepField = openAddStepSheet(tapping: addStepButton, in: app)
+        stepField.tap()
+        stepField.typeText("Record observations")
+        app.buttons["addTextSheetSaveButton"].tap()
+        XCTAssertTrue(elementContaining("Record observations", in: app).waitForExistence(timeout: 5))
+
+        #if os(iOS)
+        navigateBack(in: app)
+        #endif
+        openStartSessionSheet(in: app)
+        app.buttons["startSessionButton"].tap()
+
+        let addStepAnnotationButton = app.buttons["addStepAnnotationButton"].firstMatch
+        XCTAssertTrue(addStepAnnotationButton.waitForExistence(timeout: 5))
+
+        addStepAnnotationButton.tap()
+        app.buttons["annotationKind_audio"].firstMatch.tap()
+
+        let modePicker = firstExisting(app.radioGroups["recordingModePicker"], app.segmentedControls["recordingModePicker"])
+        XCTAssertTrue(modePicker.waitForExistence(timeout: 5), "The recorder should show a Mode picker, since audio/video are two modes of one function")
+
+        tapSegment("Video", in: app)
+        XCTAssertTrue(firstExisting(app.otherElements["cameraPreview"], app.images["cameraPreview"]).waitForExistence(timeout: 5), "Switching to Video mode should show the camera preview")
+        tapSegment("Audio", in: app)
+
+        recordTranscribeTranslateAndSave(in: app, expectedRowText: "Audio note")
+
+        addStepAnnotationButton.tap()
+        app.buttons["annotationKind_video"].firstMatch.tap()
+        let recordVideoButton = app.buttons["recordVideoButton"]
+        XCTAssertTrue(recordVideoButton.waitForExistence(timeout: 5))
+        recordVideoButton.tap()
+
+        XCTAssertTrue(modePicker.waitForExistence(timeout: 5))
+        XCTAssertTrue(firstExisting(app.otherElements["cameraPreview"], app.images["cameraPreview"]).waitForExistence(timeout: 5), "Video mode should show a live camera preview")
+
+        recordTranscribeTranslateAndSave(in: app, expectedRowText: "Video note")
+    }
+
+    @MainActor
+    private func recordTranscribeTranslateAndSave(in app: XCUIApplication, expectedRowText: String) {
+        let startButton = app.buttons["startRecordingButton"]
+        XCTAssertTrue(startButton.waitForExistence(timeout: 5))
+        startButton.tap()
+
+        let stopButton = app.buttons["stopRecordingButton"]
+        XCTAssertTrue(stopButton.waitForExistence(timeout: 5), "Tapping Start should flip the button to Stop")
+        Thread.sleep(forTimeInterval: 2)
+        stopButton.tap()
+
+        let saveButton = app.buttons["saveMediaAnnotationButton"]
+        XCTAssertTrue(saveButton.waitForExistence(timeout: 5))
+        let transcriptionSettled = XCTNSPredicateExpectation(predicate: NSPredicate(format: "isEnabled == true"), object: saveButton)
+        XCTAssertEqual(XCTWaiter().wait(for: [transcriptionSettled], timeout: 15), .completed, "Save should become enabled once the recording (and any on-device transcription attempt) settles")
+        saveButton.tap()
+
+        XCTAssertTrue(elementContaining(expectedRowText, in: app).waitForExistence(timeout: 5), "The saved \(expectedRowText) should appear as a local annotation row immediately, offline")
+    }
+
+
 
     @MainActor
     func testSessionModeToggleAndProtocolLessSession() throws {
@@ -491,16 +594,13 @@ final class CupcakeOfflineFlowUITests: XCTestCase {
         }
         app.buttons["createSessionButton"].tap()
 
-        // Compact width may auto-navigate straight into the new session's detail page already.
         let multiProtocolSessionRow = elementContaining("Multi-Protocol Run", in: app)
         if multiProtocolSessionRow.waitForExistence(timeout: 5) {
             multiProtocolSessionRow.tap()
         }
 
-        // Segmented pickers expose their individual segments as queryable elements, not a single container.
         let notesSegment = firstExisting(app.radioButtons["Notes"], app.buttons["Notes"])
         XCTAssertTrue(notesSegment.waitForExistence(timeout: 5), "A session with attached protocols should show a Protocol/Notes mode toggle")
-        // The protocol switcher renders as a menu button labeled with the current title, or lands in "More" on narrow widths.
         XCTAssertTrue(
             firstExisting(
                 app.buttons["Protocol A"], app.buttons["Protocol B"], app.buttons["More"],
@@ -517,7 +617,6 @@ final class CupcakeOfflineFlowUITests: XCTestCase {
         protocolSegment.tap()
         XCTAssertFalse(app.buttons["addSessionAnnotationButton"].exists, "Session notes must never show while in Protocol Mode")
 
-        // Pop back to the sidebar first — compact width may still be on the session's detail page.
         #if os(iOS)
         if UIDevice.current.userInterfaceIdiom == .phone {
             app.navigationBars.buttons.element(boundBy: 0).tap()
@@ -541,7 +640,45 @@ final class CupcakeOfflineFlowUITests: XCTestCase {
         XCTAssertTrue(app.buttons["addSessionAnnotationButton"].waitForExistence(timeout: 5), "A protocol-less session should open directly in Notes mode")
     }
 
-    /// Selects an option from a SwiftUI `Picker` in a `Form`.
+
+    @MainActor
+    func testScrollingRealProtocolFixtureDoesNotCrash() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing-reset-state", "--ui-testing-seed-real-protocol"]
+        app.launch()
+
+        let continueOfflineButton = app.buttons["continueOfflineButton"]
+        XCTAssertTrue(continueOfflineButton.waitForExistence(timeout: 5))
+        continueOfflineButton.tap()
+
+        let protocolRow = elementContaining("Expression and purification of Rab10", in: app)
+        XCTAssertTrue(protocolRow.waitForExistence(timeout: 5), "The seeded real protocol should appear")
+        protocolRow.tap()
+
+        let largestSectionRow = elementContaining("Preparation of cell lysate", in: app)
+        XCTAssertTrue(largestSectionRow.waitForExistence(timeout: 5), "The section-jump sidebar should list the real sections")
+        largestSectionRow.tap()
+
+        let stepList = firstExisting(app.tables["stepList"], app.outlines["stepList"], app.collectionViews["stepList"], app.scrollViews["stepList"])
+        XCTAssertTrue(stepList.exists, "The selected section's step list should render")
+
+        let diagnosticShot = XCTAttachment(screenshot: app.screenshot())
+        diagnosticShot.lifetime = .keepAlways
+        add(diagnosticShot)
+
+        for _ in 0..<10 {
+            stepList.swipeUp(velocity: .fast)
+        }
+        for _ in 0..<10 {
+            stepList.swipeDown(velocity: .fast)
+        }
+        for _ in 0..<10 {
+            stepList.swipeUp(velocity: .fast)
+        }
+
+        XCTAssertEqual(app.state, .runningForeground, "The app should still be running after scrolling through the real 70-step protocol")
+    }
+
     @MainActor
     private func selectPickerOption(_ identifier: String, option: String, in app: XCUIApplication) {
         let picker = firstExisting(app.popUpButtons[identifier], app.buttons[identifier], app.otherElements[identifier])
@@ -551,6 +688,37 @@ final class CupcakeOfflineFlowUITests: XCTestCase {
         let optionElement = firstExisting(app.buttons[option], app.staticTexts[option], app.menuItems[option])
         XCTAssertTrue(optionElement.waitForExistence(timeout: 5), "Picker option \"\(option)\" not found")
         optionElement.tap()
+    }
+
+    @MainActor
+    private func openAddStepSheet(tapping button: XCUIElement, in app: XCUIApplication) -> XCUIElement {
+        let durationField = app.textFields["stepDurationField"]
+        var stepField = firstExisting(app.textViews["addTextSheetField"], app.textFields["addTextSheetField"], timeout: 0)
+        for _ in 0..<3 {
+            if stepField.exists && durationField.exists { break }
+            if stepField.exists && !durationField.exists {
+                firstExisting(app.navigationBars.buttons["Cancel"], app.buttons["Cancel"]).tap()
+            }
+            button.tap()
+            stepField = firstExisting(app.textViews["addTextSheetField"], app.textFields["addTextSheetField"], timeout: 3)
+        }
+        XCTAssertTrue(stepField.exists && durationField.exists, "The Add Step sheet (not Rename Section) should be open")
+        return stepField
+    }
+
+    @MainActor
+    private func openStartSessionSheet(in app: XCUIApplication) {
+        let startSessionButton = app.buttons["startSessionButton"]
+        for _ in 0..<3 {
+            if startSessionButton.exists { break }
+            let strayCancel = firstExisting(app.navigationBars.buttons["Cancel"], app.buttons["Cancel"], timeout: 0)
+            if strayCancel.exists {
+                strayCancel.tap()
+            }
+            tapToolbarButton("newSessionButton", label: "New Session", in: app)
+            _ = startSessionButton.waitForExistence(timeout: 3)
+        }
+        XCTAssertTrue(startSessionButton.exists, "\"New Session\" never opened the start-session sheet after repeated taps")
     }
 
     private func firstExisting(_ candidates: XCUIElement..., timeout: TimeInterval = 5) -> XCUIElement {
@@ -563,13 +731,11 @@ final class CupcakeOfflineFlowUITests: XCTestCase {
         return candidates[0]
     }
 
-    /// Finds the first element (static text or button) whose label or value contains the given substring.
     private func elementContaining(_ substring: String, in app: XCUIApplication) -> XCUIElement {
         let predicate = NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", substring, substring)
         return firstExisting(app.staticTexts.matching(predicate).firstMatch, app.buttons.matching(predicate).firstMatch)
     }
 
-    /// Taps a tab by its label, falling back to the "More" overflow tab if not directly visible.
     @MainActor
     private func tapTab(_ label: String, in app: XCUIApplication, timeout: TimeInterval = 5) {
         let direct = firstExisting(app.tabBars.buttons[label], app.buttons[label], app.radioButtons[label], app.cells[label], app.cells.staticTexts[label])
@@ -587,24 +753,65 @@ final class CupcakeOfflineFlowUITests: XCTestCase {
         itemInMore.tap()
     }
 
-    /// Taps a segmented-control option by its label.
+    @MainActor
+    private func tapMenuItem(_ menuIdentifier: String, item label: String, in app: XCUIApplication) {
+        let menuButton = firstExisting(app.buttons[menuIdentifier], app.menuButtons[menuIdentifier])
+        XCTAssertTrue(menuButton.waitForExistence(timeout: 5), "\"\(menuIdentifier)\" menu button not found")
+        menuButton.tap()
+        let menuItem = firstExisting(app.menuItems[label], app.buttons[label])
+        XCTAssertTrue(menuItem.waitForExistence(timeout: 5), "\"\(label)\" not found in the \"\(menuIdentifier)\" menu")
+        menuItem.tap()
+    }
+
+    @MainActor
+    private func navigateBack(in app: XCUIApplication) {
+        let deadline = Date().addingTimeInterval(2)
+        while Date() < deadline {
+            for bar in app.navigationBars.allElementsBoundByIndex.reversed() {
+                let buttons = bar.buttons.allElementsBoundByIndex
+                if let backButton = buttons.first(where: {
+                    !$0.label.isEmpty
+                        && !$0.label.localizedCaseInsensitiveContains("sidebar")
+                        && !$0.label.localizedCaseInsensitiveContains("more")
+                }) {
+                    backButton.tap()
+                    return
+                }
+            }
+            Thread.sleep(forTimeInterval: 0.2)
+        }
+        let macBack = firstExisting(app.buttons["chevron.backward"], app.buttons["Back"], timeout: 0)
+        guard macBack.exists else { return }
+        macBack.tap()
+    }
+
     private func tapSegment(_ label: String, in app: XCUIApplication, timeout: TimeInterval = 5) {
         let segment = firstExisting(app.radioButtons[label], app.buttons[label])
         XCTAssertTrue(segment.waitForExistence(timeout: timeout), "\"\(label)\" segment not found")
         segment.tap()
     }
 
-    /// Replaces a text field's entire contents via Cmd+A, retrying if it's dropped.
     private func selectAllAndReplace(_ field: XCUIElement, with newText: String) {
+        field.tap()
         for _ in 0..<5 {
-            field.typeKey("a", modifierFlags: .command)
+            if field.value as? String == newText { return }
+            let existing = (field.value as? String) ?? ""
+            if !existing.isEmpty {
+                field.typeKey("a", modifierFlags: .command)
+                for _ in existing {
+                    field.typeKey(.delete, modifierFlags: [])
+                }
+                for _ in existing {
+                    field.typeKey(.forwardDelete, modifierFlags: [])
+                }
+            }
             field.typeText(newText)
             if field.value as? String == newText { return }
             field.tap()
         }
+        XCTAssertEqual(field.value as? String, newText, "Failed to replace field text after multiple attempts")
     }
 
-    /// Taps a toolbar button by identifier, falling back to the platform's overflow menu.
     @MainActor
     private func tapToolbarButton(_ identifier: String, label: String, in app: XCUIApplication, timeout: TimeInterval = 5) {
         let direct = app.buttons[identifier]

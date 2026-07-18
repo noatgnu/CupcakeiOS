@@ -4,7 +4,6 @@ import CupcakeSync
 import SwiftData
 import SwiftUI
 
-/// Books an instrument (start/end time, description, maintenance flag), created locally then synced or queued.
 struct BookInstrumentSheet: View {
     @Environment(AppSession.self) private var appSession
     @Environment(\.dismiss) private var dismiss

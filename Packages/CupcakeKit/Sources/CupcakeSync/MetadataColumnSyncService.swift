@@ -3,7 +3,6 @@ import CupcakeNetworking
 import Foundation
 import SwiftData
 
-/// Online-only. A `MetadataColumn` is always already server-backed, never locally created.
 public actor MetadataColumnSyncService {
     private let apiClient: APIClient
     private let deviceToken: @Sendable () -> String?
@@ -39,7 +38,6 @@ public actor MetadataColumnSyncService {
         return response.column
     }
 
-    /// `search_type` is always `icontains`.
     public func fetchOntologySuggestions(columnServerID: Int64, search: String, limit: Int = 10) async throws -> [OntologySuggestionDTO] {
         guard let token = deviceToken(), search.count >= 2 else { return [] }
         let authorization = "DeviceToken \(token)"
@@ -101,6 +99,34 @@ public actor MetadataColumnSyncService {
             authorizationHeader: "DeviceToken \(token)"
         )
     }
+
+    @discardableResult
+    public func bulkUpdateSampleValues(columnServerID: Int64, updates: [BulkUpdateSampleValueEntry]) async throws -> BulkUpdateSampleValuesResponse {
+        guard let token = deviceToken() else {
+            throw MetadataColumnSyncError.noDeviceToken
+        }
+        return try await apiClient.send(
+            "metadata-columns/\(columnServerID)/bulk_update_sample_values/",
+            method: .post,
+            body: BulkUpdateSampleValuesRequest(updates: updates),
+            authorizationHeader: "DeviceToken \(token)"
+        )
+    }
+
+    @discardableResult
+    public func updateColumn(columnServerID: Int64, request: UpdateMetadataColumnRequest) async throws -> MetadataColumnDTO {
+        guard let token = deviceToken() else {
+            throw MetadataColumnSyncError.noDeviceToken
+        }
+        let dto: MetadataColumnDTO = try await apiClient.send(
+            "metadata-columns/\(columnServerID)/",
+            method: .patch,
+            body: request,
+            authorizationHeader: "DeviceToken \(token)"
+        )
+        try await store.updateSingle(dto)
+        return dto
+    }
 }
 
 public enum MetadataColumnSyncError: Error {
@@ -109,7 +135,6 @@ public enum MetadataColumnSyncError: Error {
 
 @ModelActor
 actor MetadataColumnStore {
-    /// Updates the one column in place, without discarding sibling columns' local records.
     func updateSingle(_ dto: MetadataColumnDTO) throws {
         let columnServerID = dto.id
         guard let column = try modelContext.fetch(

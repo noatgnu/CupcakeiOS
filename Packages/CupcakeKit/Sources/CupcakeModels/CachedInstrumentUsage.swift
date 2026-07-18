@@ -1,7 +1,6 @@
 import Foundation
 import SwiftData
 
-/// A booking request, offline-createable. Approval always happens server-side later.
 @Model
 public final class CachedInstrumentUsage {
     @Attribute(.unique) public var clientID: UUID

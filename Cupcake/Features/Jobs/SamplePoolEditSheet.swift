@@ -3,7 +3,6 @@ import CupcakeNetworking
 import CupcakeSync
 import SwiftUI
 
-/// Comma/range parsing for sample-index text fields, e.g. "1-3,5" → [1, 2, 3, 5].
 enum SampleIndexTextParser {
     static func parse(_ text: String) -> [Int] {
         var indices = Set<Int>()
@@ -27,7 +26,6 @@ enum SampleIndexTextParser {
     }
 }
 
-/// Creates or edits a `SamplePool`. Online-only; overlap/range validation is enforced client-side, disabling Save.
 struct SamplePoolEditSheet: View {
     @Environment(AppSession.self) private var appSession
     @Environment(\.dismiss) private var dismiss

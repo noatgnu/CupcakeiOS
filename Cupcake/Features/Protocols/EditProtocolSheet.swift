@@ -3,7 +3,6 @@ import CupcakeNetworking
 import CupcakeSync
 import SwiftUI
 
-/// Edits a protocol's title/description/public flag post-creation.
 struct EditProtocolSheet: View {
     @Environment(AppSession.self) private var appSession
     @Environment(\.dismiss) private var dismiss

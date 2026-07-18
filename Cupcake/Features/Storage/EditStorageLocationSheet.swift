@@ -3,17 +3,13 @@ import CupcakeNetworking
 import CupcakeSync
 import SwiftUI
 
-/// Creates or edits a storage location.
 struct EditStorageLocationSheet: View {
     @Environment(AppSession.self) private var appSession
     @Environment(\.dismiss) private var dismiss
 
-    /// `nil` for create, set for edit.
     let existingObject: CachedStorageObject?
-    /// The parent location a newly-created object nests under — ignored when editing.
     let parentServerID: Int64?
 
-    /// Exact list from `StorageObject.object_type_choices` (`ccm/models.py:317-327`).
     private static let typeOptions = ["shelf", "box", "fridge", "freezer", "room", "building", "floor", "other"]
 
     @State private var objectName: String

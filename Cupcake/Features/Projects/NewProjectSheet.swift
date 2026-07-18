@@ -4,13 +4,11 @@ import CupcakeSync
 import SwiftData
 import SwiftUI
 
-/// Creates or edits a project (name + description only).
 struct NewProjectSheet: View {
     @Environment(AppSession.self) private var appSession
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
 
-    /// `nil` for create, set for edit.
     let existingProject: CachedProject?
 
     @State private var projectName: String

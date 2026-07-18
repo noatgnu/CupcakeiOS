@@ -4,12 +4,10 @@ import CupcakeSync
 import SwiftData
 import SwiftUI
 
-/// Identifies which job to show when `JobDetailView` opens as its own window.
 struct JobDetailWindowID: Codable, Hashable {
     let jobClientID: UUID
 }
 
-/// Hosts `JobDetailView` for a `JobDetailWindowID`-keyed window.
 struct JobDetailWindowContent: View {
     let windowID: JobDetailWindowID?
     let ontologyStore: ModelContainer
@@ -25,7 +23,6 @@ struct JobDetailWindowContent: View {
     }
 }
 
-/// `submit`/`cancel` are the only status-transition actions this app exposes; no generic status picker.
 struct JobDetailView: View {
     @Environment(AppSession.self) private var appSession
     @Environment(\.openWindow) private var openWindow
@@ -46,16 +43,21 @@ struct JobDetailView: View {
     @State private var errorMessage: String?
     @State private var isShowingError = false
     @State private var isShowingCreateMetadataSheet = false
+    @State private var isShowingNewTemplateSheet = false
     @State private var isShowingBookInstrumentSheet = false
     @State private var isShowingStaffAssignmentSheet = false
-    @State private var pendingStaffAssignmentLabGroupServerID: Int64?
     @State private var editingCell: MetadataCellEditTarget?
     @State private var isLoadingBookings = false
     @State private var isShowingAddColumnSheet = false
+    @State private var columnSettingsTarget: CachedMetadataColumn?
+    @State private var isShowingFullTableView = false
     @State private var isShowingNewSamplePoolSheet = false
     @State private var editingSamplePool: CachedSamplePool?
     @State private var staffOnlyFilter: StaffOnlyFilter = .all
+    @State private var isGridPreviewExpanded = true
     @State private var funderText = ""
+    @State private var labGroupSearchText = ""
+    @State private var isChangingLabGroup = false
     @State private var costCenterText = ""
     @State private var isSavingJobDetails = false
 
@@ -69,9 +71,13 @@ struct JobDetailView: View {
         jobs.first(where: { $0.clientID == jobClientID })
     }
 
-    /// Only lab groups with `allowProcessJobs` are offered for job assignment.
     private var jobAssignableLabGroups: [CachedLabGroup] {
         labGroups.filter(\.allowProcessJobs)
+    }
+
+    private var filteredAssignableLabGroups: [CachedLabGroup] {
+        guard !labGroupSearchText.isEmpty else { return jobAssignableLabGroups }
+        return jobAssignableLabGroups.filter { $0.name.localizedCaseInsensitiveContains(labGroupSearchText) }
     }
 
     private var projectName: String? {
@@ -137,12 +143,14 @@ struct JobDetailView: View {
     }
 
     private var canCreateMetadataTable: Bool {
-        job?.serverID != nil && job?.metadataTableServerID == nil
+        job?.serverID != nil && job?.metadataTableServerID == nil && job?.labGroupServerID != nil
     }
 
-    /// The metadata-merge signal only fires when the job already has a `metadata_table`.
     private var canBookInstrument: Bool {
-        job?.serverID != nil && job?.metadataTableServerID != nil
+        guard job?.serverID != nil, job?.metadataTableServerID != nil, let labGroupServerID = job?.labGroupServerID else {
+            return false
+        }
+        return labGroups.contains(where: { $0.serverID == labGroupServerID })
     }
 
     private var bookingAnnotations: [CachedInstrumentJobAnnotation] {
@@ -184,21 +192,34 @@ struct JobDetailView: View {
                         .accessibilityIdentifier("saveJobDetailsButton")
                     }
                     Section("Lab Group") {
-                        Picker("Lab Group", selection: Binding(
-                            get: { job.labGroupServerID },
-                            set: { newValue in
-                                guard let newValue else { return }
-                                Task { await assignLabGroup(jobServerID: serverID, labGroupServerID: newValue) }
+                        if let currentName = jobAssignableLabGroups.first(where: { $0.serverID == job.labGroupServerID })?.name, !isChangingLabGroup {
+                            HStack {
+                                Text(currentName)
+                                Spacer()
+                                Button("Change") { isChangingLabGroup = true }
+                                    .accessibilityIdentifier("changeLabGroupButton")
                             }
-                        )) {
-                            Text("None").tag(Int64?.none)
-                            ForEach(jobAssignableLabGroups) { group in
-                                Text(group.name).tag(Optional(group.serverID))
+                        } else {
+                            TextField("Search lab groups", text: $labGroupSearchText)
+                                .accessibilityIdentifier("jobLabGroupSearchField")
+                            ForEach(filteredAssignableLabGroups) { group in
+                                Button {
+                                    Task { await assignLabGroup(jobServerID: serverID, labGroupServerID: group.serverID) }
+                                    isChangingLabGroup = false
+                                } label: {
+                                    HStack {
+                                        Text(group.name)
+                                        Spacer()
+                                        if job.labGroupServerID == group.serverID {
+                                            Image(systemName: "checkmark")
+                                        }
+                                    }
+                                }
+                                .accessibilityIdentifier("jobLabGroupRow_\(group.name)")
                             }
                         }
-                        .accessibilityIdentifier("jobLabGroupPicker")
                     }
-                    if let labGroupServerID = job.labGroupServerID {
+                    if job.labGroupServerID != nil {
                         Section("Staff") {
                             if job.staffUsernames.isEmpty {
                                 Text("No staff assigned")
@@ -209,7 +230,6 @@ struct JobDetailView: View {
                                 }
                             }
                             Button("Assign Staff") {
-                                pendingStaffAssignmentLabGroupServerID = labGroupServerID
                                 isShowingStaffAssignmentSheet = true
                             }
                             .accessibilityIdentifier("assignStaffButton")
@@ -233,6 +253,12 @@ struct JobDetailView: View {
                     if let metadataTable {
                         LabeledContent("Name", value: metadataTable.name)
                         LabeledContent("Samples", value: "\(metadataTable.sampleCount)")
+                        Button {
+                            openFullTableView(metadataTable: metadataTable)
+                        } label: {
+                            Label("Open Full Table View", systemImage: "tablecells")
+                        }
+                        .accessibilityIdentifier("openFullMetadataTableViewButton")
                         if sortedColumns.contains(where: \.staffOnly) {
                             Picker("Show", selection: $staffOnlyFilter) {
                                 ForEach(StaffOnlyFilter.allCases, id: \.self) { filter in
@@ -256,6 +282,16 @@ struct JobDetailView: View {
                                                 .foregroundStyle(.orange)
                                                 .accessibilityIdentifier("staffOnlyBadge_\(column.name)")
                                         }
+                                        if column.mandatory {
+                                            Image(systemName: "asterisk")
+                                                .font(.caption2)
+                                                .foregroundStyle(.red)
+                                        }
+                                        if column.readonly {
+                                            Image(systemName: "lock")
+                                                .font(.caption2)
+                                                .foregroundStyle(.secondary)
+                                        }
                                     }
                                     if let value = column.value, !value.isEmpty {
                                         Text(value)
@@ -267,6 +303,15 @@ struct JobDetailView: View {
                             .buttonStyle(.plain)
                             .disabled(!canEditCell(column))
                             .accessibilityIdentifier("metadataColumnRow_\(column.name)")
+                            .swipeActions(edge: .leading) {
+                                Button {
+                                    columnSettingsTarget = column
+                                } label: {
+                                    Label("Settings", systemImage: "gearshape")
+                                }
+                                .tint(.gray)
+                                .accessibilityIdentifier("columnSettingsButton_\(column.name)")
+                            }
                         }
                         .onDelete { offsets in
                             Task { await removeColumns(at: offsets) }
@@ -278,7 +323,10 @@ struct JobDetailView: View {
                             .accessibilityIdentifier("addMetadataColumnButton")
                         }
                         if metadataTable.sampleCount > 0, !filteredColumns.isEmpty {
-                            metadataGrid(sampleCount: metadataTable.sampleCount)
+                            DisclosureGroup("Sample Grid Preview", isExpanded: $isGridPreviewExpanded) {
+                                metadataGrid(sampleCount: metadataTable.sampleCount)
+                            }
+                            .accessibilityIdentifier("metadataGridPreviewDisclosure")
                         }
                     } else {
                         Button("Create from Template") {
@@ -370,9 +418,11 @@ struct JobDetailView: View {
                     jobClientID: job.clientID,
                     jobServerID: serverID,
                     jobLabGroupServerID: job.labGroupServerID,
-                    defaultSampleCount: nil,
-                    ontologyStore: ontologyStore
-                )
+                    defaultSampleCount: nil
+                ) { tableServerID in
+                    job.metadataTableServerID = tableServerID
+                    try? modelContext.save()
+                }
             }
         }
         .sheet(isPresented: $isShowingBookInstrumentSheet) {
@@ -381,7 +431,7 @@ struct JobDetailView: View {
             }
         }
         .sheet(isPresented: $isShowingStaffAssignmentSheet) {
-            if let job, let serverID = job.serverID, let labGroupServerID = pendingStaffAssignmentLabGroupServerID {
+            if let job, let serverID = job.serverID, let labGroupServerID = job.labGroupServerID {
                 StaffAssignmentSheet(
                     jobClientID: job.clientID,
                     jobServerID: serverID,
@@ -395,8 +445,31 @@ struct JobDetailView: View {
         }
         .sheet(isPresented: $isShowingAddColumnSheet) {
             if let tableServerID = metadataTable?.serverID {
-                AddMetadataColumnSheet(tableServerID: tableServerID) {
+                AddMetadataColumnSheet(tableServerID: tableServerID, ontologyStore: ontologyStore) {
                     await refreshMetadataTable()
+                }
+            }
+        }
+        .sheet(item: $columnSettingsTarget) { column in
+            MetadataColumnSettingsSheet(column: column.asDTO) { _ in
+                await refreshMetadataTable()
+            }
+        }
+        .sheet(isPresented: $isShowingFullTableView) {
+            if let metadataTable {
+                NavigationStack {
+                    MetadataTableDetailView(
+                        metadataTableServerID: metadataTable.serverID,
+                        sampleCount: metadataTable.sampleCount,
+                        canEdit: metadataTable.canEdit,
+                        projectServerID: projectServerID,
+                        ontologyStore: ontologyStore
+                    )
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Done") { isShowingFullTableView = false }
+                        }
+                    }
                 }
             }
         }
@@ -428,7 +501,6 @@ struct JobDetailView: View {
             let services = appSession.makeSyncServices()
             try await services.instrumentJobAnnotationSync.refetchAnnotations(jobServerID: serverID, jobClientID: jobClientID)
         } catch {
-            // Non-fatal — shows whatever was last cached.
         }
     }
 
@@ -460,6 +532,14 @@ struct JobDetailView: View {
             openWindow(id: "metadata-value-editor", value: MetadataValueEditWindowID(columnServerID: column.serverID, sampleIndex: sampleIndex, projectServerID: projectServerID))
         } else {
             editingCell = MetadataCellEditTarget(column: column, sampleIndex: sampleIndex)
+        }
+    }
+
+    private func openFullTableView(metadataTable: CachedMetadataTable) {
+        if PlatformWindowPreference.prefersSeparateWindow {
+            openWindow(id: "metadata-table-detail", value: MetadataTableDetailWindowID(metadataTableServerID: metadataTable.serverID, jobClientID: jobClientID, projectServerID: projectServerID))
+        } else {
+            isShowingFullTableView = true
         }
     }
 
@@ -545,7 +625,9 @@ struct JobDetailView: View {
     private func assignLabGroup(jobServerID: Int64, labGroupServerID: Int64) async {
         do {
             let services = appSession.makeSyncServices()
-            try await services.instrumentJobSync.updateLabGroup(jobServerID: jobServerID, labGroupServerID: labGroupServerID)
+            _ = try await services.instrumentJobSync.updateLabGroup(jobServerID: jobServerID, labGroupServerID: labGroupServerID)
+            job?.labGroupServerID = labGroupServerID
+            try? modelContext.save()
         } catch {
             errorMessage = error.userFacingMessage
             isShowingError = true
@@ -567,5 +649,26 @@ struct JobDetailView: View {
             errorMessage = error.userFacingMessage
             isShowingError = true
         }
+    }
+}
+
+extension CachedMetadataColumn {
+    var asDTO: MetadataColumnDTO {
+        MetadataColumnDTO(
+            id: serverID,
+            name: name,
+            displayName: displayName,
+            type: type,
+            columnPosition: columnPosition,
+            value: value,
+            notApplicable: notApplicable,
+            notAvailable: notAvailable,
+            mandatory: mandatory,
+            hidden: hidden,
+            readonly: readonly,
+            ontologyType: ontologyType,
+            staffOnly: staffOnly,
+            modifiers: []
+        )
     }
 }

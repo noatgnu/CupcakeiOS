@@ -7,7 +7,6 @@ import Testing
 @testable import CupcakeNetworking
 @testable import CupcakeSync
 
-/// Exercises the real backend contract end-to-end. Skipped unless `CUPCAKE_LIVE_TEST_*` env vars are set.
 @Suite("Live backend integration", .serialized)
 struct LiveBackendIntegrationTests {
     private static var isConfigured: Bool {
@@ -27,7 +26,6 @@ struct LiveBackendIntegrationTests {
         let apiClient = APIClient(baseURL: baseURL)
         let authService = AuthService(apiClient: apiClient)
 
-        // Login (JWT) -> DeviceToken exchange, exactly as AuthManager.signIn does.
         let login = try await authService.login(username: username, password: password)
         let deviceToken = try await authService.createDeviceToken(
             accessToken: login.accessToken,
@@ -35,11 +33,9 @@ struct LiveBackendIntegrationTests {
         )
         let authorization = "DeviceToken \(deviceToken.token)"
 
-        // Wrapped so cleanup always runs, whether the body below succeeds or throws.
         var createdSessionID: Int64?
         var bodyError: (any Error)?
         do {
-            // Protocol fetch — read-only, exercises pagination + nested section/step decoding.
             let schema = Schema([CachedProtocol.self, CachedProtocolSection.self, CachedProtocolStep.self, CachedSession.self, CachedStepAnnotation.self])
             let container = try ModelContainer(for: schema, configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)])
             let protocolSync = ProtocolSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { deviceToken.token })
@@ -48,7 +44,6 @@ struct LiveBackendIntegrationTests {
             let context = ModelContext(container)
             let cachedProtocols = try context.fetch(FetchDescriptor<CachedProtocol>())
 
-            // Session + text StepAnnotation creation, best-effort since the account may have zero protocols.
             if let firstStep = cachedProtocols.flatMap(\.sections).flatMap(\.steps).first {
                 let sessionSync = SessionSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { deviceToken.token })
                 try await sessionSync.createSession(name: "iOS Integration Test \(Date().timeIntervalSince1970)")
@@ -93,7 +88,6 @@ struct LiveBackendIntegrationTests {
             && env["CUPCAKE_LIVE_TEST_PROJECT_ID"] != nil
     }
 
-    /// Exercises the booking→metadata-merge signal end to end against a real backend.
     @Test(.enabled(if: LiveBackendIntegrationTests.isBookingMergeConfigured))
     func bookingMergesInstrumentMetadataOntoJob() async throws {
         let env = ProcessInfo.processInfo.environment
@@ -167,7 +161,6 @@ struct LiveBackendIntegrationTests {
         }
     }
 
-    /// Proves `TimeKeeperNotificationService` receives a real cross-device push over `ws/ccrv/timekeepers/`.
     @Test(.enabled(if: LiveBackendIntegrationTests.isConfigured))
     func timeKeeperCrossDeviceEventArrivesOverWebSocket() async throws {
         let env = ProcessInfo.processInfo.environment
@@ -200,7 +193,6 @@ struct LiveBackendIntegrationTests {
             let notificationService = TimeKeeperNotificationService(apiClient: apiClient, deviceToken: { deviceToken.token })
             let events = await notificationService.subscribe()
 
-            // Give the socket a moment to connect before the REST call fires.
             try await Task.sleep(for: .seconds(1))
 
             let timeKeeperSync = TimeKeeperSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { deviceToken.token })

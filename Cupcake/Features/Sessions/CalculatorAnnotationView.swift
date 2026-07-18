@@ -7,7 +7,6 @@ import UIKit
 import AppKit
 #endif
 
-/// A standard/scientific calculator that logs every operation as a `CalculatorHistoryEntry`.
 struct CalculatorAnnotationView: View {
     let onSave: (Data) -> Void
     let onCancel: () -> Void
@@ -197,7 +196,6 @@ struct CalculatorAnnotationView: View {
         .frame(maxHeight: 220)
     }
 
-    // MARK: - Calculator logic (mirrors calculator-annotation.ts)
 
     private func formNumber(_ digit: Int) {
         if executionMode == .initial {
@@ -347,9 +345,7 @@ struct CalculatorAnnotationView: View {
         }
     }
 
-    // MARK: - Formatting helpers
 
-    /// Plain string append, preserving the decimal point correctly for any input.
     private static func appendDigit(_ digit: Int, to current: String) -> String {
         if current == "0" || current.isEmpty {
             return "\(digit)"

@@ -1,7 +1,6 @@
 import Foundation
 import SwiftData
 
-/// A note/document attached to a stored reagent, filed into a predefined folder. Server-ID-keyed, online-only.
 @Model
 public final class CachedStoredReagentAnnotation {
     @Attribute(.unique) public var serverID: Int64

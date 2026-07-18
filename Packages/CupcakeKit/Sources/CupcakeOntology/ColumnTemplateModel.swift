@@ -1,7 +1,6 @@
 import Foundation
 import SwiftData
 
-/// Mirrors `MetadataColumnTemplate`, with pre-resolved ontology type/options/filters per SDRF column.
 @Model
 public final class CachedColumnTemplate {
     @Attribute(.unique) public var serverID: Int64
@@ -45,7 +44,6 @@ public final class CachedColumnTemplate {
 
 extension CachedColumnTemplate: OntologyRowDecodable {
     public static let typeKey = "system"
-    /// Manifest name is `"system"`, but the internal table is `column_template`.
     public static let sqlTableName = "column_template"
     public convenience init?(row: [String: String?]) {
         guard let idString = row["id"] ?? nil, let id = Int64(idString) else { return nil }
@@ -65,7 +63,6 @@ extension CachedColumnTemplate: OntologyRowDecodable {
     }
 }
 
-/// One composable SDRF template (e.g. "base", "human", "cell-lines"). `columnsJSON` is kept as raw text, decoded lazily.
 @Model
 public final class CachedSDRFSchema {
     @Attribute(.unique) public var name: String
@@ -100,7 +97,6 @@ public final class CachedSDRFSchema {
 
 extension CachedSDRFSchema: OntologyRowDecodable {
     public static let typeKey = "sdrf"
-    /// Manifest name is `"sdrf"`, but the internal table is `schema`.
     public static let sqlTableName = "schema"
     public convenience init?(row: [String: String?]) {
         guard let name = row["name"] ?? nil else { return nil }

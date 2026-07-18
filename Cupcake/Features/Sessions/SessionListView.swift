@@ -4,7 +4,6 @@ import CupcakeSync
 import SwiftData
 import SwiftUI
 
-/// A flat, all-protocols list of every session.
 struct SessionListView: View {
     @Environment(AppSession.self) private var appSession
     @Environment(\.modelContext) private var modelContext
@@ -69,7 +68,6 @@ struct SessionListView: View {
             }
         } detail: {
             if let selectedSessionID, let session = sessions.first(where: { $0.clientID == selectedSessionID }) {
-                // `.id()` keeps mode-toggle `@State` from leaking between sessions.
                 SessionDetailView(sessionClientID: selectedSessionID, protocols: protocols(for: session), highlightAnnotationServerID: highlightedAnnotationServerID)
                     .id(selectedSessionID)
             } else {
@@ -91,6 +89,9 @@ struct SessionListView: View {
         } message: {
             Text(errorMessage ?? "")
         }
+        .onReceive(NotificationCenter.default.publisher(for: .newSessionRequested)) { _ in
+            isShowingNewSessionSheet = true
+        }
         .onChange(of: selectedSessionID) { _, newValue in
             guard let newValue, let session = sessions.first(where: { $0.clientID == newValue }) else {
                 pathStack = [pathStack[0]]
@@ -111,7 +112,6 @@ struct SessionListView: View {
         }
     }
 
-    /// Consumes a pending deep link by selecting its session and highlighting its annotation.
     private func applyDeepLink(_ target: DeepLinkTarget?) {
         guard let target, sessions.contains(where: { $0.clientID == target.sessionClientID }) else { return }
         _ = appSession.consumeDeepLink()

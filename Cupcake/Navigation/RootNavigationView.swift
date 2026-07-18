@@ -1,12 +1,7 @@
-//
-//  RootNavigationView.swift
-//  Cupcake
-//
 
 import SwiftData
 import SwiftUI
 
-/// Switches between the login screen and the main 4-section layout, via a floating icon selector.
 struct RootNavigationView: View {
     @Environment(AppSession.self) private var appSession
     let ontologyStore: ModelContainer
@@ -47,10 +42,10 @@ struct RootNavigationView: View {
                     case .jobs:
                         JobListView(ontologyStore: ontologyStore)
                     case .inventory:
-                        InventoryView()
+                        InventoryView(ontologyStore: ontologyStore)
                     }
                 }
-                .overlay(alignment: .bottom) {
+                .safeAreaInset(edge: .bottom) {
                     floatingTabSelector
                         .padding(.bottom, 16)
                 }

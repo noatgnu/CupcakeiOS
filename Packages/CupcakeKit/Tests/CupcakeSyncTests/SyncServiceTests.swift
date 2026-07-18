@@ -7,7 +7,6 @@ import Testing
 @testable import CupcakeSync
 
 extension InputStream {
-    /// Drains a request's `httpBodyStream` into `Data`, for inspecting a POST body's actual bytes.
     func readAllData() -> Data {
         var result = Data()
         open()
@@ -23,7 +22,6 @@ extension InputStream {
     }
 }
 
-/// Tests for the `CupcakeSync` services.
 @Suite("CupcakeSync services", .serialized)
 struct SyncServiceTests {
     private func makeInMemoryContainer(for types: [any PersistentModel.Type]) throws -> ModelContainer {
@@ -194,7 +192,6 @@ struct SyncServiceTests {
         StubURLProtocol.handler = { request in
             #expect(request.httpMethod == "POST")
             #expect(request.url!.path.hasSuffix("/step-annotations"))
-            // `request.httpBody` is nil by transport time; read the stream directly instead.
             let body = try #require(request.httpBodyStream).readAllData()
             let sentJSON = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
             let annotationData = try #require(sentJSON["annotation_data"] as? [String: Any])
@@ -992,9 +989,44 @@ struct SyncServiceTests {
         #expect(results.first?.reagentName == "NaOH")
         #expect(results.first?.molecularWeight == "40.0000")
 
-        // Under the 2-character minimum: no network call at all.
         let shortResults = try await service.searchStoredReagentsWithMolecularWeight(search: "N")
         #expect(shortResults.isEmpty)
+    }
+
+    @Test("InventorySyncService caches a stored reagent's auto-created metadata_table_id from refetchStoredReagents, then refreshMetadataTable populates its columns")
+    func inventorySyncCachesAndRefreshesMetadataTable() async throws {
+        StubURLProtocol.handler = { request in
+            let path = request.url!.path
+            let json: Data
+            if path.hasSuffix("stored-reagents") {
+                json = Data(#"{"count":1,"next":null,"previous":null,"results":[{"id":5,"reagent":2,"reagent_name":"NaCl","reagent_unit":"g","storage_object":1,"storage_object_name":"Freezer A","quantity":100.0,"current_quantity":87.5,"barcode":null,"expiration_date":null,"low_stock_threshold":10.0,"metadata_table_id":7,"metadata_table_name":"NaCl (Freezer A) Specifications"}]}"#.utf8)
+            } else {
+                json = Data("""
+                {"id": 7, "name": "NaCl (Freezer A) Specifications", "description": null, "sample_count": 1,
+                 "version": "1.0", "owner_username": "testuser", "lab_group_name": null,
+                 "is_published": false, "can_edit": true,
+                 "columns": [{"id": 3, "name": "Purity", "display_name": "Purity",
+                              "type": "characteristics", "column_position": 0, "value": "99.9%",
+                              "not_applicable": false, "not_available": false, "mandatory": false, "hidden": false,
+                              "readonly": false, "ontology_type": null, "staff_only": false}]}
+                """.utf8)
+            }
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedStorageObject.self, CachedReagent.self, CachedStoredReagent.self, CachedMetadataTable.self, CachedMetadataColumn.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let service = InventorySyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        try await service.refetchStoredReagents()
+        let context = ModelContext(container)
+        let storedReagent = try context.fetch(FetchDescriptor<CachedStoredReagent>()).first
+        #expect(storedReagent?.metadataTableServerID == 7)
+
+        try await service.refreshMetadataTable(metadataTableServerID: 7)
+        let columns = try context.fetch(FetchDescriptor<CachedMetadataColumn>())
+        #expect(columns.first?.name == "Purity")
+        #expect(columns.first?.value == "99.9%")
     }
 
     @Test("InstrumentSyncService refetches instruments and instrument usage")
@@ -1021,6 +1053,42 @@ struct SyncServiceTests {
         let context = ModelContext(container)
         #expect(try context.fetch(FetchDescriptor<CachedInstrument>()).first?.instrumentName == "Mass Spec 1")
         #expect(try context.fetch(FetchDescriptor<CachedInstrumentUsage>()).first?.usageDescription == "Run")
+    }
+
+    @Test("InstrumentSyncService caches the instrument's auto-created metadata_table_id from refetchInstruments, then refreshMetadataTable populates its columns")
+    func instrumentSyncCachesAndRefreshesMetadataTable() async throws {
+        StubURLProtocol.handler = { request in
+            let path = request.url!.path
+            let json: Data
+            if path.hasSuffix("instruments") {
+                json = Data(#"{"count":1,"next":null,"previous":null,"results":[{"id":1,"instrument_name":"Mass Spec 1","instrument_description":"Orbitrap","enabled":true,"accepts_bookings":true,"allow_overlapping_bookings":false,"maintenance_overdue":false,"metadata_table_id":42,"metadata_table_name":"Mass Spec 1 Specifications"}]}"#.utf8)
+            } else {
+                json = Data("""
+                {"id": 42, "name": "Mass Spec 1 Specifications", "description": null, "sample_count": 1,
+                 "version": "1.0", "owner_username": "testuser", "lab_group_name": null,
+                 "is_published": false, "can_edit": true,
+                 "columns": [{"id": 9, "name": "Manufacturer", "display_name": "Manufacturer",
+                              "type": "characteristics", "column_position": 0, "value": "Thermo",
+                              "not_applicable": false, "not_available": false, "mandatory": false, "hidden": false,
+                              "readonly": false, "ontology_type": null, "staff_only": false}]}
+                """.utf8)
+            }
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedInstrument.self, CachedMetadataTable.self, CachedMetadataColumn.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let service = InstrumentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        try await service.refetchInstruments()
+        let context = ModelContext(container)
+        let instrument = try context.fetch(FetchDescriptor<CachedInstrument>()).first
+        #expect(instrument?.metadataTableServerID == 42)
+
+        try await service.refreshMetadataTable(instrumentServerID: 1, metadataTableServerID: 42)
+        let columns = try context.fetch(FetchDescriptor<CachedMetadataColumn>())
+        #expect(columns.first?.name == "Manufacturer")
+        #expect(columns.first?.value == "Thermo")
     }
 
     @Test("SessionAnnotationSyncService refetches and caches session annotations")
@@ -1905,6 +1973,55 @@ struct SyncServiceTests {
         #expect(storedReagents.count == 1, "replay should attach a serverID to the existing local record, not insert a duplicate")
         #expect(storedReagents.first?.serverID == 30)
         #expect(try context.fetch(FetchDescriptor<OutboxEntry>()).isEmpty)
+    }
+
+    @Test("syncLocallyCreatedStoredReagent sends notes/molecularWeight/shareable/accessAll/notifyOnLowStock/pngBase64 and caches them")
+    func createStoredReagentSendsNewFieldsAndCachesResult() async throws {
+        StubURLProtocol.handler = { request in
+            let body = try #require(request.httpBodyStream).readAllData()
+            let json = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
+            #expect(json["notes"] as? String == "Keep refrigerated")
+            #expect(json["molecular_weight"] as? String == "58.4400")
+            #expect(json["shareable"] as? Bool == true)
+            #expect(json["access_all"] as? Bool == true)
+            #expect(json["notify_on_low_stock"] as? Bool == true)
+            #expect(json["png_base64"] as? String == "aGVsbG8=")
+
+            let responseJSON = Data("""
+            {"id": 31, "reagent": 3, "reagent_name": "NaCl", "reagent_unit": "g",
+             "storage_object": 5, "storage_object_name": "Fridge A", "quantity": 100.0,
+             "current_quantity": 100.0, "barcode": null, "expiration_date": null, "low_stock_threshold": null,
+             "molecular_weight": "58.4400", "notes": "Keep refrigerated", "shareable": true,
+             "access_all": true, "notify_on_low_stock": true, "png_base64": "aGVsbG8="}
+            """.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 201, httpVersion: nil, headerFields: nil)!, responseJSON)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedStorageObject.self, CachedReagent.self, CachedStoredReagent.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let inventorySync = InventorySyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        let context = ModelContext(container)
+        let localStoredReagent = CachedStoredReagent(
+            reagentServerID: 3, reagentName: "NaCl", reagentUnit: "g",
+            storageObjectServerID: 5, storageObjectName: "Fridge A",
+            quantity: 100.0, currentQuantity: 100.0,
+            molecularWeight: 58.44, notes: "Keep refrigerated",
+            shareable: true, accessAll: true, notifyOnLowStock: true,
+            pngBase64: "aGVsbG8="
+        )
+        context.insert(localStoredReagent)
+        try context.save()
+
+        try await inventorySync.syncLocallyCreatedStoredReagent(clientID: localStoredReagent.clientID)
+
+        let storedReagents = try context.fetch(FetchDescriptor<CachedStoredReagent>())
+        #expect(storedReagents.first?.molecularWeight == 58.44)
+        #expect(storedReagents.first?.notes == "Keep refrigerated")
+        #expect(storedReagents.first?.shareable == true)
+        #expect(storedReagents.first?.accessAll == true)
+        #expect(storedReagents.first?.notifyOnLowStock == true)
+        #expect(storedReagents.first?.pngBase64 == "aGVsbG8=")
     }
 
     @Test("OutboxService retries (not fails) a stored reagent queued before its reagent has synced")
@@ -3489,7 +3606,6 @@ struct SyncServiceTests {
 
     @Test("TimeKeeperNotificationService.parseEvent decodes started, stopped, and updated messages")
     func timeKeeperParseEventDecodesAllThreeTypes() {
-        // The real wire shape sends `timekeeperId`/`sessionId`/`stepId` as JSON strings, not numbers.
         let started = TimeKeeperNotificationService.parseEvent(from: #"{"type":"timekeeper.started","timekeeperId":"1","sessionId":"7","stepId":"10","startTime":"2026-07-11T10:00:00Z","timestamp":"2026-07-11T10:00:00Z"}"#)
         #expect(started == .started(timeKeeperServerID: 1, sessionServerID: 7, stepServerID: 10, startTime: "2026-07-11T10:00:00Z"))
 

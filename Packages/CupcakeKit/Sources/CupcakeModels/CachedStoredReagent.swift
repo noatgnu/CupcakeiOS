@@ -1,26 +1,30 @@
 import Foundation
 import SwiftData
 
-/// Offline-createable. Edited only via `CachedReagentAction` entries afterward, never by mutating quantity directly.
 @Model
 public final class CachedStoredReagent {
     @Attribute(.unique) public var clientID: UUID
     public var serverID: Int64?
-    /// Nullable: `reagent` is a nullable FK on `StoredReagent` server-side.
     public var reagentServerID: Int64?
-    /// The attached reagent's `clientID`, for resolving a brand-new, not-yet-synced local `CachedReagent`.
     public var reagentClientID: UUID?
     public var reagentName: String?
     public var reagentUnit: String?
-    /// Nullable: `storage_object` is also a nullable FK server-side.
     public var storageObjectServerID: Int64?
     public var storageObjectName: String?
     public var quantity: Double
     public var currentQuantity: Double
     public var barcode: String?
-    /// Date-only string (`"YYYY-MM-DD"`, Django `DateField`), not a full timestamp.
     public var expirationDate: String?
     public var lowStockThreshold: Double?
+    public var molecularWeight: Double?
+    public var notes: String?
+    public var shareable: Bool
+    public var accessAll: Bool
+    public var notifyOnLowStock: Bool
+    public var pngBase64: String?
+    public var metadataTableServerID: Int64?
+    public var createdAt: Date
+    public var updatedAt: Date
 
     public init(
         clientID: UUID = UUID(),
@@ -35,7 +39,16 @@ public final class CachedStoredReagent {
         currentQuantity: Double,
         barcode: String? = nil,
         expirationDate: String? = nil,
-        lowStockThreshold: Double? = nil
+        lowStockThreshold: Double? = nil,
+        molecularWeight: Double? = nil,
+        notes: String? = nil,
+        shareable: Bool = false,
+        accessAll: Bool = false,
+        notifyOnLowStock: Bool = false,
+        pngBase64: String? = nil,
+        metadataTableServerID: Int64? = nil,
+        createdAt: Date = Date(),
+        updatedAt: Date = Date()
     ) {
         self.clientID = clientID
         self.serverID = serverID
@@ -50,5 +63,14 @@ public final class CachedStoredReagent {
         self.barcode = barcode
         self.expirationDate = expirationDate
         self.lowStockThreshold = lowStockThreshold
+        self.molecularWeight = molecularWeight
+        self.notes = notes
+        self.shareable = shareable
+        self.accessAll = accessAll
+        self.notifyOnLowStock = notifyOnLowStock
+        self.pngBase64 = pngBase64
+        self.metadataTableServerID = metadataTableServerID
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
     }
 }

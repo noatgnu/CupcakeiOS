@@ -8,7 +8,7 @@ struct ProtocolListView: View {
     @Environment(AppSession.self) private var appSession
     @Environment(\.modelContext) private var modelContext
     @Environment(\.openWindow) private var openWindow
-    @Query(sort: \CachedProtocol.protocolTitle) private var protocols: [CachedProtocol]
+    @Query(sort: \CachedProtocol.createdAt, order: .reverse) private var protocols: [CachedProtocol]
     @Query private var outboxEntries: [OutboxEntry]
 
     let ontologyStore: ModelContainer
@@ -26,14 +26,12 @@ struct ProtocolListView: View {
     @State private var filteredServerIDs: Set<Int64> = []
     @State private var isLoadingFilter = false
 
-    /// Shows "Pending sync" while signed in, or "Local only" in standalone mode.
     private func pendingSyncLabel(for protocolModel: CachedProtocol) -> String? {
         guard protocolModel.serverID == nil else { return nil }
         guard protocolModel.isLocallyAuthored else { return nil }
         return appSession.isAuthenticated ? "Pending sync" : "Local only"
     }
 
-    /// Narrows the already-cached protocol list to the server IDs a filter endpoint returned.
     private var displayedProtocols: [CachedProtocol] {
         guard listFilter != nil else { return protocols }
         return protocols.filter { protocolModel in
@@ -101,7 +99,7 @@ struct ProtocolListView: View {
                     ToolbarItem {
                         Button {
                             if PlatformWindowPreference.prefersSeparateWindow {
-                                openWindow(id: "sync-issues")
+                                PlatformWindowPreference.openOrFocusWindow(id: "sync-issues", using: openWindow)
                             } else {
                                 isShowingSyncIssues = true
                             }
@@ -136,12 +134,11 @@ struct ProtocolListView: View {
                         .accessibilityIdentifier("exitOfflineModeButton")
                     }
                 }
-                // macOS exposes Settings natively via Cmd+, — no toolbar button needed there.
                 #if !os(macOS)
                 ToolbarItem {
                     Button {
                         if PlatformWindowPreference.prefersSeparateWindow {
-                            openWindow(id: "settings")
+                            PlatformWindowPreference.openOrFocusWindow(id: "settings", using: openWindow)
                         } else {
                             isShowingSettings = true
                         }
@@ -178,6 +175,9 @@ struct ProtocolListView: View {
                 Button("OK") {}
             } message: {
                 Text(errorMessage ?? "")
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .newProtocolRequested)) { _ in
+                isShowingNewProtocolSheet = true
             }
         } detail: {
             if let selectedProtocolID, let protocolModel = protocols.first(where: { $0.clientID == selectedProtocolID }) {

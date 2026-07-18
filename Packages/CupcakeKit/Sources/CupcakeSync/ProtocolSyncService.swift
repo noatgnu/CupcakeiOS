@@ -3,7 +3,6 @@ import CupcakeNetworking
 import Foundation
 import SwiftData
 
-/// Full-refetch population plus create-locally-then-sync-or-queue for protocols/sections/steps.
 public actor ProtocolSyncService {
     private let apiClient: APIClient
     private let deviceToken: @Sendable () -> String?
@@ -19,7 +18,6 @@ public actor ProtocolSyncService {
         self.store = ProtocolStore(modelContainer: modelContainer)
     }
 
-    /// Fetches every protocol the user can see and upserts it (and its sections/steps) into the local store.
     public func refetchAll() async throws {
         guard let token = deviceToken() else { return }
         let authorization = "DeviceToken \(token)"
@@ -32,14 +30,12 @@ public actor ProtocolSyncService {
         }
     }
 
-    /// Returns which subset of already-cached protocol server IDs belongs to a filter. Live only, no offline story.
     public func fetchProtocolIDs(filter: ProtocolListFilter) async throws -> [Int64] {
         guard let token = deviceToken() else { return [] }
         let dtos: [ProtocolDTO] = try await apiClient.get("protocols/\(filter.rawValue)/", authorizationHeader: "DeviceToken \(token)")
         return dtos.map(\.id)
     }
 
-    /// Imports a protocol from a protocols.io URL, then caches the result like any other protocol.
     @discardableResult
     public func importFromProtocolsIO(url: String) async throws -> UUID {
         guard let token = deviceToken() else {
@@ -58,7 +54,6 @@ public actor ProtocolSyncService {
         return clientID
     }
 
-    /// A signed, time-limited URL for the protocol's HTML export, optionally including a session's annotations.
     public func fetchExportURL(protocolServerID: Int64, sessionServerID: Int64?) async throws -> URL {
         guard let token = deviceToken() else {
             throw ProtocolSyncError.noDeviceToken
@@ -78,7 +73,6 @@ public actor ProtocolSyncService {
         return url
     }
 
-    /// Pushes an already locally-created protocol to the server, attaching the new `serverID`.
     @discardableResult
     public func syncLocallyCreatedProtocol(clientID: UUID) async throws -> Int64 {
         guard let token = deviceToken() else {
@@ -95,7 +89,6 @@ public actor ProtocolSyncService {
         return dto.id
     }
 
-    /// Same shape as `syncLocallyCreatedProtocol`, for a section. Throws `SyncDependencyError.parentNotSynced` if the parent protocol hasn't synced yet.
     @discardableResult
     public func syncLocallyCreatedSection(clientID: UUID, knownProtocolServerID: Int64? = nil) async throws -> Int64 {
         guard let token = deviceToken() else {
@@ -115,7 +108,6 @@ public actor ProtocolSyncService {
         return dto.id
     }
 
-    /// Same shape again, for a step. `known*ServerID` lets a caller skip this store's own background lookup, which can lag behind a sibling actor's recent write.
     @discardableResult
     public func syncLocallyCreatedStep(clientID: UUID, knownSectionServerID: Int64? = nil, knownProtocolServerID: Int64? = nil) async throws -> Int64 {
         guard let token = deviceToken() else {
@@ -226,7 +218,6 @@ public enum ProtocolSyncError: Error {
     case importFailed
 }
 
-/// Matches the reference web app's dedicated filtered-browsing endpoints.
 public enum ProtocolListFilter: String, Sendable {
     case myProtocols = "my_protocols"
     case sharedWithMe = "shared_with_me"
@@ -234,7 +225,6 @@ public enum ProtocolListFilter: String, Sendable {
     case vaultedProtocols = "vaulted_protocols"
 }
 
-/// SwiftData access is isolated to this `@ModelActor`; `ProtocolSyncService` owns network/orchestration.
 @ModelActor
 actor ProtocolStore {
     func upsert(_ dtos: [ProtocolDTO]) throws {
@@ -257,7 +247,6 @@ actor ProtocolStore {
         return (cachedProtocol.protocolTitle, cachedProtocol.protocolDescription, cachedProtocol.enabled)
     }
 
-    /// Attaches a newly-assigned `serverID` to the existing local record matched by `clientID`.
     func attachServerID(clientID: UUID, dto: ProtocolDTO) throws {
         guard let cachedProtocol = try modelContext.fetch(
             FetchDescriptor<CachedProtocol>(predicate: #Predicate { $0.clientID == clientID })
@@ -269,6 +258,7 @@ actor ProtocolStore {
         cachedProtocol.protocolTitle = dto.protocolTitle
         cachedProtocol.protocolDescription = dto.protocolDescription
         cachedProtocol.enabled = dto.enabled
+        cachedProtocol.updatedAt = Date.parsedISO8601(dto.updatedAt, fallback: cachedProtocol.updatedAt)
         try modelContext.save()
     }
 
@@ -298,7 +288,6 @@ actor ProtocolStore {
         return (step.section?.protocolModel?.serverID, step.section?.serverID, step.stepDescription, step.stepDuration, step.order)
     }
 
-    /// Attaches a newly-assigned `serverID` to the existing local section matched by `clientID`.
     func attachServerID(sectionClientID: UUID, dto: ProtocolSectionDTO) throws {
         guard let section = try modelContext.fetch(
             FetchDescriptor<CachedProtocolSection>(predicate: #Predicate { $0.clientID == sectionClientID })
@@ -312,7 +301,6 @@ actor ProtocolStore {
         try modelContext.save()
     }
 
-    /// Attaches a newly-assigned `serverID` to the existing local step matched by `clientID`.
     func attachServerID(stepClientID: UUID, dto: ProtocolStepDTO) throws {
         guard let step = try modelContext.fetch(
             FetchDescriptor<CachedProtocolStep>(predicate: #Predicate { $0.clientID == stepClientID })
@@ -370,7 +358,8 @@ actor ProtocolStore {
                 serverID: dto.id,
                 protocolTitle: dto.protocolTitle,
                 protocolDescription: dto.protocolDescription,
-                enabled: dto.enabled
+                enabled: dto.enabled,
+                createdAt: Date.parsedISO8601(dto.createdAt)
             )
             modelContext.insert(created)
             return created
@@ -378,6 +367,7 @@ actor ProtocolStore {
         cachedProtocol.protocolTitle = dto.protocolTitle
         cachedProtocol.protocolDescription = dto.protocolDescription
         cachedProtocol.enabled = dto.enabled
+        cachedProtocol.updatedAt = Date.parsedISO8601(dto.updatedAt, fallback: cachedProtocol.updatedAt)
 
         for sectionDTO in dto.sections {
             upsert(sectionDTO, into: cachedProtocol)

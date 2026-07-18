@@ -7,7 +7,6 @@ import Testing
 struct StepAnnotationDTOsTests {
     @Test("decodes the literal StepAnnotationSerializer shape")
     func decodesStepAnnotation() throws {
-        // Matches ccrv/serializers.py's StepAnnotationSerializer.Meta.fields verbatim (trimmed).
         let json = Data("""
         {
             "id": 100,

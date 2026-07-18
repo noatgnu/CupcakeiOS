@@ -18,7 +18,6 @@ public actor AnnotationFolderSyncService {
         self.store = AnnotationFolderStore(modelContainer: modelContainer)
     }
 
-    /// Fetches a session's root folders online and caches them; falls back to the cache when unreachable.
     public func fetchRootFolders(sessionServerID: Int64) async throws -> [AnnotationFolderDTO] {
         guard let token = deviceToken() else {
             return try await store.cachedRootFolders(sessionServerID: sessionServerID)
@@ -46,7 +45,6 @@ public actor AnnotationFolderSyncService {
         }
     }
 
-    /// Fetches a folder's children online and caches them; falls back to the cache when unreachable.
     public func fetchChildren(folderServerID: Int64) async throws -> FolderChildrenResponse {
         guard let token = deviceToken() else {
             return try await store.cachedChildren(folderServerID: folderServerID)

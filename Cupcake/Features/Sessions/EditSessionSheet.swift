@@ -3,7 +3,6 @@ import CupcakeNetworking
 import CupcakeSync
 import SwiftUI
 
-/// Edits a session's name/public flag post-creation.
 struct EditSessionSheet: View {
     @Environment(AppSession.self) private var appSession
     @Environment(\.dismiss) private var dismiss

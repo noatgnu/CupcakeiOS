@@ -2,16 +2,16 @@ import CupcakeModels
 import SwiftData
 import SwiftUI
 
-/// Creates a session from the Sessions tab, attaching 0..N protocols up front.
 struct NewSessionSheet: View {
     @Environment(\.dismiss) private var dismiss
-    @Query(sort: \CachedProtocol.protocolTitle) private var allProtocols: [CachedProtocol]
+    @Query(sort: \CachedProtocol.createdAt, order: .reverse) private var allProtocols: [CachedProtocol]
 
     let onSave: (_ name: String, _ enabled: Bool, _ protocolClientIDs: [UUID]) -> Void
 
     @State private var name = ""
     @State private var enabled = true
     @State private var selectedProtocolClientIDs: Set<UUID> = []
+    @State private var protocolSearchText = ""
 
     var body: some View {
         NavigationStack {
@@ -23,20 +23,17 @@ struct NewSessionSheet: View {
                         .accessibilityIdentifier("newSessionEnabledToggle")
                 }
                 Section("Protocols (optional)") {
-                    ForEach(allProtocols) { protocolModel in
-                        Button {
-                            toggle(protocolModel.clientID)
-                        } label: {
-                            HStack {
-                                Text(protocolModel.protocolTitle)
-                                Spacer()
-                                if selectedProtocolClientIDs.contains(protocolModel.clientID) {
-                                    Image(systemName: "checkmark")
-                                }
-                            }
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityIdentifier("newSessionProtocolRow_\(protocolModel.protocolTitle)")
+                    SearchableSelectionList(
+                        items: allProtocols,
+                        searchPlaceholder: "Search protocols",
+                        searchFieldIdentifier: "newSessionProtocolSearchField",
+                        searchText: $protocolSearchText,
+                        matches: { $0.protocolTitle.localizedCaseInsensitiveContains($1) },
+                        isSelected: { selectedProtocolClientIDs.contains($0.clientID) },
+                        rowIdentifier: { "newSessionProtocolRow_\($0.protocolTitle)" },
+                        onSelect: { toggle($0.clientID) }
+                    ) { protocolModel in
+                        Text(protocolModel.protocolTitle)
                     }
                 }
             }

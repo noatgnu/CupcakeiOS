@@ -3,9 +3,9 @@ import CupcakeSync
 import SwiftData
 import SwiftUI
 
-/// Shows a stored reagent's stock, action history, documents, and notification preferences.
 struct StoredReagentDetailView: View {
     let storedReagentClientID: UUID
+    let ontologyStore: ModelContainer
 
     @Environment(AppSession.self) private var appSession
     @Query private var storedReagents: [CachedStoredReagent]
@@ -15,6 +15,7 @@ struct StoredReagentDetailView: View {
 
     @State private var isShowingRecordActionSheet = false
     @State private var isShowingAddDocumentSheet = false
+    @State private var documentSearchText = ""
 
     private var storedReagent: CachedStoredReagent? {
         storedReagents.first(where: { $0.clientID == storedReagentClientID })
@@ -31,6 +32,13 @@ struct StoredReagentDetailView: View {
         return annotations
             .filter { $0.storedReagentServerID == serverID }
             .sorted { $0.folderName < $1.folderName }
+    }
+
+    private var searchedDocuments: [CachedStoredReagentAnnotation] {
+        guard !documentSearchText.isEmpty else { return documentsHere }
+        return documentsHere.filter {
+            $0.annotationText.localizedCaseInsensitiveContains(documentSearchText) || $0.folderName.localizedCaseInsensitiveContains(documentSearchText)
+        }
     }
 
     private var subscription: CachedReagentSubscription? {
@@ -71,20 +79,32 @@ struct StoredReagentDetailView: View {
                 }
             }
             if storedReagent?.serverID != nil {
+                MetadataFieldsSection(metadataTableServerID: storedReagent?.metadataTableServerID, ontologyStore: ontologyStore) {
+                    await refreshMetadataTable()
+                }
                 Section("Documents") {
                     if documentsHere.isEmpty {
                         Text("No documents yet")
                             .foregroundStyle(.secondary)
                     } else {
-                        ForEach(documentsHere) { annotation in
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(annotation.annotationText)
-                                Text(annotation.folderName)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
+                        if documentsHere.count > 5 {
+                            TextField("Search documents", text: $documentSearchText)
+                                .accessibilityIdentifier("storedReagentDocumentSearchField")
                         }
-                        .onDelete(perform: deleteDocuments)
+                        if searchedDocuments.isEmpty {
+                            Text("No documents match \"\(documentSearchText)\".")
+                                .foregroundStyle(.secondary)
+                        } else {
+                            ForEach(searchedDocuments) { annotation in
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(annotation.annotationText)
+                                    Text(annotation.folderName)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            .onDelete(perform: deleteDocuments)
+                        }
                     }
                     Button {
                         isShowingAddDocumentSheet = true
@@ -139,11 +159,17 @@ struct StoredReagentDetailView: View {
             let services = appSession.makeSyncServices()
             try? await services.storedReagentAnnotationSync.refetch(storedReagentServerID: serverID)
             try? await services.reagentSubscriptionSync.refetchMySubscription(storedReagentServerID: serverID, userID: userID)
+            await refreshMetadataTable()
         }
     }
 
+    private func refreshMetadataTable() async {
+        guard let tableServerID = storedReagent?.metadataTableServerID else { return }
+        try? await appSession.makeSyncServices().inventorySync.refreshMetadataTable(metadataTableServerID: tableServerID)
+    }
+
     private func deleteDocuments(at offsets: IndexSet) {
-        let toDelete = offsets.map { documentsHere[$0] }
+        let toDelete = offsets.map { searchedDocuments[$0] }
         Task {
             for annotation in toDelete {
                 try? await appSession.makeSyncServices().storedReagentAnnotationSync.delete(serverID: annotation.serverID)

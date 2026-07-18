@@ -3,8 +3,10 @@ import SwiftUI
 #if os(iOS)
 import UIKit
 #endif
+#if os(macOS)
+import AppKit
+#endif
 
-/// Whether a management screen should open as its own window instead of a sheet.
 enum PlatformWindowPreference {
     static var prefersSeparateWindow: Bool {
         #if os(macOS)
@@ -14,5 +16,16 @@ enum PlatformWindowPreference {
         #else
         false
         #endif
+    }
+
+    @MainActor
+    static func openOrFocusWindow(id: String, using openWindow: OpenWindowAction) {
+        #if os(macOS)
+        if let existing = NSApp.windows.first(where: { $0.identifier?.rawValue.contains(id) == true }) {
+            existing.makeKeyAndOrderFront(nil)
+            return
+        }
+        #endif
+        openWindow(id: id)
     }
 }

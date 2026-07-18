@@ -1,13 +1,13 @@
-/// `GET storage-objects/` response shape.
 public struct StorageObjectDTO: Decodable, Sendable {
     public let id: Int64
     public let objectType: String
     public let objectName: String
     public let objectDescription: String?
     public let storedAt: Int64?
+    public let createdAt: String?
+    public let updatedAt: String?
 }
 
-/// `POST storage-objects/` body. `objectType` is one of shelf/box/fridge/freezer/room/building/floor/other.
 public struct CreateStorageObjectRequest: Encodable, Sendable {
     public var objectName: String
     public var objectType: String
@@ -22,7 +22,6 @@ public struct CreateStorageObjectRequest: Encodable, Sendable {
     }
 }
 
-/// `PATCH storage-objects/{id}/` body.
 public struct UpdateStorageObjectRequest: Encodable, Sendable {
     public var objectName: String
     public var objectType: String
@@ -39,9 +38,10 @@ public struct ReagentDTO: Decodable, Sendable {
     public let id: Int64
     public let name: String
     public let unit: String
+    public let createdAt: String?
+    public let updatedAt: String?
 }
 
-/// `reagent`/`storageObject` are both nullable FKs. `expirationDate` is date-only. `molecularWeight` is a `DecimalField`, serialized as a string.
 public struct StoredReagentDTO: Decodable, Sendable {
     public let id: Int64
     public let reagent: Int64?
@@ -55,9 +55,49 @@ public struct StoredReagentDTO: Decodable, Sendable {
     public let expirationDate: String?
     public let lowStockThreshold: Double?
     public let molecularWeight: String?
+    public let notes: String?
+    public let shareable: Bool
+    public let accessAll: Bool
+    public let notifyOnLowStock: Bool
+    public let pngBase64: String?
+    public let metadataTableId: Int64?
+    public let metadataTableName: String?
+    public let createdAt: String?
+    public let updatedAt: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case id, reagent, reagentName, reagentUnit, storageObject, storageObjectName
+        case quantity, currentQuantity, barcode, expirationDate, lowStockThreshold
+        case molecularWeight, notes, shareable, accessAll, notifyOnLowStock, pngBase64
+        case metadataTableId, metadataTableName, createdAt, updatedAt
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(Int64.self, forKey: .id)
+        reagent = try container.decodeIfPresent(Int64.self, forKey: .reagent)
+        reagentName = try container.decodeIfPresent(String.self, forKey: .reagentName)
+        reagentUnit = try container.decodeIfPresent(String.self, forKey: .reagentUnit)
+        storageObject = try container.decodeIfPresent(Int64.self, forKey: .storageObject)
+        storageObjectName = try container.decodeIfPresent(String.self, forKey: .storageObjectName)
+        quantity = try container.decode(Double.self, forKey: .quantity)
+        currentQuantity = try container.decode(Double.self, forKey: .currentQuantity)
+        barcode = try container.decodeIfPresent(String.self, forKey: .barcode)
+        expirationDate = try container.decodeIfPresent(String.self, forKey: .expirationDate)
+        lowStockThreshold = try container.decodeIfPresent(Double.self, forKey: .lowStockThreshold)
+        molecularWeight = try container.decodeIfPresent(String.self, forKey: .molecularWeight)
+        notes = try container.decodeIfPresent(String.self, forKey: .notes)
+        shareable = try container.decodeIfPresent(Bool.self, forKey: .shareable) ?? false
+        accessAll = try container.decodeIfPresent(Bool.self, forKey: .accessAll) ?? false
+        notifyOnLowStock = try container.decodeIfPresent(Bool.self, forKey: .notifyOnLowStock) ?? false
+        pngBase64 = try container.decodeIfPresent(String.self, forKey: .pngBase64)
+        metadataTableId = try container.decodeIfPresent(Int64.self, forKey: .metadataTableId)
+        metadataTableName = try container.decodeIfPresent(String.self, forKey: .metadataTableName)
+        createdAt = try container.decodeIfPresent(String.self, forKey: .createdAt)
+        updatedAt = try container.decodeIfPresent(String.self, forKey: .updatedAt)
+    }
 }
 
-/// `POST stored-reagents/` body. `reagent` must already exist server-side (no inline/nested create).
 public struct CreateStoredReagentRequest: Encodable, Sendable {
     public var reagent: Int64
     public var storageObject: Int64
@@ -65,18 +105,42 @@ public struct CreateStoredReagentRequest: Encodable, Sendable {
     public var barcode: String?
     public var expirationDate: String?
     public var lowStockThreshold: Double?
+    public var molecularWeight: String?
+    public var notes: String?
+    public var shareable: Bool
+    public var accessAll: Bool
+    public var notifyOnLowStock: Bool
+    public var pngBase64: String?
 
-    public init(reagent: Int64, storageObject: Int64, quantity: Double, barcode: String?, expirationDate: String?, lowStockThreshold: Double?) {
+    public init(
+        reagent: Int64,
+        storageObject: Int64,
+        quantity: Double,
+        barcode: String?,
+        expirationDate: String?,
+        lowStockThreshold: Double?,
+        molecularWeight: String? = nil,
+        notes: String? = nil,
+        shareable: Bool = false,
+        accessAll: Bool = false,
+        notifyOnLowStock: Bool = false,
+        pngBase64: String? = nil
+    ) {
         self.reagent = reagent
         self.storageObject = storageObject
         self.quantity = quantity
         self.barcode = barcode
         self.expirationDate = expirationDate
         self.lowStockThreshold = lowStockThreshold
+        self.molecularWeight = molecularWeight
+        self.notes = notes
+        self.shareable = shareable
+        self.accessAll = accessAll
+        self.notifyOnLowStock = notifyOnLowStock
+        self.pngBase64 = pngBase64
     }
 }
 
-/// `POST reagent-actions/` body. `reagent` here is the `StoredReagent` FK, not the catalog `Reagent`. `actionType` is "add" or "reserve" only.
 public struct CreateReagentActionRequest: Encodable, Sendable {
     public var reagent: Int64
     public var actionType: String
@@ -91,7 +155,6 @@ public struct CreateReagentActionRequest: Encodable, Sendable {
     }
 }
 
-/// `GET reagent-actions/` response shape. Read-only; never edited or deleted locally.
 public struct ReagentActionDTO: Decodable, Sendable {
     public let id: Int64
     public let reagent: Int64

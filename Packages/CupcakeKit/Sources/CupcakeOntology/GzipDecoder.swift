@@ -1,7 +1,6 @@
 import Compression
 import Foundation
 
-/// Decodes a `.gz` file's bytes by manually stripping the gzip header/trailer, then running raw DEFLATE decompression.
 enum GzipDecoder {
     static func decode(_ data: Data) -> Data? {
         guard data.count > 18, data[data.startIndex] == 0x1f, data[data.startIndex + 1] == 0x8b, data[data.startIndex + 2] == 0x08 else {

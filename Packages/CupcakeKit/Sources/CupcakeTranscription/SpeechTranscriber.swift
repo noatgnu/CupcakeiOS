@@ -33,7 +33,6 @@ public enum SpeechTranscriber {
         return recognizer.supportsOnDeviceRecognition
     }
 
-    /// Prefers on-device recognition when supported, falling back to Apple's network-based recognition otherwise.
     public static func transcribe(fileURL: URL, localeIdentifier: String = Locale.current.identifier) async throws -> TranscriptionResult {
         guard await requestAuthorization() else {
             throw SpeechTranscriptionError.authorizationDenied

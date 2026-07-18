@@ -1,6 +1,5 @@
 import Foundation
 
-/// A single field in a `MolarityHistoryEntry.data` dictionary, round-tripping whichever JSON scalar type was present.
 public enum MolarityDataValue: Codable, Sendable, Equatable {
     case number(Double)
     case string(String)
@@ -37,7 +36,6 @@ public enum MolarityDataValue: Codable, Sendable, Equatable {
     }
 }
 
-/// A single molarity calculation, encoded with plain camelCase keys as opaque JSON in `annotation_text`.
 public struct MolarityHistoryEntry: Codable, Sendable, Identifiable, Equatable {
     public var id: String
     public var data: [String: MolarityDataValue]

@@ -10,10 +10,27 @@ public actor MetadataColumnTemplateSyncService {
         self.deviceToken = deviceToken
     }
 
-    public func search(query: String, limit: Int = 20) async throws -> [MetadataColumnTemplateDTO] {
+    public func search(query: String, sourceSchema: String? = nil, limit: Int = 20) async throws -> [MetadataColumnTemplateDTO] {
         guard let token = deviceToken(), query.count >= 3 else { return [] }
+        var queryItems = [
+            URLQueryItem(name: "search", value: query),
+            URLQueryItem(name: "limit", value: String(limit)),
+        ]
+        if let sourceSchema, !sourceSchema.isEmpty {
+            queryItems.append(URLQueryItem(name: "source_schema", value: sourceSchema))
+        }
         let page: PaginatedResponse<MetadataColumnTemplateDTO> = try await apiClient.get(
             "column-templates/",
+            query: queryItems,
+            authorizationHeader: "DeviceToken \(token)"
+        )
+        return page.results
+    }
+
+    public func searchGrouped(query: String, limit: Int = 20) async throws -> [GroupedColumnTemplateDTO] {
+        guard let token = deviceToken(), query.count >= 3 else { return [] }
+        let page: PaginatedResponse<GroupedColumnTemplateDTO> = try await apiClient.get(
+            "column-templates/grouped_by_column/",
             query: [
                 URLQueryItem(name: "search", value: query),
                 URLQueryItem(name: "limit", value: String(limit)),

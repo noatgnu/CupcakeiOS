@@ -3,7 +3,6 @@ import CupcakeNetworking
 import Foundation
 import SwiftData
 
-/// Full-refetch, read-only population of server-side step-reagent recipe data, plus create-locally-then-sync.
 public actor StepReagentSyncService {
     private let apiClient: APIClient
     private let deviceToken: @Sendable () -> String?
@@ -19,7 +18,6 @@ public actor StepReagentSyncService {
         self.store = StepReagentStore(modelContainer: modelContainer)
     }
 
-    /// Run this after `ProtocolSyncService.refetchAll()`, since resolving `stepClientID` depends on the step already being cached.
     public func refetchAll() async throws {
         guard let token = deviceToken() else { return }
         let authorization = "DeviceToken \(token)"
@@ -32,7 +30,6 @@ public actor StepReagentSyncService {
         }
     }
 
-    /// Syncs the local record in place, syncing its reagent inline if it has no `serverID` yet. Throws `SyncDependencyError.parentNotSynced` if the step hasn't synced.
     @discardableResult
     public func syncLocallyCreatedStepReagent(clientID: UUID) async throws -> Int64 {
         guard let token = deviceToken() else {
@@ -101,7 +98,6 @@ public enum StepReagentSyncError: Error {
     case reagentNotCached
 }
 
-/// SwiftData access is isolated to this `@ModelActor` — see `ProtocolStore`'s doc comment for why.
 @ModelActor
 actor StepReagentStore {
     func upsert(_ dtos: [StepReagentDTO]) throws {
@@ -112,7 +108,6 @@ actor StepReagentStore {
     }
 
     private func upsert(_ dto: StepReagentDTO) {
-        // Skip a step-reagent whose step isn't cached yet; it'll resolve once the step syncs.
         let stepServerID = dto.step
         guard let step = try? modelContext.fetch(
             FetchDescriptor<CachedProtocolStep>(predicate: #Predicate { $0.serverID == stepServerID })
@@ -182,7 +177,6 @@ actor StepReagentStore {
         )
     }
 
-    /// Attaches a newly-assigned `serverID` to the existing local reagent matched by `clientID`.
     func attachReagentServerID(reagentClientID: UUID, dto: ReagentDTO) throws {
         guard let reagent = try modelContext.fetch(
             FetchDescriptor<CachedReagent>(predicate: #Predicate { $0.clientID == reagentClientID })
@@ -195,7 +189,6 @@ actor StepReagentStore {
         try modelContext.save()
     }
 
-    /// Attaches a newly-assigned `serverID` to the existing local step-reagent matched by `clientID`.
     func attachServerID(stepReagentClientID: UUID, dto: StepReagentDTO) throws {
         guard let stepReagent = try modelContext.fetch(
             FetchDescriptor<CachedStepReagent>(predicate: #Predicate { $0.clientID == stepReagentClientID })
@@ -233,12 +226,13 @@ actor StepReagentStore {
             FetchDescriptor<CachedReagent>(predicate: #Predicate { $0.serverID == reagentServerID })
         )
         let reagent = existing?.first ?? {
-            let created = CachedReagent(serverID: dto.id, name: dto.name, unit: dto.unit)
+            let created = CachedReagent(serverID: dto.id, name: dto.name, unit: dto.unit, createdAt: Date.parsedISO8601(dto.createdAt))
             modelContext.insert(created)
             return created
         }()
         reagent.name = dto.name
         reagent.unit = dto.unit
+        reagent.updatedAt = Date.parsedISO8601(dto.updatedAt, fallback: reagent.updatedAt)
         return reagent.clientID
     }
 }

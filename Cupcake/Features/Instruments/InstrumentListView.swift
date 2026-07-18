@@ -4,13 +4,13 @@ import CupcakeSync
 import SwiftData
 import SwiftUI
 
-/// Flat two-panel list of instruments (sidebar) with the selected instrument's detail on the right.
 struct InstrumentListView<SectionPicker: View>: View {
+    let ontologyStore: ModelContainer
     @ViewBuilder let sectionPicker: () -> SectionPicker
 
     @Environment(AppSession.self) private var appSession
     @Environment(\.modelContext) private var modelContext
-    @Query(sort: \CachedInstrument.instrumentName) private var instruments: [CachedInstrument]
+    @Query(sort: \CachedInstrument.createdAt, order: .reverse) private var instruments: [CachedInstrument]
     @State private var pathStack: [BreadcrumbSegment] = [BreadcrumbSegment(id: nil, name: "Instruments")]
     @State private var selectedInstrumentServerID: Int64?
     @State private var isShowingNewInstrumentSheet = false
@@ -75,7 +75,7 @@ struct InstrumentListView<SectionPicker: View>: View {
             }
         } detail: {
             if let selectedInstrumentServerID {
-                InstrumentDetailView(instrumentServerID: selectedInstrumentServerID)
+                InstrumentDetailView(instrumentServerID: selectedInstrumentServerID, ontologyStore: ontologyStore)
             } else {
                 ExplorerList(
                     isEmpty: true,

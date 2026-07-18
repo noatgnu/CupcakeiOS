@@ -2,7 +2,6 @@ import CupcakeModels
 import SwiftData
 import SwiftUI
 
-/// Shows an instrument's existing bookings as a plain list, while picking a time.
 struct ExistingBookingsSection: View {
     let instrumentServerID: Int64?
 

@@ -4,7 +4,6 @@ import CupcakeSync
 import SwiftData
 import SwiftUI
 
-/// Edits an already-attached step-reagent's quantity/scaling.
 struct EditStepReagentSheet: View {
     @Environment(AppSession.self) private var appSession
     @Environment(\.dismiss) private var dismiss

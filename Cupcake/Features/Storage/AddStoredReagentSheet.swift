@@ -4,12 +4,10 @@ import CupcakeSync
 import SwiftData
 import SwiftUI
 
-/// Creates a stored reagent (reagent typeahead/inline-create, quantity/unit, barcode, expiration, low-stock threshold).
 struct AddStoredReagentSheet: View {
     @Environment(AppSession.self) private var appSession
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
-    @Query(sort: \CachedReagent.name) private var reagents: [CachedReagent]
 
     let storageObjectServerID: Int64
     let storageObjectName: String
@@ -22,16 +20,18 @@ struct AddStoredReagentSheet: View {
     @State private var expirationDate = Date()
     @State private var hasExpirationDate = false
     @State private var lowStockThresholdText = ""
+    @State private var molecularWeightText = ""
+    @State private var notes = ""
+    @State private var shareable = false
+    @State private var accessAll = false
+    @State private var notifyOnLowStock = false
+    @State private var pngBase64: String?
     @State private var isSaving = false
     @State private var errorMessage: String?
     @State private var isShowingError = false
-
-    private static let unitOptions = ["nL", "uL", "mL", "L", "ng", "ug", "mg", "g", "kg", "nM", "uM", "mM", "M", "ea", "pieces", "other"]
-
-    private var suggestions: [CachedReagent] {
-        guard !reagentNameQuery.isEmpty, matchedReagentID == nil else { return [] }
-        return reagents.filter { $0.name.localizedCaseInsensitiveContains(reagentNameQuery) }.prefix(10).map { $0 }
-    }
+    #if os(iOS)
+    @State private var isShowingScanner = false
+    #endif
 
     private var canSave: Bool {
         guard !reagentNameQuery.isEmpty, !unit.isEmpty else { return false }
@@ -43,26 +43,14 @@ struct AddStoredReagentSheet: View {
         NavigationStack {
             Form {
                 Section("Reagent") {
-                    TextField("Reagent name", text: $reagentNameQuery)
-                        .accessibilityIdentifier("newStoredReagentNameField")
-                        .onChange(of: reagentNameQuery) { matchedReagentID = nil }
-                    ForEach(suggestions) { reagent in
-                        Button {
-                            reagentNameQuery = reagent.name
-                            unit = reagent.unit
-                            matchedReagentID = reagent.clientID
-                        } label: {
-                            Text("\(reagent.name) (\(reagent.unit))")
-                        }
-                        .accessibilityIdentifier("newStoredReagentSuggestionButton")
-                    }
-                    Picker("Unit", selection: $unit) {
-                        Text("Select…").tag("")
-                        ForEach(Self.unitOptions, id: \.self) { option in
-                            Text(option).tag(option)
-                        }
-                    }
-                    .accessibilityIdentifier("newStoredReagentUnitPicker")
+                    ReagentPickerField(
+                        nameQuery: $reagentNameQuery,
+                        unit: $unit,
+                        matchedReagentID: $matchedReagentID,
+                        nameFieldIdentifier: "newStoredReagentNameField",
+                        suggestionButtonIdentifier: "newStoredReagentSuggestionButton",
+                        unitPickerIdentifier: "newStoredReagentUnitPicker"
+                    )
                 }
                 Section {
                     TextField("Quantity", text: $quantityText)
@@ -70,8 +58,25 @@ struct AddStoredReagentSheet: View {
                         .keyboardType(.decimalPad)
                         #endif
                         .accessibilityIdentifier("newStoredReagentQuantityField")
-                    TextField("Barcode", text: $barcode)
-                        .accessibilityIdentifier("newStoredReagentBarcodeField")
+                    TextField("Molecular weight (g/mol, optional)", text: $molecularWeightText)
+                        #if os(iOS)
+                        .keyboardType(.decimalPad)
+                        #endif
+                        .accessibilityIdentifier("newStoredReagentMolecularWeightField")
+                    HStack {
+                        TextField("Barcode", text: $barcode)
+                            .accessibilityIdentifier("newStoredReagentBarcodeField")
+                        #if os(iOS)
+                        if BarcodeScannerAvailability.isSupported {
+                            Button {
+                                isShowingScanner = true
+                            } label: {
+                                Image(systemName: "barcode.viewfinder")
+                            }
+                            .accessibilityIdentifier("scanBarcodeButton")
+                        }
+                        #endif
+                    }
                     Toggle("Has expiration date", isOn: $hasExpirationDate)
                         .accessibilityIdentifier("newStoredReagentHasExpirationToggle")
                     if hasExpirationDate {
@@ -87,9 +92,54 @@ struct AddStoredReagentSheet: View {
                 } footer: {
                     Text("Stored at \(storageObjectName).")
                 }
+                Section("Notes") {
+                    TextField("Notes (optional)", text: $notes, axis: .vertical)
+                        .lineLimit(3...6)
+                        .accessibilityIdentifier("newStoredReagentNotesField")
+                }
+                Section("Sharing") {
+                    Toggle("Notify on low stock", isOn: $notifyOnLowStock)
+                        .accessibilityIdentifier("newStoredReagentNotifyToggle")
+                    Toggle("Shareable", isOn: $shareable)
+                        .accessibilityIdentifier("newStoredReagentShareableToggle")
+                    Toggle("Allow everyone to access", isOn: $accessAll)
+                        .accessibilityIdentifier("newStoredReagentAccessAllToggle")
+                }
+                Section("Image") {
+                    if let pngBase64, let data = Data(base64Encoded: pngBase64), let image = PlatformImage(data: data) {
+                        Image(platformImage: image)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(maxHeight: 160)
+                        Button("Remove Photo", role: .destructive) {
+                            self.pngBase64 = nil
+                        }
+                        .accessibilityIdentifier("removeStoredReagentImageButton")
+                    } else {
+                        StoredReagentPhotoLibraryButton(label: "Choose Photo…") { base64 in
+                            pngBase64 = base64
+                        }
+                        .accessibilityIdentifier("chooseStoredReagentPhotoButton")
+                        #if os(iOS)
+                        StoredReagentCameraButton(label: "Take Photo…") { base64 in
+                            pngBase64 = base64
+                        }
+                        .accessibilityIdentifier("takeStoredReagentPhotoButton")
+                        #endif
+                    }
+                }
             }
             .formStyle(.grouped)
             .navigationTitle("Add Reagent")
+            #if os(iOS)
+            .sheet(isPresented: $isShowingScanner) {
+                BarcodeScannerView { payload in
+                    barcode = payload
+                    isShowingScanner = false
+                }
+                .ignoresSafeArea()
+            }
+            #endif
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
@@ -116,17 +166,16 @@ struct AddStoredReagentSheet: View {
         isSaving = true
         defer { isSaving = false }
 
-        let reagent: CachedReagent
-        if let matchedReagentID, let matched = reagents.first(where: { $0.clientID == matchedReagentID }) {
-            reagent = matched
-        } else {
-            let created = CachedReagent(name: reagentNameQuery, unit: unit)
-            modelContext.insert(created)
-            reagent = created
-        }
+        let reagent = ReagentPickerField.resolveReagent(
+            name: reagentNameQuery,
+            unit: unit,
+            matchedReagentID: matchedReagentID,
+            context: modelContext
+        )
 
         let expirationDateString: String? = hasExpirationDate ? Self.dateFormatter.string(from: expirationDate) : nil
         let lowStockThreshold = Double(lowStockThresholdText)
+        let molecularWeight = Double(molecularWeightText)
 
         let storedReagent = CachedStoredReagent(
             reagentServerID: reagent.serverID,
@@ -139,7 +188,13 @@ struct AddStoredReagentSheet: View {
             currentQuantity: quantity,
             barcode: barcode.isEmpty ? nil : barcode,
             expirationDate: expirationDateString,
-            lowStockThreshold: lowStockThreshold
+            lowStockThreshold: lowStockThreshold,
+            molecularWeight: molecularWeight,
+            notes: notes.isEmpty ? nil : notes,
+            shareable: shareable,
+            accessAll: accessAll,
+            notifyOnLowStock: notifyOnLowStock,
+            pngBase64: pngBase64
         )
         modelContext.insert(storedReagent)
         try? modelContext.save()

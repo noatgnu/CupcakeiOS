@@ -29,6 +29,7 @@ struct SDRFKeyValueInputView: View {
                         Text(option).tag(option)
                     }
                 }
+                .accessibilityIdentifier("sdrfField_\(spec.key)")
             } else {
                 TextField(spec.label, text: Binding(
                     get: { fields[spec.key] ?? "" },

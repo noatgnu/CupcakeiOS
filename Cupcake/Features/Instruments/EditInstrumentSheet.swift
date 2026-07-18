@@ -3,12 +3,10 @@ import CupcakeNetworking
 import CupcakeSync
 import SwiftUI
 
-/// Creates or edits an instrument. Both require staff/superuser server-side.
 struct EditInstrumentSheet: View {
     @Environment(AppSession.self) private var appSession
     @Environment(\.dismiss) private var dismiss
 
-    /// `nil` for create, set for edit.
     let existingInstrument: CachedInstrument?
 
     @State private var instrumentName: String

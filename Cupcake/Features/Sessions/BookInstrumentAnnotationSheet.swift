@@ -4,11 +4,10 @@ import CupcakeSync
 import SwiftData
 import SwiftUI
 
-/// Step-scoped instrument booking annotation (instrument picker, start/end time, description). Online-only.
 struct BookInstrumentAnnotationSheet: View {
     @Environment(AppSession.self) private var appSession
     @Environment(\.dismiss) private var dismiss
-    @Query(sort: \CachedInstrument.instrumentName) private var instruments: [CachedInstrument]
+    @Query(sort: \CachedInstrument.createdAt, order: .reverse) private var instruments: [CachedInstrument]
 
     let sessionServerID: Int64
     let sessionClientID: UUID
@@ -16,6 +15,7 @@ struct BookInstrumentAnnotationSheet: View {
     let stepClientID: UUID
 
     @State private var selectedInstrumentServerID: Int64?
+    @State private var instrumentSearchText = ""
     @State private var startTime = Date().addingTimeInterval(3600)
     @State private var endTime = Date().addingTimeInterval(3600 * 3)
     @State private var usageDescription = ""
@@ -35,13 +35,18 @@ struct BookInstrumentAnnotationSheet: View {
         NavigationStack {
             Form {
                 Section("Instrument") {
-                    Picker("Instrument", selection: $selectedInstrumentServerID) {
-                        Text("None").tag(Int64?.none)
-                        ForEach(bookableInstruments) { instrument in
-                            Text(instrument.instrumentName).tag(Optional(instrument.serverID))
-                        }
+                    SearchableSelectionList(
+                        items: bookableInstruments,
+                        searchPlaceholder: "Search instruments",
+                        searchFieldIdentifier: "bookingAnnotationInstrumentSearchField",
+                        searchText: $instrumentSearchText,
+                        matches: { $0.instrumentName.localizedCaseInsensitiveContains($1) },
+                        isSelected: { $0.serverID == selectedInstrumentServerID },
+                        rowIdentifier: { "bookingAnnotationInstrumentRow_\($0.instrumentName)" },
+                        onSelect: { selectedInstrumentServerID = $0.serverID }
+                    ) { instrument in
+                        Text(instrument.instrumentName)
                     }
-                    .accessibilityIdentifier("bookingAnnotationInstrumentPicker")
                 }
                 ExistingBookingsSection(instrumentServerID: selectedInstrumentServerID)
                 Section {

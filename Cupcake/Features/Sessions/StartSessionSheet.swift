@@ -1,6 +1,5 @@
 import SwiftUI
 
-/// Starts a session (name + public flag) for the current protocol context.
 struct StartSessionSheet: View {
     @Environment(\.dismiss) private var dismiss
 

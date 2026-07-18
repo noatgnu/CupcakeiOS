@@ -1,7 +1,6 @@
 import Foundation
 import SwiftData
 
-/// This user's own low-stock/expiry notification preferences for a stored reagent, keyed by `storedReagentServerID`.
 @Model
 public final class CachedReagentSubscription {
     @Attribute(.unique) public var storedReagentServerID: Int64

@@ -1,7 +1,6 @@
 import CupcakeNetworking
 import Foundation
 
-/// Raw calls for the two bootstrap requests, kept separate from `AuthManager`'s Keychain persistence.
 public actor AuthService {
     private let apiClient: APIClient
 
@@ -17,14 +16,12 @@ public actor AuthService {
         )
     }
 
-    /// Where a native client points its whole `ASWebAuthenticationSession` (not a plain GET to fetch JSON first) — `client_type=mobile` makes the backend redirect straight to ORCID instead.
     public nonisolated func orcidLoginURL() -> URL {
         apiClient.baseURL
             .appendingPathComponent("auth/orcid/login/")
             .appending(queryItems: [URLQueryItem(name: "client_type", value: "mobile")])
     }
 
-    /// Trades the opaque `auth_code` from the callback redirect for real JWTs.
     public func exchangeAuthCode(_ authCode: String) async throws -> LoginResponse {
         try await apiClient.send(
             "auth/exchange-code/",
@@ -33,7 +30,6 @@ public actor AuthService {
         )
     }
 
-    /// Must be called with the JWT access token from `login(...)`.
     public func createDeviceToken(
         accessToken: String,
         label: String,

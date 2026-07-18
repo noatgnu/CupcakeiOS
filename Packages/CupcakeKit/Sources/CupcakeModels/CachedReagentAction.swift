@@ -1,12 +1,10 @@
 import Foundation
 import SwiftData
 
-/// A stock movement ("add" or "reserve") against a `StoredReagent`. Offline-createable.
 @Model
 public final class CachedReagentAction {
     @Attribute(.unique) public var clientID: UUID
     public var serverID: Int64?
-    /// The parent `StoredReagent`'s `clientID`, since a locally-created one may not have a `serverID` yet.
     public var storedReagentClientID: UUID
     public var actionType: String
     public var quantity: Double

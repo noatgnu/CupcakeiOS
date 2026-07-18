@@ -1,6 +1,5 @@
 import SwiftUI
 
-/// A minimal single-field text entry sheet, reused for renaming a section and similar cases.
 struct AddTextSheet: View {
     @Environment(\.dismiss) private var dismiss
 

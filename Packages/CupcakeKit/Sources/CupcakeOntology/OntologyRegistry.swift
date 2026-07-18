@@ -1,7 +1,6 @@
 import Foundation
 import SwiftData
 
-/// The full set of ontology + column-template/schema datasets, driving both the store's schema and the settings screen's list.
 public enum OntologyRegistry {
     public static let allModelTypes: [any PersistentModel.Type] = [
         CachedTissue.self,
@@ -22,7 +21,6 @@ public enum OntologyRegistry {
         CachedSDRFSchema.self,
     ]
 
-    /// Human-readable label per `type_key`, for the settings screen.
     public static let displayNames: [String: String] = [
         "tissue": "Tissue",
         "species": "Species",
@@ -42,10 +40,8 @@ public enum OntologyRegistry {
         "sdrf": "SDRF Schemas",
     ]
 
-    /// Large tables default to off; everything else defaults on.
     public static let defaultDisabled: Set<String> = ["ncbi_taxonomy", "chebi"]
 
-    /// Dispatches a manifest table's import to the right concrete `OntologyRowDecodable` type by its `name`.
     public static func importTable(_ table: OntologyManifestTable, using service: OntologyImportService) async throws {
         switch table.name {
         case CachedTissue.typeKey: try await service.importTable(CachedTissue.self, table: table)

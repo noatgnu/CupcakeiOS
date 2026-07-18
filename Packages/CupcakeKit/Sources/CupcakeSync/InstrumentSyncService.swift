@@ -3,7 +3,6 @@ import CupcakeNetworking
 import Foundation
 import SwiftData
 
-/// Full-refetch population of instruments and their booking history, plus `InstrumentUsage` offline-create.
 public actor InstrumentSyncService {
     private let apiClient: APIClient
     private let deviceToken: @Sendable () -> String?
@@ -43,7 +42,6 @@ public actor InstrumentSyncService {
         }
     }
 
-    /// Pushes an already locally-created booking to the server, attaching the new `serverID`. Never sends `approved`.
     @discardableResult
     public func syncLocallyCreatedInstrumentUsage(clientID: UUID) async throws -> Int64 {
         guard let token = deviceToken() else {
@@ -119,6 +117,17 @@ public actor InstrumentSyncService {
         )
         try await store.removeInstrumentLocally(serverID: serverID)
     }
+
+    @discardableResult
+    public func refreshMetadataTable(instrumentServerID: Int64, metadataTableServerID: Int64) async throws -> MetadataTableDTO {
+        guard let token = deviceToken() else {
+            throw InstrumentSyncError.noDeviceToken
+        }
+        let authorization = "DeviceToken \(token)"
+        let table: MetadataTableDTO = try await apiClient.get("metadata-tables/\(metadataTableServerID)/", authorizationHeader: authorization)
+        try await store.upsertMetadataTable(table)
+        return table
+    }
 }
 
 public enum InstrumentSyncError: Error {
@@ -126,7 +135,6 @@ public enum InstrumentSyncError: Error {
     case instrumentUsageNotCached
 }
 
-/// SwiftData access is isolated to this `@ModelActor` — see `ProtocolStore`'s doc comment for why.
 @ModelActor
 actor InstrumentStore {
     func upsertInstruments(_ dtos: [InstrumentDTO]) throws {
@@ -143,7 +151,9 @@ actor InstrumentStore {
                     enabled: dto.enabled,
                     acceptsBookings: dto.acceptsBookings,
                     allowOverlappingBookings: dto.allowOverlappingBookings,
-                    maintenanceOverdue: dto.maintenanceOverdue
+                    maintenanceOverdue: dto.maintenanceOverdue,
+                    metadataTableServerID: dto.metadataTableId,
+                    createdAt: Date.parsedISO8601(dto.createdAt)
                 )
                 modelContext.insert(created)
                 return created
@@ -154,6 +164,56 @@ actor InstrumentStore {
             instrument.acceptsBookings = dto.acceptsBookings
             instrument.allowOverlappingBookings = dto.allowOverlappingBookings
             instrument.maintenanceOverdue = dto.maintenanceOverdue
+            instrument.metadataTableServerID = dto.metadataTableId
+            instrument.updatedAt = Date.parsedISO8601(dto.updatedAt, fallback: instrument.updatedAt)
+        }
+        try modelContext.save()
+    }
+
+    func upsertMetadataTable(_ dto: MetadataTableDTO) throws {
+        let tableServerID = dto.id
+        let existing = try? modelContext.fetch(
+            FetchDescriptor<CachedMetadataTable>(predicate: #Predicate { $0.serverID == tableServerID })
+        )
+        let table = existing?.first ?? {
+            let created = CachedMetadataTable(serverID: dto.id, name: dto.name)
+            modelContext.insert(created)
+            return created
+        }()
+        table.name = dto.name
+        table.tableDescription = dto.description
+        table.sampleCount = dto.sampleCount
+        table.version = dto.version
+        table.ownerUsername = dto.ownerUsername
+        table.labGroupName = dto.labGroupName
+        table.isPublished = dto.isPublished
+        table.canEdit = dto.canEdit
+
+        let existingColumns = try? modelContext.fetch(
+            FetchDescriptor<CachedMetadataColumn>(predicate: #Predicate { $0.metadataTableServerID == tableServerID })
+        )
+        for column in existingColumns ?? [] {
+            modelContext.delete(column)
+        }
+        for columnDTO in dto.columns {
+            let column = CachedMetadataColumn(
+                serverID: columnDTO.id,
+                metadataTableServerID: dto.id,
+                name: columnDTO.name,
+                displayName: columnDTO.displayName,
+                type: columnDTO.type,
+                columnPosition: columnDTO.columnPosition ?? 0,
+                value: columnDTO.value,
+                notApplicable: columnDTO.notApplicable,
+                notAvailable: columnDTO.notAvailable,
+                mandatory: columnDTO.mandatory,
+                hidden: columnDTO.hidden,
+                readonly: columnDTO.readonly,
+                ontologyType: columnDTO.ontologyType,
+                staffOnly: columnDTO.staffOnly,
+                modifiers: columnDTO.modifiers.map { MetadataColumnModifier(samples: $0.samples, value: $0.value) }
+            )
+            modelContext.insert(column)
         }
         try modelContext.save()
     }
@@ -206,7 +266,6 @@ actor InstrumentStore {
         return (usage.instrumentServerID, timeStarted, usage.timeEnded, usage.usageDescription, usage.maintenance)
     }
 
-    /// Attaches a newly-assigned `serverID` to the existing local record matched by `clientID`.
     func attachServerID(instrumentUsageClientID: UUID, dto: InstrumentUsageDTO) throws {
         guard let usage = try modelContext.fetch(
             FetchDescriptor<CachedInstrumentUsage>(predicate: #Predicate { $0.clientID == instrumentUsageClientID })

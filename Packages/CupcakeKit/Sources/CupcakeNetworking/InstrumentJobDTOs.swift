@@ -1,4 +1,3 @@
-/// `GET instrument-jobs/` response shape. Only the fields this app currently needs are modeled.
 public struct InstrumentJobDTO: Decodable, Sendable {
     public let id: Int64
     public let jobName: String?
@@ -15,6 +14,10 @@ public struct InstrumentJobDTO: Decodable, Sendable {
     public let canEditStaffOnlyColumns: Bool
     public let funder: String?
     public let costCenter: String?
+    public let createdAt: String?
+    public let updatedAt: String?
+    public let user: Int64?
+    public let userUsername: String?
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -33,16 +36,19 @@ public struct InstrumentJobDTO: Decodable, Sendable {
         canEditStaffOnlyColumns = try container.decodeIfPresent(Bool.self, forKey: .canEditStaffOnlyColumns) ?? false
         funder = try container.decodeIfPresent(String.self, forKey: .funder)
         costCenter = try container.decodeIfPresent(String.self, forKey: .costCenter)
+        createdAt = try container.decodeIfPresent(String.self, forKey: .createdAt)
+        updatedAt = try container.decodeIfPresent(String.self, forKey: .updatedAt)
+        user = try container.decodeIfPresent(Int64.self, forKey: .user)
+        userUsername = try container.decodeIfPresent(String.self, forKey: .userUsername)
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, jobName, jobType, status, project, instrument, submittedAt, completedAt
         case metadataTable, labGroup, staff, staffUsernames, canEditStaffOnlyColumns
-        case funder, costCenter
+        case funder, costCenter, createdAt, updatedAt, user, userUsername
     }
 }
 
-/// `PATCH instrument-jobs/{id}/` body for funder/cost-center (free-text fields).
 public struct UpdateInstrumentJobFunderCostCenterRequest: Encodable, Sendable {
     public var funder: String?
     public var costCenter: String?
@@ -53,7 +59,6 @@ public struct UpdateInstrumentJobFunderCostCenterRequest: Encodable, Sendable {
     }
 }
 
-/// `PATCH instrument-jobs/{id}/` body for lab group assignment, not part of the initial create call.
 public struct UpdateInstrumentJobLabGroupRequest: Encodable, Sendable {
     public var labGroup: Int64
 
@@ -62,7 +67,6 @@ public struct UpdateInstrumentJobLabGroupRequest: Encodable, Sendable {
     }
 }
 
-/// `PATCH instrument-jobs/{id}/` body for assigning the booked instrument, required for the metadata-merge signal to fire.
 public struct UpdateInstrumentJobInstrumentRequest: Encodable, Sendable {
     public var instrument: Int64
 
@@ -71,7 +75,6 @@ public struct UpdateInstrumentJobInstrumentRequest: Encodable, Sendable {
     }
 }
 
-/// `PATCH instrument-jobs/{id}/` body for staff assignment. Rejects with a 400 naming any user who isn't a direct, process-jobs-enabled lab-group member.
 public struct UpdateInstrumentJobStaffRequest: Encodable, Sendable {
     public var staff: [Int64]
 
@@ -80,7 +83,6 @@ public struct UpdateInstrumentJobStaffRequest: Encodable, Sendable {
     }
 }
 
-/// `POST instrument-jobs/` body. Every other field (lab group, staff, etc.) is a separate PATCH after this.
 public struct CreateInstrumentJobRequest: Encodable, Sendable {
     public var jobType: String
     public var jobName: String?

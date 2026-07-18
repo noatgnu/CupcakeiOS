@@ -3,7 +3,6 @@ import CupcakeNetworking
 import Foundation
 import SwiftData
 
-/// Read-sync + create-locally-then-sync-or-queue + `submit`/`cancel` actions for `InstrumentJob`.
 public actor InstrumentJobSyncService {
     private let apiClient: APIClient
     private let deviceToken: @Sendable () -> String?
@@ -31,7 +30,6 @@ public actor InstrumentJobSyncService {
         }
     }
 
-    /// Pushes an already locally-created job to the server. Throws `SyncDependencyError.parentNotSynced` if its project hasn't synced yet.
     @discardableResult
     public func syncLocallyCreatedInstrumentJob(clientID: UUID) async throws -> Int64 {
         guard let token = deviceToken() else {
@@ -88,7 +86,6 @@ public actor InstrumentJobSyncService {
         return dto
     }
 
-    /// Creates the job's `MetadataTable` from a template, then a follow-up GET for the new `metadata_table` link.
     @discardableResult
     public func createMetadataFromTemplate(
         jobServerID: Int64,
@@ -130,7 +127,6 @@ public actor InstrumentJobSyncService {
         return dto
     }
 
-    /// Required before booking an instrument for a job.
     @discardableResult
     public func updateInstrument(jobServerID: Int64, instrumentServerID: Int64) async throws -> InstrumentJobDTO {
         guard let token = deviceToken() else {
@@ -146,7 +142,6 @@ public actor InstrumentJobSyncService {
         return dto
     }
 
-    /// Replaces the job's entire staff list. A rejection here is a real validation failure worth surfacing verbatim.
     @discardableResult
     public func updateStaff(jobServerID: Int64, staffServerIDs: [Int64]) async throws -> InstrumentJobDTO {
         guard let token = deviceToken() else {
@@ -162,7 +157,6 @@ public actor InstrumentJobSyncService {
         return dto
     }
 
-    /// Re-fetches the job and its `metadata_table`, picking up whatever the merge signal added. `nil` if there's no table yet.
     @discardableResult
     public func refreshMetadataTable(jobServerID: Int64, jobClientID: UUID) async throws -> MetadataTableDTO? {
         guard let token = deviceToken() else {
@@ -178,7 +172,6 @@ public actor InstrumentJobSyncService {
         return table
     }
 
-    /// Free-text funder/cost-center fields, no server-side validation.
     @discardableResult
     public func updateFunderCostCenter(jobServerID: Int64, funder: String?, costCenter: String?) async throws -> InstrumentJobDTO {
         guard let token = deviceToken() else {
@@ -208,7 +201,6 @@ public actor InstrumentJobSyncService {
     }
 }
 
-/// An explicit "no fields" marker for `submit`/`cancel`, DRF `@action`s that take no request body.
 private struct EmptyEncodable: Encodable, Sendable {}
 
 public enum InstrumentJobSyncError: Error {
@@ -216,7 +208,6 @@ public enum InstrumentJobSyncError: Error {
     case instrumentJobNotCached
 }
 
-/// SwiftData access is isolated to this `@ModelActor` — see `ProtocolStore`'s doc comment for why.
 @ModelActor
 actor InstrumentJobStore {
     func upsert(_ dtos: [InstrumentJobDTO]) throws {
@@ -253,7 +244,10 @@ actor InstrumentJobStore {
                 staffUsernames: dto.staffUsernames,
                 canEditStaffOnlyColumns: dto.canEditStaffOnlyColumns,
                 funder: dto.funder,
-                costCenter: dto.costCenter
+                costCenter: dto.costCenter,
+                createdAt: Date.parsedISO8601(dto.createdAt),
+                ownerServerID: dto.user,
+                ownerUsername: dto.userUsername
             )
             modelContext.insert(created)
             return created
@@ -272,6 +266,9 @@ actor InstrumentJobStore {
         job.canEditStaffOnlyColumns = dto.canEditStaffOnlyColumns
         job.funder = dto.funder
         job.costCenter = dto.costCenter
+        job.updatedAt = Date.parsedISO8601(dto.updatedAt, fallback: job.updatedAt)
+        job.ownerServerID = dto.user
+        job.ownerUsername = dto.userUsername
     }
 
     func upsertMetadataTable(_ dto: MetadataTableDTO, instrumentJobClientID: UUID) throws {
@@ -347,7 +344,6 @@ actor InstrumentJobStore {
         return (job.jobName, job.jobType, job.projectClientID, projectServerID)
     }
 
-    /// Attaches a newly-assigned `serverID` to the existing local record matched by `clientID`.
     func attachServerID(clientID: UUID, dto: InstrumentJobDTO) throws {
         guard let job = try modelContext.fetch(
             FetchDescriptor<CachedInstrumentJob>(predicate: #Predicate { $0.clientID == clientID })
@@ -365,6 +361,9 @@ actor InstrumentJobStore {
         job.labGroupServerID = dto.labGroup
         job.funder = dto.funder
         job.costCenter = dto.costCenter
+        job.updatedAt = Date.parsedISO8601(dto.updatedAt, fallback: job.updatedAt)
+        job.ownerServerID = dto.user
+        job.ownerUsername = dto.userUsername
         try modelContext.save()
     }
 }

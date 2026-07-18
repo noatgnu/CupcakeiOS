@@ -1,14 +1,15 @@
 import CupcakeModels
 import CupcakeNetworking
 import CupcakeSync
+import SwiftData
 import SwiftUI
 
-/// Solves concentration/volume/molecular-weight/mass/dilution problems, with a reagent-typeahead molecular-weight autofill.
 struct MolarityCalculatorAnnotationView: View {
     let onSave: (Data) -> Void
     let onCancel: () -> Void
 
     @Environment(AppSession.self) private var appSession
+    @Query private var cachedStorageObjects: [CachedStorageObject]
 
     private enum Mode: String, CaseIterable, Identifiable {
         case dynamic
@@ -166,7 +167,6 @@ struct MolarityCalculatorAnnotationView: View {
         }
     }
 
-    /// Debounced search against reagents with a known molecular weight, autofilling the field on tap.
     private var reagentLookupSection: some View {
         Section("Look Up Molecular Weight") {
             TextField("Search reagents…", text: $reagentSearchText)
@@ -178,8 +178,18 @@ struct MolarityCalculatorAnnotationView: View {
                     Button {
                         selectReagent(reagent)
                     } label: {
-                        if let mw = reagent.molecularWeight.flatMap(Double.init) {
-                            Text("\(reagent.reagentName ?? "Unknown") (\(String(format: "%.2f", mw)) g/mol)")
+                        HStack(spacing: 8) {
+                            reagentThumbnail(reagent)
+                            VStack(alignment: .leading, spacing: 2) {
+                                if let mw = reagent.molecularWeight.flatMap(Double.init) {
+                                    Text("\(reagent.reagentName ?? "Unknown") (\(String(format: "%.2f", mw)) g/mol)")
+                                }
+                                if let breadcrumb = storageBreadcrumb(for: reagent.storageObject) ?? reagent.storageObjectName {
+                                    Label(breadcrumb, systemImage: "shippingbox")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
                         }
                     }
                 }
@@ -205,6 +215,35 @@ struct MolarityCalculatorAnnotationView: View {
         reagentSuggestions = []
     }
 
+    private func storageBreadcrumb(for storageObjectServerID: Int64?) -> String? {
+        guard var current = storageObjectServerID.flatMap({ id in cachedStorageObjects.first { $0.serverID == id } }) else { return nil }
+        var names = [current.objectName]
+        while let parentID = current.storedAtServerID, let parent = cachedStorageObjects.first(where: { $0.serverID == parentID }) {
+            names.append(parent.objectName)
+            current = parent
+        }
+        return names.reversed().joined(separator: " › ")
+    }
+
+    @ViewBuilder
+    private func reagentThumbnail(_ reagent: StoredReagentDTO) -> some View {
+        if let pngBase64 = reagent.pngBase64, let data = Data(base64Encoded: pngBase64), let image = PlatformImage(data: data) {
+            Image(platformImage: image)
+                .resizable()
+                .aspectRatio(contentMode: .fill)
+                .frame(width: 32, height: 32)
+                .clipShape(RoundedRectangle(cornerRadius: 4))
+        } else {
+            RoundedRectangle(cornerRadius: 4)
+                .fill(.quaternary)
+                .frame(width: 32, height: 32)
+                .overlay {
+                    Image(systemName: "flask")
+                        .foregroundStyle(.secondary)
+                }
+        }
+    }
+
     private func numberField(_ label: String, value: Binding<Double?>, unit: Binding<String>? = nil, units: [(unit: String, baseConversion: Double)] = [], identifier: String? = nil) -> some View {
         NumberField(label: label, value: value, unit: unit, units: units, identifier: identifier)
     }
@@ -217,7 +256,6 @@ struct MolarityCalculatorAnnotationView: View {
         }
     }
 
-    // MARK: - Unit conversion
 
     private static func convert(_ value: Double, from: String, to: String, table: [(unit: String, baseConversion: Double)]) -> Double {
         guard let fromFactor = table.first(where: { $0.unit == from })?.baseConversion,
@@ -384,7 +422,6 @@ struct MolarityCalculatorAnnotationView: View {
         }
     }
 
-    /// Shows the full symbolic formula with every variable's actual value plugged in.
     static func formatExpression(_ entry: MolarityHistoryEntry) -> String {
         let resultText = String(format: "%.3f", entry.result)
         let unit = resultUnit(for: entry)
@@ -446,7 +483,6 @@ struct MolarityCalculatorAnnotationView: View {
     }
 }
 
-/// Plain string-bound numeric field, syncing its local text buffer from the `Double?` binding on appear/external change.
 private struct NumberField: View {
     let label: String
     @Binding var value: Double?

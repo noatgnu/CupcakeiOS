@@ -1,7 +1,6 @@
 import CupcakeModels
 import Foundation
 
-/// Substitutes `%<stepReagentID>.field%` placeholders in a step description with real reagent values.
 enum StepTemplateRenderer {
     static func render(stepDescription: String, reagents: [(stepReagent: CachedStepReagent, reagent: CachedReagent)]) -> String {
         var result = stepDescription

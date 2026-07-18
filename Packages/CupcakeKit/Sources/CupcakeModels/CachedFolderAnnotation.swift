@@ -1,7 +1,6 @@
 import Foundation
 import SwiftData
 
-/// A cached folder-scoped annotation, for offline browsing.
 @Model
 public final class CachedFolderAnnotation {
     @Attribute(.unique) public var serverID: Int64

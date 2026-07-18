@@ -71,7 +71,6 @@ struct APIClientTests {
 }
 
 extension URLRequest {
-    /// The intercepted request often carries the body as `httpBodyStream` rather than `httpBody`.
     fileprivate func httpBodyOrStream(from request: URLRequest) -> Data? {
         if let body = request.httpBody { return body }
         guard let stream = request.httpBodyStream else { return nil }

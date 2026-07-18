@@ -5,7 +5,6 @@ import PhotosUI
 import SwiftData
 import SwiftUI
 
-/// A photo-picker-backed button that hands the picked image's data to `onPick`.
 struct PhotoAnnotationButton: View {
     let label: String
     let onPick: (Data) -> Void
@@ -28,7 +27,6 @@ struct PhotoAnnotationButton: View {
     }
 }
 
-/// A photo-picker-backed button that hands the picked video's data and file extension to `onPick`.
 struct VideoAnnotationButton: View {
     let label: String
     let onPick: (Data, String) -> Void
@@ -52,12 +50,10 @@ struct VideoAnnotationButton: View {
     }
 }
 
-/// Identifies which session to show when `SessionDetailView` opens as its own window.
 struct SessionDetailWindowID: Codable, Hashable {
     let sessionClientID: UUID
 }
 
-/// Resolves a `SessionDetailWindowID` to the live session + its protocols and hosts `SessionDetailView`.
 struct SessionDetailWindowContent: View {
     let windowID: SessionDetailWindowID?
 
@@ -87,18 +83,53 @@ struct SessionDetailWindowContent: View {
     }
 }
 
+struct StepSessionWindowID: Codable, Hashable {
+    let sessionClientID: UUID
+    let stepClientID: UUID
+}
+
+struct StepSessionWindowContent: View {
+    let windowID: StepSessionWindowID?
+
+    @Query private var sessions: [CachedSession]
+    @Query private var protocols: [CachedProtocol]
+
+    private var session: CachedSession? {
+        guard let windowID else { return nil }
+        return sessions.first { $0.clientID == windowID.sessionClientID }
+    }
+
+    private var attachedProtocols: [CachedProtocol] {
+        guard let session else { return [] }
+        return session.protocolClientIDs.compactMap { clientID in
+            protocols.first { $0.clientID == clientID }
+        }
+    }
+
+    var body: some View {
+        if let windowID {
+            NavigationStack {
+                SessionDetailView(
+                    sessionClientID: windowID.sessionClientID,
+                    protocols: attachedProtocols,
+                    focusedStepClientID: windowID.stepClientID
+                )
+            }
+        } else {
+            ContentUnavailableView("Step Not Found", systemImage: "questionmark.square.dashed")
+        }
+    }
+}
+
 struct SessionDetailView: View {
     @Environment(AppSession.self) private var appSession
     @Environment(\.openWindow) private var openWindow
     @Environment(\.modelContext) private var modelContext
     let sessionClientID: UUID
-    /// 0..N protocols this session attaches.
     let protocols: [CachedProtocol]
-    /// Annotation to scroll to and briefly highlight on appear, from a share link.
     var highlightAnnotationServerID: Int64? = nil
 
     @State private var highlightedAnnotationServerID: Int64?
-    /// Protocol Mode (steps) vs. Notes Mode (session-level annotations).
     @State private var isProtocolMode: Bool
     @State private var selectedProtocolIndex = 0
 
@@ -118,16 +149,18 @@ struct SessionDetailView: View {
     @State private var isSaving = false
     @State private var errorMessage: String?
     @State private var isShowingError = false
-    /// When true, scratched annotations are hidden instead of just dimmed.
     @State private var hideScratched = false
     @State private var isShowingEditSheet = false
     @State private var isDeleting = false
 
-    init(sessionClientID: UUID, protocols: [CachedProtocol], highlightAnnotationServerID: Int64? = nil) {
+    var focusedStepClientID: UUID? = nil
+
+    init(sessionClientID: UUID, protocols: [CachedProtocol], highlightAnnotationServerID: Int64? = nil, focusedStepClientID: UUID? = nil) {
         self.sessionClientID = sessionClientID
         self.protocols = protocols
         self.highlightAnnotationServerID = highlightAnnotationServerID
-        self._isProtocolMode = State(initialValue: !protocols.isEmpty)
+        self.focusedStepClientID = focusedStepClientID
+        self._isProtocolMode = State(initialValue: focusedStepClientID != nil || !protocols.isEmpty)
     }
 
     private var currentSession: CachedSession? {
@@ -150,13 +183,14 @@ struct SessionDetailView: View {
         sessions.first(where: { $0.clientID == sessionClientID })?.serverID
     }
 
-    /// Brief accent tint for the row matching an in-progress deep-link highlight.
     private func rowHighlightColor(for annotationServerID: Int64?) -> Color? {
         guard let highlightedAnnotationServerID, annotationServerID == highlightedAnnotationServerID else { return nil }
         return Color.accentColor.opacity(0.25)
     }
 
-    /// Builds a `cupcake://annotation` share link, or `nil` if not yet synced.
+    private func scratchActionTitle(scratched: Bool) -> String { scratched ? "Unscratch" : "Scratch" }
+    private func scratchActionIcon(scratched: Bool) -> String { scratched ? "arrow.uturn.backward" : "eraser" }
+
     private func deepLinkURL(annotationServerID: Int64?) -> URL? {
         guard let sessionServerID, let annotationServerID else { return nil }
         var components = URLComponents()
@@ -170,6 +204,9 @@ struct SessionDetailView: View {
     }
 
     private var steps: [CachedProtocolStep] {
+        if let focusedStepClientID {
+            return allSteps.filter { $0.clientID == focusedStepClientID }
+        }
         guard let currentProtocol else { return [] }
         return currentProtocol.sections
             .sorted { $0.order < $1.order }
@@ -219,7 +256,7 @@ struct SessionDetailView: View {
     var body: some View {
         ScrollViewReader { scrollProxy in
         List {
-            if !isProtocolMode {
+            if !isProtocolMode, focusedStepClientID == nil {
             Section("Session Notes") {
                 ForEach(sessionAnnotations) { annotation in
                     Group {
@@ -267,7 +304,7 @@ struct SessionDetailView: View {
                         Button {
                             Task { await toggleSessionAnnotationScratched(annotation) }
                         } label: {
-                            Label(annotation.scratched ? "Unscratch" : "Scratch", systemImage: annotation.scratched ? "arrow.uturn.backward" : "eraser")
+                            Label(scratchActionTitle(scratched: annotation.scratched), systemImage: scratchActionIcon(scratched: annotation.scratched))
                         }
                         .tint(.orange)
                         .accessibilityIdentifier("scratchSessionAnnotationButton")
@@ -344,7 +381,7 @@ struct SessionDetailView: View {
                             Button {
                                 Task { await toggleStepAnnotationScratched(annotation) }
                             } label: {
-                                Label(annotation.scratched ? "Unscratch" : "Scratch", systemImage: annotation.scratched ? "arrow.uturn.backward" : "eraser")
+                                Label(scratchActionTitle(scratched: annotation.scratched), systemImage: scratchActionIcon(scratched: annotation.scratched))
                             }
                             .tint(.orange)
                             .accessibilityIdentifier("scratchStepAnnotationButton")
@@ -369,7 +406,21 @@ struct SessionDetailView: View {
                     }
                 } header: {
                     VStack(alignment: .leading, spacing: 4) {
-                        HTMLText(html: StepTemplateRenderer.render(stepDescription: step.stepDescription, reagents: stepReagents(for: step)))
+                        HStack(alignment: .top) {
+                            HTMLText(html: StepTemplateRenderer.render(stepDescription: step.stepDescription, reagents: stepReagents(for: step)))
+                            if focusedStepClientID == nil, PlatformWindowPreference.prefersSeparateWindow {
+                                Spacer()
+                                Button {
+                                    openWindow(id: "step-session-window", value: StepSessionWindowID(sessionClientID: sessionClientID, stepClientID: step.clientID))
+                                } label: {
+                                    Image(systemName: "macwindow.badge.plus")
+                                }
+                                .buttonStyle(.borderless)
+                                .labelStyle(.iconOnly)
+                                .accessibilityLabel("Open Step in New Window")
+                                .accessibilityIdentifier("openStepSessionInWindowButton_\(step.clientID)")
+                            }
+                        }
                         if let sessionServerID {
                             StepTimerView(sessionServerID: sessionServerID, sessionClientID: sessionClientID, step: step) {
                                 await refreshTimeKeepers(sessionServerID: sessionServerID)
@@ -380,9 +431,9 @@ struct SessionDetailView: View {
             }
             }
         }
-        .navigationTitle("Session")
+        .navigationTitle(focusedStepClientID == nil ? "Session" : "Step")
         .toolbar {
-            if !protocols.isEmpty {
+            if focusedStepClientID == nil, !protocols.isEmpty {
                 ToolbarItem {
                     Picker("Mode", selection: $isProtocolMode) {
                         Text("Protocol").tag(true)
@@ -392,7 +443,7 @@ struct SessionDetailView: View {
                     .accessibilityIdentifier("sessionModePicker")
                 }
             }
-            if isProtocolMode, protocols.count > 1 {
+            if focusedStepClientID == nil, isProtocolMode, protocols.count > 1 {
                 ToolbarItem {
                     Picker("Protocol", selection: $selectedProtocolIndex) {
                         ForEach(protocols.indices, id: \.self) { index in
@@ -409,7 +460,7 @@ struct SessionDetailView: View {
                 .toggleStyle(.button)
                 .accessibilityIdentifier("hideScratchedToggle")
             }
-            if PlatformWindowPreference.prefersSeparateWindow {
+            if focusedStepClientID == nil, PlatformWindowPreference.prefersSeparateWindow {
                 ToolbarItem {
                     Button {
                         openWindow(id: "session-detail-window", value: SessionDetailWindowID(sessionClientID: sessionClientID))
@@ -449,6 +500,32 @@ struct SessionDetailView: View {
             }
         }
         .sheet(item: $annotationTargetStep) { step in
+            let onSaveStepAudio: (URL, String?, String?, String?) async throws -> Void = { fileURL, transcription, language, translation in
+                let services = appSession.makeSyncServices()
+                let clientID = try await services.stepAnnotationSync.createAudioAnnotation(
+                    sessionClientID: sessionClientID,
+                    stepClientID: step.clientID,
+                    recordedFileURL: fileURL,
+                    transcription: transcription,
+                    language: language,
+                    translation: translation
+                )
+                Task { await syncStepAudioAnnotation(clientID: clientID) }
+            }
+            let onSaveStepVideo: (URL, String?, String?, String?) async throws -> Void = { fileURL, transcription, language, translation in
+                let services = appSession.makeSyncServices()
+                let clientID = try await services.stepAnnotationSync.createFileAnnotation(
+                    sessionClientID: sessionClientID,
+                    stepClientID: step.clientID,
+                    fileURL: fileURL,
+                    fileExtension: "mov",
+                    annotationType: "video",
+                    transcription: transcription,
+                    language: language,
+                    translation: translation
+                )
+                Task { await syncStepVideoAnnotation(clientID: clientID) }
+            }
             AddAnnotationSheet(
                 scope: .step(step),
                 sessionServerID: sessionServerID,
@@ -457,23 +534,37 @@ struct SessionDetailView: View {
                 onPickPhoto: { data in Task { await handleStepPhoto(step: step, data: data) } },
                 onPickVideo: { data, fileExtension in Task { await handleStepVideo(step: step, data: data, fileExtension: fileExtension) } },
                 onSaveSketch: { data in Task { await handleStepSketch(step: step, data: data) } },
-                onSaveAudio: { fileURL, transcription, language, translation in
-                    let services = appSession.makeSyncServices()
-                    let clientID = try await services.stepAnnotationSync.createAudioAnnotation(
-                        sessionClientID: sessionClientID,
-                        stepClientID: step.clientID,
-                        recordedFileURL: fileURL,
-                        transcription: transcription,
-                        language: language,
-                        translation: translation
-                    )
-                    Task { await syncStepAudioAnnotation(clientID: clientID) }
-                },
+                onSaveAudio: onSaveStepAudio,
+                onSaveVideo: onSaveStepVideo,
                 onSaveCalculator: { data in Task { await handleStepCalculator(step: step, data: data) } },
                 onSaveMolarityCalculator: { data in Task { await handleStepMolarityCalculator(step: step, data: data) } }
             )
         }
         .sheet(isPresented: $isShowingSessionAnnotationSheet) {
+            let onSaveSessionAudio: (URL, String?, String?, String?) async throws -> Void = { fileURL, transcription, language, translation in
+                let services = appSession.makeSyncServices()
+                let clientID = try await services.sessionAnnotationSync.createAudioAnnotation(
+                    sessionClientID: sessionClientID,
+                    recordedFileURL: fileURL,
+                    transcription: transcription,
+                    language: language,
+                    translation: translation
+                )
+                Task { await syncSessionAudioAnnotation(clientID: clientID) }
+            }
+            let onSaveSessionVideo: (URL, String?, String?, String?) async throws -> Void = { fileURL, transcription, language, translation in
+                let services = appSession.makeSyncServices()
+                let clientID = try await services.sessionAnnotationSync.createFileAnnotation(
+                    sessionClientID: sessionClientID,
+                    fileURL: fileURL,
+                    fileExtension: "mov",
+                    annotationType: "video",
+                    transcription: transcription,
+                    language: language,
+                    translation: translation
+                )
+                Task { await syncSessionVideoAnnotation(clientID: clientID) }
+            }
             AddAnnotationSheet(
                 scope: .session,
                 sessionServerID: sessionServerID,
@@ -482,17 +573,8 @@ struct SessionDetailView: View {
                 onPickPhoto: { data in Task { await handleSessionPhoto(data: data) } },
                 onPickVideo: { data, fileExtension in Task { await handleSessionVideo(data: data, fileExtension: fileExtension) } },
                 onSaveSketch: { data in Task { await handleSessionSketch(data: data) } },
-                onSaveAudio: { fileURL, transcription, language, translation in
-                    let services = appSession.makeSyncServices()
-                    let clientID = try await services.sessionAnnotationSync.createAudioAnnotation(
-                        sessionClientID: sessionClientID,
-                        recordedFileURL: fileURL,
-                        transcription: transcription,
-                        language: language,
-                        translation: translation
-                    )
-                    Task { await syncSessionAudioAnnotation(clientID: clientID) }
-                },
+                onSaveAudio: onSaveSessionAudio,
+                onSaveVideo: onSaveSessionVideo,
                 onSaveCalculator: { _ in },
                 onSaveMolarityCalculator: { _ in }
             )
@@ -547,7 +629,6 @@ struct SessionDetailView: View {
         }
     }
 
-    /// Fetches this session's timekeepers and applies them directly onto this view's own `modelContext`.
     private func refreshTimeKeepers(sessionServerID: Int64) async {
         guard let dtos = try? await appSession.makeSyncServices().timeKeeperSync.fetchTimeKeepers(sessionServerID: sessionServerID) else { return }
         for dto in dtos {
@@ -572,7 +653,6 @@ struct SessionDetailView: View {
         try? modelContext.save()
     }
 
-    /// Fetches a step annotation's bytes for inline preview, re-resolving a fresh signed URL.
     private func stepAnnotationFile(clientID: UUID) async throws -> (data: Data, suggestedFilename: String?) {
         try await appSession.makeSyncServices().stepAnnotationSync.downloadFile(clientID: clientID)
     }
@@ -601,7 +681,6 @@ struct SessionDetailView: View {
         }
     }
 
-    /// Creates the photo annotation locally, then syncs immediately or queues it in the outbox.
     private func handleStepPhoto(step: CachedProtocolStep, data: Data) async {
         let services = appSession.makeSyncServices()
         guard let clientID = try? await services.stepAnnotationSync.createImageAnnotation(
@@ -661,7 +740,6 @@ struct SessionDetailView: View {
         }
     }
 
-    /// Creates the video annotation locally, then syncs immediately or queues it in the outbox.
     private func handleStepVideo(step: CachedProtocolStep, data: Data, fileExtension: String) async {
         let services = appSession.makeSyncServices()
         guard let clientID = try? await services.stepAnnotationSync.createVideoAnnotation(
@@ -723,7 +801,6 @@ struct SessionDetailView: View {
         }
     }
 
-    /// Creates the sketch annotation locally, then syncs immediately or queues it in the outbox.
     private func handleStepSketch(step: CachedProtocolStep, data: Data) async {
         let services = appSession.makeSyncServices()
         guard let clientID = try? await services.stepAnnotationSync.createSketchAnnotation(
@@ -783,7 +860,6 @@ struct SessionDetailView: View {
         }
     }
 
-    /// Creates the calculator annotation locally, then syncs immediately or queues it in the outbox.
     private func handleStepCalculator(step: CachedProtocolStep, data: Data) async {
         guard let historyJSON = String(data: data, encoding: .utf8) else { return }
         let services = appSession.makeSyncServices()
@@ -815,7 +891,6 @@ struct SessionDetailView: View {
         }
     }
 
-    /// Creates the molarity calculator annotation locally, then syncs immediately or queues it in the outbox.
     private func handleStepMolarityCalculator(step: CachedProtocolStep, data: Data) async {
         guard let historyJSON = String(data: data, encoding: .utf8) else { return }
         let services = appSession.makeSyncServices()
@@ -847,7 +922,6 @@ struct SessionDetailView: View {
         }
     }
 
-    /// Scratch/delete are online-only, requiring the annotation to have already synced.
     private func toggleSessionAnnotationScratched(_ annotation: CachedSessionAnnotation) async {
         do {
             try await appSession.makeSyncServices().sessionAnnotationSync.setScratched(clientID: annotation.clientID, scratched: !annotation.scratched)
@@ -884,7 +958,6 @@ struct SessionDetailView: View {
         }
     }
 
-    /// Creates the annotation locally, then syncs immediately or queues it in the outbox.
     private func saveAnnotation(step: CachedProtocolStep, text: String) async {
         isSaving = true
         defer { isSaving = false }

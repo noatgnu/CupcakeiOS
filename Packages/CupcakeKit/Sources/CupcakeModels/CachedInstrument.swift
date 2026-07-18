@@ -1,7 +1,6 @@
 import Foundation
 import SwiftData
 
-/// Read-only — booking instruments requires admin/staff and is rare to do offline anyway (§3).
 @Model
 public final class CachedInstrument {
     @Attribute(.unique) public var serverID: Int64
@@ -11,6 +10,9 @@ public final class CachedInstrument {
     public var acceptsBookings: Bool
     public var allowOverlappingBookings: Bool
     public var maintenanceOverdue: Bool
+    public var metadataTableServerID: Int64?
+    public var createdAt: Date
+    public var updatedAt: Date
 
     public init(
         serverID: Int64,
@@ -19,7 +21,10 @@ public final class CachedInstrument {
         enabled: Bool,
         acceptsBookings: Bool,
         allowOverlappingBookings: Bool,
-        maintenanceOverdue: Bool
+        maintenanceOverdue: Bool,
+        metadataTableServerID: Int64? = nil,
+        createdAt: Date = Date(),
+        updatedAt: Date = Date()
     ) {
         self.serverID = serverID
         self.instrumentName = instrumentName
@@ -28,5 +33,8 @@ public final class CachedInstrument {
         self.acceptsBookings = acceptsBookings
         self.allowOverlappingBookings = allowOverlappingBookings
         self.maintenanceOverdue = maintenanceOverdue
+        self.metadataTableServerID = metadataTableServerID
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
     }
 }

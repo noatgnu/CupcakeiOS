@@ -6,7 +6,6 @@ import Foundation
 public final class AudioRecorder: NSObject {
     public private(set) var isRecording = false
     public private(set) var recordedFileURL: URL?
-    /// Normalized 0...1 input level, refreshed ~15x/sec while recording, for a live level meter.
     public private(set) var audioLevel: Float = 0
 
     private var recorder: AVAudioRecorder?
@@ -33,7 +32,6 @@ public final class AudioRecorder: NSObject {
     }
 
     #if os(iOS)
-    /// Every mic currently offered by the system (built-in, wired/Bluetooth headset, etc.).
     public func availableInputs() -> [AVAudioSessionPortDescription] {
         AVAudioSession.sharedInstance().availableInputs ?? []
     }
@@ -42,7 +40,6 @@ public final class AudioRecorder: NSObject {
         AVAudioSession.sharedInstance().preferredInput
     }
 
-    /// Selects a mic for the next recording; pass `nil` to fall back to the system default.
     public func setPreferredInput(_ input: AVAudioSessionPortDescription?) {
         try? AVAudioSession.sharedInstance().setPreferredInput(input)
     }
@@ -93,7 +90,6 @@ public final class AudioRecorder: NSObject {
         }
     }
 
-    /// Maps dBFS (roughly -60 quiet to 0 loud) onto a 0...1 range for a level-meter bar.
     nonisolated static func normalizedLevel(decibels: Float) -> Float {
         let minDecibels: Float = -60
         guard decibels.isFinite, decibels > minDecibels else { return 0 }

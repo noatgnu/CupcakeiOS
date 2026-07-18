@@ -3,7 +3,6 @@ import CupcakeNetworking
 import Foundation
 import SwiftData
 
-/// Full-refetch read cache plus session create/update/delete against the server.
 public actor SessionSyncService {
     private let apiClient: APIClient
     private let deviceToken: @Sendable () -> String?
@@ -31,7 +30,6 @@ public actor SessionSyncService {
         }
     }
 
-    /// Requires connectivity. Returns the new session's `clientID`, not the `@Model` instance.
     @discardableResult
     public func createSession(name: String, enabled: Bool = true, protocolServerIDs: [Int64] = []) async throws -> UUID {
         guard let token = deviceToken() else {
@@ -46,7 +44,6 @@ public actor SessionSyncService {
         return try await store.upsertOne(dto)
     }
 
-    /// Syncs a locally-created session; throws `SyncDependencyError.parentNotSynced` unless every attached protocol has synced.
     @discardableResult
     public func syncLocallyCreatedSession(clientID: UUID) async throws -> Int64 {
         guard let token = deviceToken() else {
@@ -99,7 +96,6 @@ public enum SessionSyncError: Error {
     case sessionNotCached
 }
 
-/// SwiftData access is isolated to this `@ModelActor` — see `ProtocolStore`'s doc comment for why.
 @ModelActor
 actor SessionStore {
     func upsert(_ dtos: [SessionDTO]) throws {
@@ -134,7 +130,6 @@ actor SessionStore {
         return (session.name, session.enabled, resolvedServerIDs, allResolved)
     }
 
-    /// Attaches a newly-assigned `serverID` to the existing local record matched by `clientID`.
     func attachServerID(clientID: UUID, dto: SessionDTO) throws {
         guard let session = try modelContext.fetch(
             FetchDescriptor<CachedSession>(predicate: #Predicate { $0.clientID == clientID })
@@ -205,7 +200,6 @@ actor SessionStore {
         try modelContext.save()
     }
 
-    /// Resolves the server's M2M `protocols: [Int64]` to locally-cached protocols' `clientID`s.
     private func protocolClientIDs(forServerIDs protocolServerIDs: [Int64]) -> [UUID] {
         protocolServerIDs.compactMap { serverID in
             let match = try? modelContext.fetch(

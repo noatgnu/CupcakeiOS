@@ -4,18 +4,13 @@ import CupcakeSync
 import SwiftData
 import SwiftUI
 
-/// Attaches a reagent (existing or new) with a quantity/unit/scalable factor to a step. Created locally, then synced or queued.
 struct AttachReagentSheet: View {
     @Environment(AppSession.self) private var appSession
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
-    @Query(sort: \CachedReagent.name) private var reagents: [CachedReagent]
 
     let step: CachedProtocolStep
     let canAuthorOnline: Bool
-
-    /// Exact list from `step-reagent-modal.html`'s `<select>` — Volume, Mass, Mole, Count, Other.
-    private static let unitOptions = ["nL", "uL", "mL", "L", "ng", "ug", "mg", "g", "kg", "nM", "uM", "mM", "M", "ea", "pieces", "other"]
 
     @State private var reagentNameQuery = ""
     @State private var matchedReagentID: UUID?
@@ -26,11 +21,6 @@ struct AttachReagentSheet: View {
     @State private var isSaving = false
     @State private var errorMessage: String?
     @State private var isShowingError = false
-
-    private var suggestions: [CachedReagent] {
-        guard !reagentNameQuery.isEmpty, matchedReagentID == nil else { return [] }
-        return reagents.filter { $0.name.localizedCaseInsensitiveContains(reagentNameQuery) }.prefix(10).map { $0 }
-    }
 
     private var canSave: Bool {
         guard !reagentNameQuery.isEmpty, !unit.isEmpty else { return false }
@@ -43,26 +33,7 @@ struct AttachReagentSheet: View {
         NavigationStack {
             Form {
                 Section("Reagent") {
-                    TextField("Reagent name", text: $reagentNameQuery)
-                        .accessibilityIdentifier("reagentNameField")
-                        .onChange(of: reagentNameQuery) { matchedReagentID = nil }
-                    ForEach(suggestions) { reagent in
-                        Button {
-                            reagentNameQuery = reagent.name
-                            unit = reagent.unit
-                            matchedReagentID = reagent.clientID
-                        } label: {
-                            Text("\(reagent.name) (\(reagent.unit))")
-                        }
-                        .accessibilityIdentifier("reagentSuggestionButton")
-                    }
-                    Picker("Unit", selection: $unit) {
-                        Text("Select…").tag("")
-                        ForEach(Self.unitOptions, id: \.self) { option in
-                            Text(option).tag(option)
-                        }
-                    }
-                    .accessibilityIdentifier("reagentUnitPicker")
+                    ReagentPickerField(nameQuery: $reagentNameQuery, unit: $unit, matchedReagentID: $matchedReagentID)
                 }
                 Section {
                     TextField("Quantity", text: $quantityText)
@@ -114,18 +85,16 @@ struct AttachReagentSheet: View {
         isSaving = true
         defer { isSaving = false }
 
-        let reagentClientID: UUID
-        if let matchedReagentID {
-            reagentClientID = matchedReagentID
-        } else {
-            let reagent = CachedReagent(name: reagentNameQuery, unit: unit)
-            modelContext.insert(reagent)
-            reagentClientID = reagent.clientID
-        }
+        let reagent = ReagentPickerField.resolveReagent(
+            name: reagentNameQuery,
+            unit: unit,
+            matchedReagentID: matchedReagentID,
+            context: modelContext
+        )
 
         let stepReagent = CachedStepReagent(
             stepClientID: step.clientID,
-            reagentClientID: reagentClientID,
+            reagentClientID: reagent.clientID,
             quantity: quantity,
             scalable: isScalable,
             scalableFactor: scalableFactor

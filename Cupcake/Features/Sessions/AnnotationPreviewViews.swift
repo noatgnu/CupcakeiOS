@@ -22,14 +22,12 @@ extension Image {
     }
 }
 
-/// Derives a usable file extension from a server-suggested filename, falling back when absent.
 private func fileExtension(from suggestedFilename: String?, fallback: String) -> String {
     guard let suggestedFilename else { return fallback }
     let ext = (suggestedFilename as NSString).pathExtension
     return ext.isEmpty ? fallback : ext
 }
 
-/// Writes bytes to a temp file for playback/sharing, with an extension inferred from the suggested filename.
 private func writeTempFile(_ data: Data, suggestedFilename: String?, fallbackExtension: String) -> URL? {
     let url = FileManager.default.temporaryDirectory
         .appendingPathComponent(UUID().uuidString)
@@ -38,7 +36,6 @@ private func writeTempFile(_ data: Data, suggestedFilename: String?, fallbackExt
     return url
 }
 
-/// A small corner share/save button, shown once a file annotation's bytes are downloaded.
 private struct DownloadShareButton: View {
     let url: URL
 
@@ -53,7 +50,6 @@ private struct DownloadShareButton: View {
     }
 }
 
-/// Downloads and displays a photo annotation inline, falling back to a plain label if unavailable.
 struct PhotoAnnotationPreview: View {
     let loadData: () async throws -> (data: Data, suggestedFilename: String?)
 
@@ -93,7 +89,6 @@ struct PhotoAnnotationPreview: View {
     }
 }
 
-/// Downloads a video annotation to a temporary file and plays it inline via `VideoPlayer`.
 struct VideoAnnotationPreview: View {
     var annotationServerID: Int64? = nil
     var transcription: String? = nil
@@ -163,7 +158,6 @@ struct VideoAnnotationPreview: View {
     }
 }
 
-/// Downloads an audio annotation on first tap and plays it via a minimal play/pause control, alongside its transcript.
 struct AudioAnnotationPreview: View {
     var annotationServerID: Int64? = nil
     let transcription: String?
@@ -267,7 +261,6 @@ struct AudioAnnotationPreview: View {
     }
 }
 
-/// Renders a calculator annotation's JSON history log. No network call, since it's stored directly as text.
 struct CalculatorAnnotationPreview: View {
     let annotationText: String
 
@@ -288,7 +281,6 @@ struct CalculatorAnnotationPreview: View {
     }
 }
 
-/// Renders a molarity calculator annotation's JSON history log.
 struct MolarityCalculatorAnnotationPreview: View {
     let annotationText: String
 
@@ -309,7 +301,6 @@ struct MolarityCalculatorAnnotationPreview: View {
     }
 }
 
-/// Downloads a sketch annotation's JSON vector data and re-renders it live on a `Canvas`.
 struct SketchAnnotationPreview: View {
     let loadData: () async throws -> (data: Data, suggestedFilename: String?)
 
@@ -370,7 +361,6 @@ struct SketchAnnotationPreview: View {
         }
     }
 
-    /// Renders the sketch to a flat, native-resolution PNG via `ImageRenderer`.
     private static func renderPNG(_ sketch: SketchData) -> URL? {
         let width = max(sketch.width, 1)
         let height = max(sketch.height, 1)

@@ -5,7 +5,6 @@ public enum KeychainError: Error {
     case unhandled(status: OSStatus)
 }
 
-/// Stores the long-lived `DeviceToken` string, excluded from device/iCloud backup.
 public struct KeychainStore: Sendable {
     private let service: String
     private let account: String

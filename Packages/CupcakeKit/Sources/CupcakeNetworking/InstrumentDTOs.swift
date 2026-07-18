@@ -1,4 +1,3 @@
-/// `GET instruments/` response shape.
 public struct InstrumentDTO: Decodable, Sendable {
     public let id: Int64
     public let instrumentName: String
@@ -7,9 +6,12 @@ public struct InstrumentDTO: Decodable, Sendable {
     public let acceptsBookings: Bool
     public let allowOverlappingBookings: Bool
     public let maintenanceOverdue: Bool
+    public let metadataTableId: Int64?
+    public let metadataTableName: String?
+    public let createdAt: String?
+    public let updatedAt: String?
 }
 
-/// `POST instruments/` body. Requires `is_staff`/`is_superuser` server-side.
 public struct CreateInstrumentRequest: Encodable, Sendable {
     public var instrumentName: String
     public var instrumentDescription: String?
@@ -26,7 +28,6 @@ public struct CreateInstrumentRequest: Encodable, Sendable {
     }
 }
 
-/// `PATCH instruments/{id}/` body — same staff/superuser requirement as create.
 public struct UpdateInstrumentRequest: Encodable, Sendable {
     public var instrumentName: String
     public var instrumentDescription: String?
@@ -43,7 +44,6 @@ public struct UpdateInstrumentRequest: Encodable, Sendable {
     }
 }
 
-/// `usageHours` is a `DecimalField`, serialized by DRF as a string, not a bare JSON number.
 public struct InstrumentUsageDTO: Decodable, Sendable {
     public let id: Int64
     public let instrument: Int64
@@ -56,7 +56,6 @@ public struct InstrumentUsageDTO: Decodable, Sendable {
     public let maintenance: Bool
 }
 
-/// `POST instrument-usage/` body. `approved` is deliberately never sent; the server decides it conditionally.
 public struct CreateInstrumentUsageRequest: Encodable, Sendable {
     public var instrument: Int64
     public var timeStarted: String

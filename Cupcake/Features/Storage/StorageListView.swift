@@ -4,8 +4,8 @@ import CupcakeSync
 import SwiftData
 import SwiftUI
 
-/// Two-panel drill-down browser: storage locations on the left, reagents at the current location on the right.
 struct StorageListView<SectionPicker: View>: View {
+    let ontologyStore: ModelContainer
     @ViewBuilder let sectionPicker: () -> SectionPicker
 
     @Environment(AppSession.self) private var appSession
@@ -62,7 +62,14 @@ struct StorageListView<SectionPicker: View>: View {
                     Button {
                         enterLocation(object)
                     } label: {
-                        Label(object.objectName, systemImage: "shippingbox")
+                        VStack(alignment: .leading, spacing: 4) {
+                            Label(object.objectName, systemImage: "shippingbox")
+                            Text(object.objectType)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                     .accessibilityIdentifier("storageLocationRow_\(object.objectName)")
@@ -78,16 +85,6 @@ struct StorageListView<SectionPicker: View>: View {
                             Label("Delete", systemImage: "trash")
                         }
                     }
-                }
-            }
-            .toolbar {
-                ToolbarItem {
-                    Button {
-                        isShowingNewLocationSheet = true
-                    } label: {
-                        Label("New Location", systemImage: "plus")
-                    }
-                    .accessibilityIdentifier("newStorageLocationButton")
                 }
             }
         } detail: {
@@ -112,24 +109,38 @@ struct StorageListView<SectionPicker: View>: View {
                                     .font(.caption)
                                     .foregroundStyle(reagent.currentQuantity != reagent.quantity ? .orange : .secondary)
                             }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
                         }
+                        .accessibilityIdentifier("storedReagentRow_\(reagent.reagentName ?? "")")
                     }
                 }
             }
             .toolbar {
-                if currentLocationID != nil {
-                    ToolbarItem {
+                ToolbarItem {
+                    Menu {
                         Button {
-                            isShowingAddReagentSheet = true
+                            isShowingNewLocationSheet = true
                         } label: {
-                            Label("Add Reagent", systemImage: "plus")
+                            Label("New Location", systemImage: "shippingbox")
                         }
-                        .accessibilityIdentifier("addStoredReagentButton")
+                        .accessibilityIdentifier("newStorageLocationButton")
+                        if currentLocationID != nil {
+                            Button {
+                                isShowingAddReagentSheet = true
+                            } label: {
+                                Label("Add Reagent", systemImage: "flask")
+                            }
+                            .accessibilityIdentifier("addStoredReagentButton")
+                        }
+                    } label: {
+                        Label("Add", systemImage: "plus")
                     }
+                    .accessibilityIdentifier("storageAddMenu")
                 }
             }
             .navigationDestination(for: UUID.self) { storedReagentClientID in
-                StoredReagentDetailView(storedReagentClientID: storedReagentClientID)
+                StoredReagentDetailView(storedReagentClientID: storedReagentClientID, ontologyStore: ontologyStore)
             }
         } sidebarHeader: {
             VStack(spacing: 8) {

@@ -1,7 +1,6 @@
 import Foundation
 import SwiftData
 
-/// This user's own complexity/duration rating (0-10 each) for a protocol, keyed by `protocolServerID`.
 @Model
 public final class CachedProtocolRating {
     @Attribute(.unique) public var protocolServerID: Int64

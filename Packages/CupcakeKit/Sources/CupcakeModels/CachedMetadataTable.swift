@@ -1,7 +1,6 @@
 import Foundation
 import SwiftData
 
-/// Read-only; always created server-side via `create_metadata_from_template`.
 @Model
 public final class CachedMetadataTable {
     @Attribute(.unique) public var serverID: Int64
@@ -13,7 +12,6 @@ public final class CachedMetadataTable {
     public var labGroupName: String?
     public var isPublished: Bool
     public var canEdit: Bool
-    /// The `CachedInstrumentJob.clientID` this table belongs to, resolved at upsert time.
     public var instrumentJobClientID: UUID?
 
     public init(

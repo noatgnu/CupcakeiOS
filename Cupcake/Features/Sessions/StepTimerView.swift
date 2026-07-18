@@ -3,12 +3,10 @@ import CupcakeSync
 import SwiftData
 import SwiftUI
 
-/// A per-step countdown timer (start/stop/reset). Online-only.
 struct StepTimerView: View {
     let sessionServerID: Int64
     let sessionClientID: UUID
     let step: CachedProtocolStep
-    /// Called after any local start/stop/reset action to re-apply server state onto this view's own `ModelContext`.
     let onTimeKeeperChanged: () async -> Void
 
     @Environment(AppSession.self) private var appSession

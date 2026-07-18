@@ -1,7 +1,6 @@
 import Foundation
 import SwiftData
 
-/// A cached step-level annotation.
 @Model
 public final class CachedStepAnnotation {
     @Attribute(.unique) public var clientID: UUID

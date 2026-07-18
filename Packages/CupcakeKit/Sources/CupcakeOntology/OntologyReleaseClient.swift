@@ -1,6 +1,5 @@
 import Foundation
 
-/// Talks to `api.github.com`'s public, unauthenticated Releases API for `noatgnu/cupcake-webgui`, not the Cupcake backend.
 public actor OntologyReleaseClient {
     private let session: URLSession
     private static let releaseURL = URL(string: "https://api.github.com/repos/noatgnu/cupcake-webgui/releases/latest")!
@@ -9,7 +8,6 @@ public actor OntologyReleaseClient {
         self.session = session
     }
 
-    /// Fetches the latest release's asset list and downloads+decodes the one asset named `"manifest-*"`.
     public func fetchManifest() async throws -> OntologyManifest {
         let assets = try await fetchLatestReleaseAssets()
         guard let manifestAsset = assets.first(where: { $0.name.hasPrefix("manifest-") }) else {
@@ -20,7 +18,6 @@ public actor OntologyReleaseClient {
         return try JSONDecoder().decode(OntologyManifest.self, from: data)
     }
 
-    /// Downloads and gzip-decompresses one table's `.sqlite.gz` asset, matched by `table.file`.
     public func downloadTable(_ table: OntologyManifestTable) async throws -> Data {
         let assets = try await fetchLatestReleaseAssets()
         guard let asset = assets.first(where: { $0.name == table.file }) else {
@@ -47,7 +44,6 @@ public actor OntologyReleaseClient {
     }
 }
 
-/// Minimal slice of GitHub's release/asset API response — only what's needed to locate assets.
 private struct GitHubRelease: Decodable {
     let assets: [GitHubReleaseAsset]
 }

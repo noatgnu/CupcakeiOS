@@ -4,16 +4,16 @@ import CupcakeSync
 import SwiftData
 import SwiftUI
 
-/// Books an instrument for a job (instrument picker, start/end time, description). Online-only.
 struct BookInstrumentForJobSheet: View {
     @Environment(AppSession.self) private var appSession
     @Environment(\.dismiss) private var dismiss
-    @Query(sort: \CachedInstrument.instrumentName) private var instruments: [CachedInstrument]
+    @Query(sort: \CachedInstrument.createdAt, order: .reverse) private var instruments: [CachedInstrument]
 
     let jobClientID: UUID
     let jobServerID: Int64
 
     @State private var selectedInstrumentServerID: Int64?
+    @State private var instrumentSearchText = ""
     @State private var startTime = Date()
     @State private var isInProgress = true
     @State private var endTime = Date().addingTimeInterval(3600)
@@ -30,13 +30,18 @@ struct BookInstrumentForJobSheet: View {
         NavigationStack {
             Form {
                 Section("Instrument") {
-                    Picker("Instrument", selection: $selectedInstrumentServerID) {
-                        Text("None").tag(Int64?.none)
-                        ForEach(instruments) { instrument in
-                            Text(instrument.instrumentName).tag(Optional(instrument.serverID))
-                        }
+                    SearchableSelectionList(
+                        items: instruments,
+                        searchPlaceholder: "Search instruments",
+                        searchFieldIdentifier: "jobBookingInstrumentSearchField",
+                        searchText: $instrumentSearchText,
+                        matches: { $0.instrumentName.localizedCaseInsensitiveContains($1) },
+                        isSelected: { $0.serverID == selectedInstrumentServerID },
+                        rowIdentifier: { "jobBookingInstrumentRow_\($0.instrumentName)" },
+                        onSelect: { selectedInstrumentServerID = $0.serverID }
+                    ) { instrument in
+                        Text(instrument.instrumentName)
                     }
-                    .accessibilityIdentifier("bookingInstrumentPicker")
                 }
                 ExistingBookingsSection(instrumentServerID: selectedInstrumentServerID)
                 Section {

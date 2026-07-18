@@ -1,4 +1,3 @@
-/// `GET step-reagents/` response shape. `reagent` is a nested object on read, not a bare id.
 public struct StepReagentDTO: Decodable, Sendable {
     public let id: Int64
     public let step: Int64
@@ -8,7 +7,6 @@ public struct StepReagentDTO: Decodable, Sendable {
     public let scalableFactor: Double
 }
 
-/// `POST reagents/` body, only needed when attaching a brand-new reagent not already on the server.
 public struct CreateReagentRequest: Encodable, Sendable {
     public var name: String
     public var unit: String
@@ -19,7 +17,6 @@ public struct CreateReagentRequest: Encodable, Sendable {
     }
 }
 
-/// `POST step-reagents/` body. Create accepts `reagent_id` (write-only), not a nested `reagent` object.
 public struct CreateStepReagentRequest: Encodable, Sendable {
     public var step: Int64
     public var reagentId: Int64
@@ -36,7 +33,6 @@ public struct CreateStepReagentRequest: Encodable, Sendable {
     }
 }
 
-/// `PATCH step-reagents/{id}/` body.
 public struct UpdateStepReagentRequest: Encodable, Sendable {
     public var quantity: Double
     public var scalable: Bool

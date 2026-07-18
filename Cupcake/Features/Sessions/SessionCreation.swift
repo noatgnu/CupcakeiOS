@@ -10,7 +10,6 @@ enum SessionCreationOutcome {
     case failed(message: String)
 }
 
-/// Shared create-locally-then-sync-or-queue logic for starting a session.
 enum SessionCreation {
     @discardableResult
     static func createSession(

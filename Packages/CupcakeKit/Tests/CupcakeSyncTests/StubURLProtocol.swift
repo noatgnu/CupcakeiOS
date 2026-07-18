@@ -1,6 +1,5 @@
 import Foundation
 
-/// Local copy of CupcakeNetworkingTests' stub, duplicated since SPM can't easily share test-only helpers.
 final class StubURLProtocol: URLProtocol, @unchecked Sendable {
     nonisolated(unsafe) static var handler: (@Sendable (URLRequest) throws -> (HTTPURLResponse, Data))?
 

@@ -3,7 +3,6 @@ import CupcakeNetworking
 import Foundation
 import SwiftData
 
-/// This user's own low-stock/expiry notification preferences for a stored reagent. Online-only. `subscribe` always checks for an existing subscription first, PATCHing rather than risking a duplicate POST, and always sends `user` explicitly.
 public actor ReagentSubscriptionSyncService {
     private let apiClient: APIClient
     private let deviceToken: @Sendable () -> String?

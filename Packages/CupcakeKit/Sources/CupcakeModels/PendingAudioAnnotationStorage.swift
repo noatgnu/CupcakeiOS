@@ -1,6 +1,5 @@
 import Foundation
 
-/// Persists a not-yet-synced annotation file (audio, photo, video, or sketch) between app launches.
 public enum PendingAnnotationFileStorage {
     private static var directory: URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]

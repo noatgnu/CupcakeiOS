@@ -3,7 +3,6 @@ import CupcakeNetworking
 import Foundation
 import SwiftData
 
-/// Full-refetch population of storage/reagent lookup data, plus `StoredReagent`/`ReagentAction` offline create.
 public actor InventorySyncService {
     private let apiClient: APIClient
     private let deviceToken: @Sendable () -> String?
@@ -37,7 +36,6 @@ public actor InventorySyncService {
         }
     }
 
-    /// Live search only, no local caching. For the molarity calculator's molecular-weight typeahead, 2-char minimum.
     public func searchStoredReagentsWithMolecularWeight(search: String) async throws -> [StoredReagentDTO] {
         guard search.count >= 2, let token = deviceToken() else { return [] }
         let page: PaginatedResponse<StoredReagentDTO> = try await apiClient.get(
@@ -94,14 +92,12 @@ public actor InventorySyncService {
         try await store.removeStorageObjectLocally(serverID: serverID)
     }
 
-    /// Plain full-refetch every cycle; `ReagentAction` has no delta filter or deletion-log coverage server-side.
     public func refetchReagentActions() async throws {
         try await refetchAllPages(path: "reagent-actions/") { (dtos: [ReagentActionDTO]) in
             try await store.upsertReagentActions(dtos)
         }
     }
 
-    /// Pushes an already locally-created stored-reagent to the server, syncing its reagent inline if needed.
     @discardableResult
     public func syncLocallyCreatedStoredReagent(clientID: UUID) async throws -> Int64 {
         guard let token = deviceToken() else {
@@ -137,7 +133,13 @@ public actor InventorySyncService {
                 quantity: fields.quantity,
                 barcode: fields.barcode,
                 expirationDate: fields.expirationDate,
-                lowStockThreshold: fields.lowStockThreshold
+                lowStockThreshold: fields.lowStockThreshold,
+                molecularWeight: fields.molecularWeight.map { String(format: "%.4f", $0) },
+                notes: fields.notes,
+                shareable: fields.shareable,
+                accessAll: fields.accessAll,
+                notifyOnLowStock: fields.notifyOnLowStock,
+                pngBase64: fields.pngBase64
             ),
             authorizationHeader: "DeviceToken \(token)"
         )
@@ -145,7 +147,6 @@ public actor InventorySyncService {
         return dto.id
     }
 
-    /// Same shape, for a `ReagentAction`. Throws `SyncDependencyError.parentNotSynced` if its stored-reagent hasn't synced yet.
     @discardableResult
     public func syncLocallyCreatedReagentAction(clientID: UUID) async throws -> Int64 {
         guard let token = deviceToken() else {
@@ -163,6 +164,17 @@ public actor InventorySyncService {
         )
         try await store.attachServerID(reagentActionClientID: clientID, dto: dto)
         return dto.id
+    }
+
+    @discardableResult
+    public func refreshMetadataTable(metadataTableServerID: Int64) async throws -> MetadataTableDTO {
+        guard let token = deviceToken() else {
+            throw InventorySyncError.noDeviceToken
+        }
+        let authorization = "DeviceToken \(token)"
+        let table: MetadataTableDTO = try await apiClient.get("metadata-tables/\(metadataTableServerID)/", authorizationHeader: authorization)
+        try await store.upsertMetadataTable(table)
+        return table
     }
 
     private func refetchAllPages<DTO: Decodable & Sendable>(
@@ -187,7 +199,6 @@ public enum InventorySyncError: Error {
     case reagentActionNotCached
 }
 
-/// SwiftData access is isolated to this `@ModelActor` — see `ProtocolStore`'s doc comment for why.
 @ModelActor
 actor InventoryStore {
     func upsertStorageObjects(_ dtos: [StorageObjectDTO]) throws {
@@ -202,7 +213,8 @@ actor InventoryStore {
                     objectType: dto.objectType,
                     objectName: dto.objectName,
                     objectDescription: dto.objectDescription,
-                    storedAtServerID: dto.storedAt
+                    storedAtServerID: dto.storedAt,
+                    createdAt: Date.parsedISO8601(dto.createdAt)
                 )
                 modelContext.insert(created)
                 return created
@@ -211,6 +223,7 @@ actor InventoryStore {
             object.objectName = dto.objectName
             object.objectDescription = dto.objectDescription
             object.storedAtServerID = dto.storedAt
+            object.updatedAt = Date.parsedISO8601(dto.updatedAt, fallback: object.updatedAt)
         }
         try modelContext.save()
     }
@@ -230,12 +243,13 @@ actor InventoryStore {
                 FetchDescriptor<CachedReagent>(predicate: #Predicate { $0.serverID == reagentID })
             )
             let reagent = existing?.first ?? {
-                let created = CachedReagent(serverID: dto.id, name: dto.name, unit: dto.unit)
+                let created = CachedReagent(serverID: dto.id, name: dto.name, unit: dto.unit, createdAt: Date.parsedISO8601(dto.createdAt))
                 modelContext.insert(created)
                 return created
             }()
             reagent.name = dto.name
             reagent.unit = dto.unit
+            reagent.updatedAt = Date.parsedISO8601(dto.updatedAt, fallback: reagent.updatedAt)
         }
         try modelContext.save()
     }
@@ -258,7 +272,15 @@ actor InventoryStore {
                     currentQuantity: dto.currentQuantity,
                     barcode: dto.barcode,
                     expirationDate: dto.expirationDate,
-                    lowStockThreshold: dto.lowStockThreshold
+                    lowStockThreshold: dto.lowStockThreshold,
+                    molecularWeight: dto.molecularWeight.flatMap(Double.init),
+                    notes: dto.notes,
+                    shareable: dto.shareable,
+                    accessAll: dto.accessAll,
+                    notifyOnLowStock: dto.notifyOnLowStock,
+                    pngBase64: dto.pngBase64,
+                    metadataTableServerID: dto.metadataTableId,
+                    createdAt: Date.parsedISO8601(dto.createdAt)
                 )
                 modelContext.insert(created)
                 return created
@@ -273,13 +295,68 @@ actor InventoryStore {
             storedReagent.barcode = dto.barcode
             storedReagent.expirationDate = dto.expirationDate
             storedReagent.lowStockThreshold = dto.lowStockThreshold
+            storedReagent.molecularWeight = dto.molecularWeight.flatMap(Double.init)
+            storedReagent.notes = dto.notes
+            storedReagent.shareable = dto.shareable
+            storedReagent.accessAll = dto.accessAll
+            storedReagent.notifyOnLowStock = dto.notifyOnLowStock
+            storedReagent.pngBase64 = dto.pngBase64
+            storedReagent.metadataTableServerID = dto.metadataTableId
+            storedReagent.updatedAt = Date.parsedISO8601(dto.updatedAt, fallback: storedReagent.updatedAt)
+        }
+        try modelContext.save()
+    }
+
+    func upsertMetadataTable(_ dto: MetadataTableDTO) throws {
+        let tableServerID = dto.id
+        let existing = try? modelContext.fetch(
+            FetchDescriptor<CachedMetadataTable>(predicate: #Predicate { $0.serverID == tableServerID })
+        )
+        let table = existing?.first ?? {
+            let created = CachedMetadataTable(serverID: dto.id, name: dto.name)
+            modelContext.insert(created)
+            return created
+        }()
+        table.name = dto.name
+        table.tableDescription = dto.description
+        table.sampleCount = dto.sampleCount
+        table.version = dto.version
+        table.ownerUsername = dto.ownerUsername
+        table.labGroupName = dto.labGroupName
+        table.isPublished = dto.isPublished
+        table.canEdit = dto.canEdit
+
+        let existingColumns = try? modelContext.fetch(
+            FetchDescriptor<CachedMetadataColumn>(predicate: #Predicate { $0.metadataTableServerID == tableServerID })
+        )
+        for column in existingColumns ?? [] {
+            modelContext.delete(column)
+        }
+        for columnDTO in dto.columns {
+            let column = CachedMetadataColumn(
+                serverID: columnDTO.id,
+                metadataTableServerID: dto.id,
+                name: columnDTO.name,
+                displayName: columnDTO.displayName,
+                type: columnDTO.type,
+                columnPosition: columnDTO.columnPosition ?? 0,
+                value: columnDTO.value,
+                notApplicable: columnDTO.notApplicable,
+                notAvailable: columnDTO.notAvailable,
+                mandatory: columnDTO.mandatory,
+                hidden: columnDTO.hidden,
+                readonly: columnDTO.readonly,
+                ontologyType: columnDTO.ontologyType,
+                staffOnly: columnDTO.staffOnly,
+                modifiers: columnDTO.modifiers.map { MetadataColumnModifier(samples: $0.samples, value: $0.value) }
+            )
+            modelContext.insert(column)
         }
         try modelContext.save()
     }
 
     func upsertReagentActions(_ dtos: [ReagentActionDTO]) throws {
         for dto in dtos {
-            // Skip a reagent-action whose stored-reagent isn't cached yet.
             let storedReagentServerID = dto.reagent
             guard let storedReagent = try? modelContext.fetch(
                 FetchDescriptor<CachedStoredReagent>(predicate: #Predicate { $0.serverID == storedReagentServerID })
@@ -317,7 +394,13 @@ actor InventoryStore {
         quantity: Double,
         barcode: String?,
         expirationDate: String?,
-        lowStockThreshold: Double?
+        lowStockThreshold: Double?,
+        molecularWeight: Double?,
+        notes: String?,
+        shareable: Bool,
+        accessAll: Bool,
+        notifyOnLowStock: Bool,
+        pngBase64: String?
     ) {
         guard let storedReagent = try modelContext.fetch(
             FetchDescriptor<CachedStoredReagent>(predicate: #Predicate { $0.clientID == clientID })
@@ -333,11 +416,16 @@ actor InventoryStore {
             storedReagent.quantity,
             storedReagent.barcode,
             storedReagent.expirationDate,
-            storedReagent.lowStockThreshold
+            storedReagent.lowStockThreshold,
+            storedReagent.molecularWeight,
+            storedReagent.notes,
+            storedReagent.shareable,
+            storedReagent.accessAll,
+            storedReagent.notifyOnLowStock,
+            storedReagent.pngBase64
         )
     }
 
-    /// Attaches a newly-assigned `serverID` to the existing local reagent matched by `clientID`.
     func attachReagentServerID(reagentClientID: UUID, dto: ReagentDTO) throws {
         guard let reagent = try modelContext.fetch(
             FetchDescriptor<CachedReagent>(predicate: #Predicate { $0.clientID == reagentClientID })
@@ -350,7 +438,6 @@ actor InventoryStore {
         try modelContext.save()
     }
 
-    /// Attaches a newly-assigned `serverID` to the existing local record matched by `clientID`.
     func attachServerID(storedReagentClientID: UUID, dto: StoredReagentDTO) throws {
         guard let storedReagent = try modelContext.fetch(
             FetchDescriptor<CachedStoredReagent>(predicate: #Predicate { $0.clientID == storedReagentClientID })
@@ -368,6 +455,13 @@ actor InventoryStore {
         storedReagent.barcode = dto.barcode
         storedReagent.expirationDate = dto.expirationDate
         storedReagent.lowStockThreshold = dto.lowStockThreshold
+        storedReagent.molecularWeight = dto.molecularWeight.flatMap(Double.init)
+        storedReagent.notes = dto.notes
+        storedReagent.shareable = dto.shareable
+        storedReagent.accessAll = dto.accessAll
+        storedReagent.notifyOnLowStock = dto.notifyOnLowStock
+        storedReagent.pngBase64 = dto.pngBase64
+        storedReagent.metadataTableServerID = dto.metadataTableId
         try modelContext.save()
     }
 
@@ -384,7 +478,6 @@ actor InventoryStore {
         return (storedReagent?.serverID, action.actionType, action.quantity, action.notes)
     }
 
-    /// Attaches a newly-assigned `serverID` to the existing local record matched by `clientID`.
     func attachServerID(reagentActionClientID: UUID, dto: ReagentActionDTO) throws {
         guard let action = try modelContext.fetch(
             FetchDescriptor<CachedReagentAction>(predicate: #Predicate { $0.clientID == reagentActionClientID })

@@ -1,7 +1,6 @@
 import Foundation
 import SwiftData
 
-/// Offline-createable job, independent of Session/Protocol except for its `projectClientID` link.
 @Model
 public final class CachedInstrumentJob {
     @Attribute(.unique) public var clientID: UUID
@@ -9,7 +8,6 @@ public final class CachedInstrumentJob {
     public var jobName: String?
     public var jobType: String
     public var status: String
-    /// The parent project's `clientID`, since a locally-created project may not have a `serverID` yet.
     public var projectClientID: UUID?
     public var instrumentServerID: Int64?
     public var submittedAt: String?
@@ -21,6 +19,10 @@ public final class CachedInstrumentJob {
     public var canEditStaffOnlyColumns: Bool
     public var funder: String?
     public var costCenter: String?
+    public var createdAt: Date
+    public var updatedAt: Date
+    public var ownerServerID: Int64?
+    public var ownerUsername: String?
 
     public init(
         clientID: UUID = UUID(),
@@ -38,7 +40,11 @@ public final class CachedInstrumentJob {
         staffUsernames: [String] = [],
         canEditStaffOnlyColumns: Bool = false,
         funder: String? = nil,
-        costCenter: String? = nil
+        costCenter: String? = nil,
+        createdAt: Date = Date(),
+        updatedAt: Date = Date(),
+        ownerServerID: Int64? = nil,
+        ownerUsername: String? = nil
     ) {
         self.clientID = clientID
         self.serverID = serverID
@@ -56,5 +62,9 @@ public final class CachedInstrumentJob {
         self.canEditStaffOnlyColumns = canEditStaffOnlyColumns
         self.funder = funder
         self.costCenter = costCenter
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+        self.ownerServerID = ownerServerID
+        self.ownerUsername = ownerUsername
     }
 }

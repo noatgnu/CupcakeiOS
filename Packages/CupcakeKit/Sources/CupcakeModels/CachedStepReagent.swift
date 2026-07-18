@@ -1,7 +1,6 @@
 import Foundation
 import SwiftData
 
-/// Links a step to a reagent with a quantity. `step`/`reagent` are referenced by `clientID`, not `serverID`.
 @Model
 public final class CachedStepReagent {
     @Attribute(.unique) public var clientID: UUID

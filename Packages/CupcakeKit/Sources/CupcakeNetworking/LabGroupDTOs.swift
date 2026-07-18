@@ -1,12 +1,12 @@
-/// `GET lab-groups/` response shape. Read-only — no create/edit path yet.
 public struct LabGroupDTO: Decodable, Sendable {
     public let id: Int64
     public let name: String
     public let description: String?
     public let allowProcessJobs: Bool
+    public let createdAt: String?
+    public let updatedAt: String?
 }
 
-/// `GET lab-groups/{id}/members/?direct_only=true` response entry.
 public struct UserDTO: Decodable, Sendable, Identifiable {
     public let id: Int64
     public let username: String
@@ -14,7 +14,6 @@ public struct UserDTO: Decodable, Sendable, Identifiable {
     public let lastName: String?
 }
 
-/// A per-(user, lab group) permission grant, distinct from plain membership.
 public struct LabGroupPermissionDTO: Decodable, Sendable, Identifiable {
     public let id: Int64
     public let user: Int64
@@ -26,7 +25,6 @@ public struct LabGroupPermissionDTO: Decodable, Sendable, Identifiable {
     public let canProcessJobs: Bool
 }
 
-/// `POST lab-group-permissions/` body — creates a new grant for a user with no existing record.
 public struct CreateLabGroupPermissionRequest: Encodable, Sendable {
     public var user: Int64
     public var labGroup: Int64
@@ -45,7 +43,6 @@ public struct CreateLabGroupPermissionRequest: Encodable, Sendable {
     }
 }
 
-/// `PATCH lab-group-permissions/{id}/` body — updates an existing grant.
 public struct UpdateLabGroupPermissionRequest: Encodable, Sendable {
     public var canView: Bool
     public var canInvite: Bool

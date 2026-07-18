@@ -3,7 +3,6 @@ import CupcakeNetworking
 import Foundation
 import SwiftData
 
-/// This user's own complexity/duration rating for a protocol. Online-only. The real endpoint is `ratings/`, not `protocol-ratings/`. Always checks for an existing rating and PATCHes it, since a duplicate POST crashes server-side.
 public actor ProtocolRatingSyncService {
     private let apiClient: APIClient
     private let deviceToken: @Sendable () -> String?

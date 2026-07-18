@@ -1,6 +1,5 @@
 import Foundation
 
-/// The GitHub release manifest listing every ontology/column-template/schema table asset.
 public struct OntologyManifest: Decodable, Sendable {
     public let formatVersion: Int
     public let tables: [OntologyManifestTable]

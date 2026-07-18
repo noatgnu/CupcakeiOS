@@ -4,12 +4,10 @@ import CupcakeSync
 import SwiftData
 import SwiftUI
 
-/// Identifies which protocol to show when `ProtocolDetailView` opens as its own window.
 struct ProtocolDetailWindowID: Codable, Hashable {
     let protocolClientID: UUID
 }
 
-/// Resolves a `ProtocolDetailWindowID` to the live protocol and hosts `ProtocolDetailView`.
 struct ProtocolDetailWindowContent: View {
     let windowID: ProtocolDetailWindowID?
 
@@ -35,6 +33,7 @@ struct ProtocolDetailView: View {
     @Environment(AppSession.self) private var appSession
     @Environment(\.modelContext) private var modelContext
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Query private var allStepReagents: [CachedStepReagent]
     @Query private var allReagents: [CachedReagent]
     let protocolModel: CachedProtocol
@@ -44,7 +43,6 @@ struct ProtocolDetailView: View {
     @State private var isShowingError = false
     @State private var createdSessionClientID: UUID?
     @State private var newStepTargetSection: CachedProtocolSection?
-    @State private var reagentAttachmentTargetStep: CachedProtocolStep?
     @State private var isShowingStartSessionSheet = false
     @State private var renameSectionTarget: CachedProtocolSection?
     @State private var exportURL: URL?
@@ -52,19 +50,21 @@ struct ProtocolDetailView: View {
     @State private var isShowingRatingSheet = false
     @State private var isShowingEditSheet = false
     @State private var isDeleting = false
-    @State private var editStepTarget: CachedProtocolStep?
-    @State private var editReagentTarget: CachedStepReagent?
+    @State private var stepDetailTarget: UUID?
+    @State private var selectedSectionID: UUID?
 
     private var sections: [CachedProtocolSection] {
         protocolModel.sections.sorted { $0.order < $1.order }
     }
 
-    /// Whether creates should go straight to the server or be created locally instead.
+    private var selectedSection: CachedProtocolSection? {
+        sections.first { $0.clientID == selectedSectionID } ?? sections.first
+    }
+
     private var canAuthorOnline: Bool {
         protocolModel.serverID != nil && appSession.isAuthenticated
     }
 
-    /// A protocol this app authored stays editable, regardless of whether it has synced.
     private var isEditable: Bool {
         protocolModel.isLocallyAuthored
     }
@@ -78,15 +78,6 @@ struct ProtocolDetailView: View {
             }
     }
 
-    /// Shows `scaledQuantity = quantity * scalableFactor` for scalable reagents.
-    private func reagentDisplayText(_ entry: (stepReagent: CachedStepReagent, reagent: CachedReagent)) -> String {
-        let base = "\(entry.reagent.name): \(entry.stepReagent.quantity.formatted()) \(entry.reagent.unit)"
-        guard entry.stepReagent.scalable else { return base }
-        let scaled = entry.stepReagent.quantity * entry.stepReagent.scalableFactor
-        return "\(base) — ×\(entry.stepReagent.scalableFactor.formatted()) = \(scaled.formatted()) \(entry.reagent.unit)"
-    }
-
-    /// Strips HTML markup from the section description for use as a plain-text title.
     private func sectionTitle(_ section: CachedProtocolSection) -> String {
         let base = section.sectionDescription.map(HTMLText.plainText(from:)) ?? "Untitled Section"
         guard let duration = section.sectionDuration else { return base }
@@ -99,14 +90,33 @@ struct ProtocolDetailView: View {
     }
 
     var body: some View {
-        sectionsList
-            .navigationTitle(protocolModel.protocolTitle)
+        Group {
+            if horizontalSizeClass == .compact {
+                compactBody
+            } else {
+                regularBody
+            }
+        }
+        .navigationTitle(protocolModel.protocolTitle)
         .toolbar { detailToolbar }
         .navigationDestination(item: $createdSessionClientID) { sessionClientID in
             SessionDetailView(sessionClientID: sessionClientID, protocols: [protocolModel])
         }
+        .navigationDestination(item: $stepDetailTarget) { stepClientID in
+            StepDetailView(
+                stepClientID: stepClientID,
+                canAuthorOnline: canAuthorOnline,
+                isEditable: isEditable,
+                onEditStep: { step, description, duration in
+                    await editStep(step, description: description, duration: duration)
+                },
+                onDeleteReagent: { stepReagent in
+                    await deleteReagent(stepReagent)
+                }
+            )
+        }
         .sheet(item: $renameSectionTarget) { section in
-            AddTextSheet(title: "Rename Section", prompt: "Section name", initialText: section.sectionDescription ?? "") { newName in
+            AddTextSheet(title: "Edit Section", prompt: "Section name", initialText: section.sectionDescription ?? "") { newName in
                 Task { await renameSection(section, to: newName) }
             }
         }
@@ -114,21 +124,6 @@ struct ProtocolDetailView: View {
             AddStepSheet { description, duration in
                 Task { await addStep(description: description, duration: duration, to: section) }
             }
-        }
-        .sheet(item: $editStepTarget) { step in
-            AddStepSheet(
-                navigationTitle: "Edit Step",
-                initialDescription: HTMLText.plainText(from: step.stepDescription),
-                initialDurationSeconds: step.stepDuration
-            ) { description, duration in
-                Task { await editStep(step, description: description, duration: duration) }
-            }
-        }
-        .sheet(item: $editReagentTarget) { stepReagent in
-            EditStepReagentSheet(stepReagent: stepReagent)
-        }
-        .sheet(item: $reagentAttachmentTargetStep) { step in
-            AttachReagentSheet(step: step, canAuthorOnline: canAuthorOnline)
         }
         .sheet(isPresented: $isShowingRatingSheet) {
             if let protocolServerID = protocolModel.serverID {
@@ -154,16 +149,90 @@ struct ProtocolDetailView: View {
         }
     }
 
-    private var sectionsList: some View {
+    private var regularBody: some View {
+        HStack(spacing: 0) {
+            sectionSidebar
+                .frame(minWidth: 240, idealWidth: 280, maxWidth: 340)
+            Divider()
+            if let selectedSection {
+                sectionDetailContent(selectedSection)
+            } else {
+                ContentUnavailableView("No Sections", systemImage: "list.bullet.rectangle", description: Text(isEditable ? "Add a section to get started." : "This protocol has no sections."))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+    }
+
+    private var compactBody: some View {
         ExplorerList(
             isEmpty: sections.isEmpty,
             emptyTitle: "No Sections",
             emptySystemImage: "list.bullet.rectangle",
             emptyMessage: isEditable ? "Add a section to get started." : "This protocol has no sections."
         ) {
-            ForEach(sections) { section in
-                Section(sectionTitle(section)) {
-                    ForEach(section.steps.sorted(by: { $0.order < $1.order })) { step in
+            ForEach(Array(sections.enumerated()), id: \.element.clientID) { index, section in
+                Button {
+                    selectedSectionID = section.clientID
+                } label: {
+                    sectionRowLabel(section, number: index + 1)
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("sectionRow_\(section.clientID)")
+            }
+        }
+        .navigationDestination(item: $selectedSectionID) { sectionID in
+            if let section = sections.first(where: { $0.clientID == sectionID }) {
+                sectionDetailContent(section)
+                    .navigationTitle(sectionTitle(section))
+            }
+        }
+    }
+
+    private var sectionSidebar: some View {
+        SelectableExplorerList(
+            selection: $selectedSectionID,
+            isEmpty: sections.isEmpty,
+            emptyTitle: "No Sections",
+            emptySystemImage: "list.bullet.rectangle",
+            emptyMessage: isEditable ? "Add a section to get started." : "This protocol has no sections."
+        ) {
+            ForEach(Array(sections.enumerated()), id: \.element.clientID) { index, section in
+                sectionRowLabel(section, number: index + 1)
+                    .tag(section.clientID)
+                    .accessibilityIdentifier("sectionRow_\(section.clientID)")
+            }
+        }
+    }
+
+    private func sectionRowLabel(_ section: CachedProtocolSection, number: Int) -> some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(sectionTitle(section))
+                Text("\(section.steps.count) step\(section.steps.count == 1 ? "" : "s")")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Text("\(number)")
+                .font(.caption.bold())
+                .padding(6)
+                .background(Circle().fill(.secondary.opacity(0.2)))
+        }
+    }
+
+    private func sectionDetailContent(_ section: CachedProtocolSection) -> some View {
+        VStack(spacing: 0) {
+            ExplorerList(
+                isEmpty: section.steps.isEmpty,
+                emptyTitle: "No Steps",
+                emptySystemImage: "list.number",
+                emptyMessage: isEditable ? "Add a step to get started." : "This section has no steps.",
+                accessibilityIdentifier: "stepList"
+            ) {
+                ForEach(section.steps.sorted(by: { $0.order < $1.order })) { step in
+                    Button {
+                        stepDetailTarget = step.clientID
+                    } label: {
                         VStack(alignment: .leading, spacing: 4) {
                             HTMLText(html: StepTemplateRenderer.render(stepDescription: step.stepDescription, reagents: stepReagents(for: step)))
                             if let durationLabel = stepDurationLabel(step) {
@@ -171,87 +240,50 @@ struct ProtocolDetailView: View {
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
-                            ForEach(stepReagents(for: step), id: \.stepReagent.clientID) { entry in
-                                HStack {
-                                    Button {
-                                        editReagentTarget = entry.stepReagent
-                                    } label: {
-                                        Text(reagentDisplayText(entry))
-                                            .font(.caption)
-                                    }
-                                    .buttonStyle(.plain)
-                                    .foregroundStyle(.secondary)
-                                    .accessibilityIdentifier("editReagentButton_\(entry.stepReagent.clientID)")
-                                    if entry.stepReagent.serverID != nil {
-                                        Spacer()
-                                        Button {
-                                            Task { await deleteReagent(entry.stepReagent) }
-                                        } label: {
-                                            Image(systemName: "trash")
-                                                .font(.caption)
-                                        }
-                                        .buttonStyle(.plain)
-                                        .foregroundStyle(.red)
-                                        .accessibilityIdentifier("deleteReagentButton_\(entry.stepReagent.clientID)")
-                                    }
-                                }
-                            }
-                            HStack {
-                                Button {
-                                    reagentAttachmentTargetStep = step
-                                } label: {
-                                    Label("Attach Reagent", systemImage: "eyedropper")
-                                        .font(.caption)
-                                }
-                                .buttonStyle(.borderless)
-                                .accessibilityIdentifier("attachReagentButton")
-                                if isEditable {
-                                    Button {
-                                        editStepTarget = step
-                                    } label: {
-                                        Label("Edit Step", systemImage: "pencil")
-                                            .font(.caption)
-                                    }
-                                    .buttonStyle(.borderless)
-                                    .accessibilityIdentifier("editStepButton")
-                                }
-                            }
                         }
                     }
-                    .onDelete { offsets in
-                        let sortedSteps = section.steps.sorted { $0.order < $1.order }
-                        Task { await deleteSteps(at: offsets, from: sortedSteps) }
-                    }
-                    if isEditable {
-                        // Vertical stack avoids horizontal overflow on narrow iPhone widths.
-                        VStack(alignment: .leading, spacing: 4) {
-                            Button {
-                                newStepTargetSection = section
-                            } label: {
-                                Label("Add Step", systemImage: "plus")
-                            }
-                            .accessibilityIdentifier("addStepButton")
-
-                            Button {
-                                renameSectionTarget = section
-                            } label: {
-                                Label("Rename Section", systemImage: "pencil")
-                            }
-                            .accessibilityIdentifier("renameSectionButton")
-
-                            if section.serverID != nil {
-                                Button(role: .destructive) {
-                                    Task { await deleteSection(section) }
-                                } label: {
-                                    Label("Delete Section", systemImage: "trash")
-                                }
-                                .accessibilityIdentifier("deleteSectionButton")
-                            }
-                        }
-                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("stepRow_\(step.clientID)")
+                }
+                .onDelete { offsets in
+                    let sortedSteps = section.steps.sorted { $0.order < $1.order }
+                    Task { await deleteSteps(at: offsets, from: sortedSteps) }
                 }
             }
+            if isEditable {
+                Divider()
+                HStack(spacing: 12) {
+                    Button {
+                        newStepTargetSection = section
+                    } label: {
+                        Label("Add Step", systemImage: "plus")
+                    }
+                    .accessibilityIdentifier("addStepButton")
+
+                    Button {
+                        renameSectionTarget = section
+                    } label: {
+                        Label("Edit Section", systemImage: "pencil")
+                    }
+                    .accessibilityIdentifier("renameSectionButton")
+
+                    if section.serverID != nil {
+                        Button(role: .destructive) {
+                            Task { await deleteSection(section) }
+                        } label: {
+                            Label("Delete Section", systemImage: "trash")
+                        }
+                        .accessibilityIdentifier("deleteSectionButton")
+                    }
+                }
+                .padding()
+                .padding(.bottom, 80)
+            }
         }
+        .navigationTitle(sectionTitle(section))
+        #if os(iOS)
+        .navigationBarTitleDisplayMode(.inline)
+        #endif
     }
 
     @ToolbarContentBuilder
@@ -370,19 +402,18 @@ struct ProtocolDetailView: View {
         }
     }
 
-    /// Creates a section locally with a default name, then syncs immediately or queues it in the outbox.
     private func addSection() async {
         let description = "New Section \(sections.count + 1)"
         let order = sections.count
         let section = CachedProtocolSection(sectionDescription: description, order: order, protocolModel: protocolModel)
         modelContext.insert(section)
         try? modelContext.save()
+        selectedSectionID = section.clientID
 
         guard canAuthorOnline else { return }
         let clientID = section.clientID
         let services = appSession.makeSyncServices()
         do {
-            // Write the returned serverID directly onto this context's own object.
             let newServerID = try await services.protocolSync.syncLocallyCreatedSection(clientID: clientID, knownProtocolServerID: protocolModel.serverID)
             section.serverID = newServerID
             try? modelContext.save()
@@ -401,7 +432,6 @@ struct ProtocolDetailView: View {
         }
     }
 
-    /// Same create-locally-then-sync-or-queue shape as `addSection`.
     private func addStep(description: String, duration: Int?, to section: CachedProtocolSection) async {
         let order = section.steps.count
         let step = CachedProtocolStep(stepDescription: description, order: order, stepDuration: duration, section: section)
@@ -501,7 +531,6 @@ struct ProtocolDetailView: View {
         }
     }
 
-    /// Recomputes a section's duration as the sum of its steps' durations, or `nil` if none set.
     private func recomputeSectionDuration(for section: CachedProtocolSection) {
         let durations = section.steps.compactMap(\.stepDuration)
         section.sectionDuration = durations.isEmpty ? nil : durations.reduce(0, +)

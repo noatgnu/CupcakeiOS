@@ -3,7 +3,6 @@ import CupcakeNetworking
 import Foundation
 import SwiftData
 
-/// Fetches, creates, updates, and deletes metadata table templates.
 public actor MetadataTableTemplateSyncService {
     private let apiClient: APIClient
     private let deviceToken: @Sendable () -> String?
@@ -97,6 +96,137 @@ public actor MetadataTableTemplateSyncService {
         )
         try await store.delete(serverID: templateServerID)
     }
+
+    public func fetchDetail(templateServerID: Int64) async throws -> MetadataTableTemplateDTO {
+        guard let token = deviceToken() else {
+            throw MetadataTableTemplateSyncError.noDeviceToken
+        }
+        let dto: MetadataTableTemplateDTO = try await apiClient.get(
+            "metadata-table-templates/\(templateServerID)/",
+            authorizationHeader: "DeviceToken \(token)"
+        )
+        try await store.upsert([dto])
+        return dto
+    }
+
+    @discardableResult
+    public func duplicate(templateServerID: Int64) async throws -> MetadataTableTemplateDTO {
+        let source = try await fetchDetail(templateServerID: templateServerID)
+        guard let token = deviceToken() else {
+            throw MetadataTableTemplateSyncError.noDeviceToken
+        }
+        let request = DuplicateMetadataTableTemplateRequest(
+            name: "\(source.name) (Copy)",
+            description: source.description,
+            userColumnIds: (source.userColumns ?? []).map(\.id),
+            visibility: "private",
+            labGroup: nil
+        )
+        let dto: MetadataTableTemplateDTO = try await apiClient.send(
+            "metadata-table-templates/",
+            method: .post,
+            body: request,
+            authorizationHeader: "DeviceToken \(token)"
+        )
+        try await store.upsert([dto])
+        return dto
+    }
+
+    @discardableResult
+    public func addColumn(templateServerID: Int64, columnData: AddColumnDataRequest, autoReorder: Bool = false) async throws -> AddTemplateColumnResponse {
+        guard let token = deviceToken() else {
+            throw MetadataTableTemplateSyncError.noDeviceToken
+        }
+        let path = autoReorder ? "metadata-table-templates/\(templateServerID)/add_column_with_auto_reorder/" : "metadata-table-templates/\(templateServerID)/add_column/"
+        let response: AddTemplateColumnResponse = try await apiClient.send(
+            path,
+            method: .post,
+            body: AddTemplateColumnRequest(columnData: columnData, autoReorder: autoReorder ? true : nil),
+            authorizationHeader: "DeviceToken \(token)"
+        )
+        return response
+    }
+
+    public func removeColumn(templateServerID: Int64, columnServerID: Int64) async throws {
+        guard let token = deviceToken() else {
+            throw MetadataTableTemplateSyncError.noDeviceToken
+        }
+        let _: MessageResponse = try await apiClient.send(
+            "metadata-table-templates/\(templateServerID)/remove_column/",
+            method: .post,
+            body: RemoveTemplateColumnRequest(columnId: columnServerID),
+            authorizationHeader: "DeviceToken \(token)"
+        )
+    }
+
+    public func reorderColumn(templateServerID: Int64, columnServerID: Int64, newPosition: Int) async throws {
+        guard let token = deviceToken() else {
+            throw MetadataTableTemplateSyncError.noDeviceToken
+        }
+        let _: MessageResponse = try await apiClient.send(
+            "metadata-table-templates/\(templateServerID)/reorder_column/",
+            method: .post,
+            body: ReorderTemplateColumnRequest(columnId: columnServerID, newPosition: newPosition),
+            authorizationHeader: "DeviceToken \(token)"
+        )
+    }
+
+    @discardableResult
+    public func duplicateColumn(templateServerID: Int64, columnServerID: Int64, newName: String? = nil) async throws -> MetadataColumnDTO {
+        guard let token = deviceToken() else {
+            throw MetadataTableTemplateSyncError.noDeviceToken
+        }
+        let response: DuplicateTemplateColumnResponse = try await apiClient.send(
+            "metadata-table-templates/\(templateServerID)/duplicate_column/",
+            method: .post,
+            body: DuplicateTemplateColumnRequest(columnId: columnServerID, newName: newName),
+            authorizationHeader: "DeviceToken \(token)"
+        )
+        return response.column
+    }
+
+    @discardableResult
+    public func syncFromSchemas(templateServerID: Int64, addNew: Bool = true, updateExisting: Bool = true, removeOrphans: Bool = false) async throws -> SyncTemplateFromSchemasResponse {
+        guard let token = deviceToken() else {
+            throw MetadataTableTemplateSyncError.noDeviceToken
+        }
+        return try await apiClient.send(
+            "metadata-table-templates/\(templateServerID)/sync_from_schemas/",
+            method: .post,
+            body: SyncTemplateFromSchemasRequest(addNew: addNew, updateExisting: updateExisting, removeOrphans: removeOrphans),
+            authorizationHeader: "DeviceToken \(token)"
+        )
+    }
+
+    @discardableResult
+    public func bulkDeleteColumns(templateServerID: Int64, columnServerIDs: [Int64]) async throws -> BulkDeleteTemplateColumnsResponse {
+        guard let token = deviceToken() else {
+            throw MetadataTableTemplateSyncError.noDeviceToken
+        }
+        return try await apiClient.send(
+            "metadata-table-templates/\(templateServerID)/bulk_delete_columns/",
+            method: .post,
+            body: BulkDeleteTemplateColumnsRequest(columnIds: columnServerIDs),
+            authorizationHeader: "DeviceToken \(token)"
+        )
+    }
+
+    @discardableResult
+    public func bulkUpdateStaffOnly(templateServerID: Int64, columnServerIDs: [Int64], staffOnly: Bool) async throws -> BulkUpdateStaffOnlyResponse {
+        guard let token = deviceToken() else {
+            throw MetadataTableTemplateSyncError.noDeviceToken
+        }
+        return try await apiClient.send(
+            "metadata-table-templates/\(templateServerID)/bulk_update_staff_only/",
+            method: .post,
+            body: BulkUpdateStaffOnlyRequest(columnIds: columnServerIDs, staffOnly: staffOnly),
+            authorizationHeader: "DeviceToken \(token)"
+        )
+    }
+}
+
+struct MessageResponse: Decodable, Sendable {
+    let message: String
 }
 
 public enum MetadataTableTemplateSyncError: Error {
@@ -112,7 +242,7 @@ actor MetadataTableTemplateStore {
                 FetchDescriptor<CachedMetadataTableTemplate>(predicate: #Predicate { $0.serverID == templateServerID })
             )
             let template = existing?.first ?? {
-                let created = CachedMetadataTableTemplate(serverID: dto.id, name: dto.name)
+                let created = CachedMetadataTableTemplate(serverID: dto.id, name: dto.name, createdAt: Date.parsedISO8601(dto.createdAt))
                 modelContext.insert(created)
                 return created
             }()
@@ -126,6 +256,7 @@ actor MetadataTableTemplateStore {
             template.canEdit = dto.canEdit
             template.canDelete = dto.canDelete
             template.schemaNames = dto.schemaNames
+            template.updatedAt = Date.parsedISO8601(dto.updatedAt, fallback: template.updatedAt)
         }
         try modelContext.save()
     }

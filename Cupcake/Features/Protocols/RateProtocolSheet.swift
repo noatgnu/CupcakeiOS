@@ -4,7 +4,6 @@ import CupcakeSync
 import SwiftData
 import SwiftUI
 
-/// This user's own complexity/duration rating (0-10 each) for a protocol. Online-only.
 struct RateProtocolSheet: View {
     @Environment(AppSession.self) private var appSession
     @Environment(\.dismiss) private var dismiss

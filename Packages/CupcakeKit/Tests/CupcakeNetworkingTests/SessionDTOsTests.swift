@@ -7,7 +7,6 @@ import Testing
 struct SessionDTOsTests {
     @Test("decodes the literal SessionSerializer shape — id is the lookup key, not unique_id")
     func decodesSession() throws {
-        // Matches ccrv/serializers.py's SessionSerializer.Meta.fields verbatim (trimmed).
         let json = Data("""
         {
             "id": 7,
@@ -35,7 +34,6 @@ struct SessionDTOsTests {
 
     @Test("decodes a real POST sessions/ create response, which omits `status` (and every other field beyond the bare essentials)")
     func decodesCreateResponseMissingStatus() throws {
-        // Captured verbatim from a real 201 response body, which omits status/processing/started_at/ended_at/is_running.
         let json = Data("""
         {
             "id": 1,

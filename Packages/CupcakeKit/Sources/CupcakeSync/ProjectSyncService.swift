@@ -3,7 +3,6 @@ import CupcakeNetworking
 import Foundation
 import SwiftData
 
-/// Read-sync + create-locally-then-sync-or-queue for `Project`.
 public actor ProjectSyncService {
     private let apiClient: APIClient
     private let deviceToken: @Sendable () -> String?
@@ -31,7 +30,6 @@ public actor ProjectSyncService {
         }
     }
 
-    /// Pushes an already locally-created project to the server, attaching the new `serverID`.
     @discardableResult
     public func syncLocallyCreatedProject(clientID: UUID) async throws -> Int64 {
         guard let token = deviceToken() else {
@@ -81,7 +79,6 @@ public enum ProjectSyncError: Error {
     case projectNotCached
 }
 
-/// SwiftData access is isolated to this `@ModelActor` — see `ProtocolStore`'s doc comment for why.
 @ModelActor
 actor ProjectStore {
     func upsert(_ dtos: [ProjectDTO]) throws {
@@ -91,12 +88,18 @@ actor ProjectStore {
                 FetchDescriptor<CachedProject>(predicate: #Predicate { $0.serverID == projectServerID })
             )
             let project = existing?.first ?? {
-                let created = CachedProject(serverID: dto.id, projectName: dto.projectName, projectDescription: dto.projectDescription)
+                let created = CachedProject(
+                    serverID: dto.id,
+                    projectName: dto.projectName,
+                    projectDescription: dto.projectDescription,
+                    createdAt: Date.parsedISO8601(dto.createdAt)
+                )
                 modelContext.insert(created)
                 return created
             }()
             project.projectName = dto.projectName
             project.projectDescription = dto.projectDescription
+            project.updatedAt = Date.parsedISO8601(dto.updatedAt, fallback: project.updatedAt)
         }
         try modelContext.save()
     }
@@ -110,7 +113,6 @@ actor ProjectStore {
         return (project.projectName, project.projectDescription)
     }
 
-    /// Attaches a newly-assigned `serverID` to the existing local record matched by `clientID`.
     func attachServerID(clientID: UUID, dto: ProjectDTO) throws {
         guard let project = try modelContext.fetch(
             FetchDescriptor<CachedProject>(predicate: #Predicate { $0.clientID == clientID })
@@ -120,6 +122,7 @@ actor ProjectStore {
         project.serverID = dto.id
         project.projectName = dto.projectName
         project.projectDescription = dto.projectDescription
+        project.updatedAt = Date.parsedISO8601(dto.updatedAt, fallback: project.updatedAt)
         try modelContext.save()
     }
 

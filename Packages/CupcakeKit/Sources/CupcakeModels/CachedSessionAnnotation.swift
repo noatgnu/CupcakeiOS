@@ -1,7 +1,6 @@
 import Foundation
 import SwiftData
 
-/// A cached session-level annotation.
 @Model
 public final class CachedSessionAnnotation {
     @Attribute(.unique) public var clientID: UUID

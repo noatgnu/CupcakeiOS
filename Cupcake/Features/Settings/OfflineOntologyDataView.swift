@@ -3,7 +3,6 @@ import CupcakeOntology
 import SwiftData
 import SwiftUI
 
-/// Lists ontology datasets from the release manifest with row count/size, import status, and an Import action.
 struct OfflineOntologyDataView: View {
     @Environment(\.modelContext) private var modelContext
 

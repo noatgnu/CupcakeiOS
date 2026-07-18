@@ -3,7 +3,6 @@ import CupcakeNetworking
 import Foundation
 import SwiftData
 
-/// Queues and replays creates that couldn't reach the server due to genuine unreachability.
 public actor OutboxService {
     private let protocolSync: ProtocolSyncService
     private let sessionSync: SessionSyncService
@@ -136,7 +135,6 @@ public actor OutboxService {
         try await store.enqueue(OutboxEntry(operationType: OutboxOperationType.createSessionSketchAnnotation.rawValue, payloadJSON: data, relatedClientID: clientID))
     }
 
-    /// Attempts every pending/failed entry in FIFO order.
     public func replayPending() async {
         let entries = (try? await store.fetchPending()) ?? []
         for entry in entries {
@@ -202,7 +200,6 @@ public actor OutboxService {
     }
 }
 
-/// A plain, `Sendable` snapshot of the fields `OutboxService.replay(_:)` needs.
 struct OutboxEntrySnapshot: Sendable {
     let id: UUID
     let operationType: String
@@ -211,7 +208,6 @@ struct OutboxEntrySnapshot: Sendable {
 
 @ModelActor
 actor OutboxStore {
-    /// Assigns a strictly-increasing `sequence` value regardless of `Date()` resolution.
     func enqueue(_ entry: OutboxEntry) throws {
         let maxSequence = try modelContext.fetch(
             FetchDescriptor<OutboxEntry>(sortBy: [SortDescriptor(\.sequence, order: .reverse)])

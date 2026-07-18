@@ -1,8 +1,6 @@
 import Foundation
 
-/// Thin REST transport shared by every CupcakeKit module that talks to the backend.
 public actor APIClient {
-    /// Immutable and `Sendable`, so safe to read synchronously.
     public nonisolated let baseURL: URL
     private let session: URLSession
     private let decoder: JSONDecoder
@@ -21,7 +19,6 @@ public actor APIClient {
         self.encoder = encoder
     }
 
-    /// GET with no request body.
     public func get<Response: Decodable & Sendable>(
         _ path: String,
         query: [URLQueryItem] = [],
@@ -31,7 +28,6 @@ public actor APIClient {
         return try await execute(request)
     }
 
-    /// GET a fully-qualified URL as-is, for following a DRF pagination `next` link.
     public func get<Response: Decodable & Sendable>(
         absoluteURL: URL,
         authorizationHeader: String? = nil
@@ -45,7 +41,6 @@ public actor APIClient {
         return try await execute(request)
     }
 
-    /// POST/PATCH/PUT with an encodable request body.
     public func send<Body: Encodable & Sendable, Response: Decodable & Sendable>(
         _ path: String,
         method: HTTPMethod,
@@ -55,6 +50,18 @@ public actor APIClient {
     ) async throws -> Response {
         var request = try makeRequest(path: path, method: method, query: query, authorizationHeader: authorizationHeader)
         request.httpBody = try encoder.encode(body)
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        return try await execute(request)
+    }
+
+    public func sendRawJSON<Response: Decodable & Sendable>(
+        _ path: String,
+        method: HTTPMethod,
+        json: [String: Any],
+        authorizationHeader: String? = nil
+    ) async throws -> Response {
+        var request = try makeRequest(path: path, method: method, query: [], authorizationHeader: authorizationHeader)
+        request.httpBody = try JSONSerialization.data(withJSONObject: json)
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         return try await execute(request)
     }
@@ -70,7 +77,6 @@ public actor APIClient {
         return try await execute(request)
     }
 
-    /// DELETE (or any call where the server's response body isn't needed).
     public func sendNoContent(
         _ path: String,
         method: HTTPMethod,
@@ -82,7 +88,6 @@ public actor APIClient {
         try validate(response, body: data)
     }
 
-    /// Fetches raw bytes from a fully-qualified URL, plus the server's `Content-Disposition` filename.
     public func downloadData(from url: URL, authorizationHeader: String? = nil) async throws -> (data: Data, suggestedFilename: String?) {
         var request = URLRequest(url: url)
         request.httpMethod = HTTPMethod.get.rawValue

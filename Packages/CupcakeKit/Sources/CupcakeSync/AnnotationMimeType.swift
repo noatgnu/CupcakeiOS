@@ -1,6 +1,5 @@
 import Foundation
 
-/// Maps a file annotation's type + persisted file extension to the MIME type its upload needs.
 enum AnnotationMimeType {
     static func mimeType(annotationType: String, fileExtension: String) -> String {
         switch annotationType {

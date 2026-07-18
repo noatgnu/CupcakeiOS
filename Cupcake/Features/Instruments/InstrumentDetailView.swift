@@ -4,9 +4,9 @@ import CupcakeSync
 import SwiftData
 import SwiftUI
 
-/// Shows an instrument's bookings, maintenance status, and maintenance log.
 struct InstrumentDetailView: View {
     let instrumentServerID: Int64
+    let ontologyStore: ModelContainer
 
     @Environment(AppSession.self) private var appSession
     @Environment(\.modelContext) private var modelContext
@@ -75,6 +75,9 @@ struct InstrumentDetailView: View {
                         }
                     }
                 }
+            }
+            MetadataFieldsSection(metadataTableServerID: instrument?.metadataTableServerID, ontologyStore: ontologyStore) {
+                await refreshMetadataTable()
             }
             Section("Maintenance") {
                 if logs.isEmpty {
@@ -168,7 +171,13 @@ struct InstrumentDetailView: View {
         }
         .task {
             try? await appSession.makeSyncServices().maintenanceLogSync.refetch(instrumentServerID: instrumentServerID)
+            await refreshMetadataTable()
         }
+    }
+
+    private func refreshMetadataTable() async {
+        guard let tableServerID = instrument?.metadataTableServerID else { return }
+        try? await appSession.makeSyncServices().instrumentSync.refreshMetadataTable(instrumentServerID: instrumentServerID, metadataTableServerID: tableServerID)
     }
 
     private func markComplete(_ log: CachedMaintenanceLog) async {

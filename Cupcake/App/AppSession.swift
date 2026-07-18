@@ -8,13 +8,11 @@ import Network
 import SwiftData
 import SwiftUI
 
-/// Parsed from a `cupcake://annotation?...` share link.
 struct DeepLinkTarget: Equatable {
     let sessionClientID: UUID
     let annotationServerID: Int64?
 }
 
-/// Bundles the sync-service actors a view needs for one screen.
 struct SyncServices {
     let protocolSync: ProtocolSyncService
     let sessionSync: SessionSyncService
@@ -41,9 +39,9 @@ struct SyncServices {
     let storedReagentAnnotationSync: StoredReagentAnnotationSyncService
     let reagentSubscriptionSync: ReagentSubscriptionSyncService
     let samplePoolSync: SamplePoolSyncService
+    let metadataTableSync: MetadataTableSyncService
 }
 
-/// Owns the server connection + auth state for the whole app.
 @Observable
 @MainActor
 final class AppSession {
@@ -51,6 +49,7 @@ final class AppSession {
     private(set) var deviceToken: String?
     private(set) var isStandalone: Bool
     private(set) var currentUserID: Int64?
+    private(set) var isStaff: Bool = false
     private(set) var pendingLocalImportCount: Int?
     private(set) var isImportingLocalNotebook = false
     private(set) var pendingDeepLink: DeepLinkTarget?
@@ -70,6 +69,7 @@ final class AppSession {
     private static let baseURLDefaultsKey = "cupcake.baseURL"
     private static let standaloneDefaultsKey = "cupcake.isStandalone"
     private static let currentUserIDDefaultsKey = "cupcake.currentUserID"
+    private static let isStaffDefaultsKey = "cupcake.isStaff"
 
     init(modelContainer: ModelContainer) {
         self.modelContainer = modelContainer
@@ -82,11 +82,13 @@ final class AppSession {
             if deviceToken != nil, UserDefaults.standard.object(forKey: Self.currentUserIDDefaultsKey) != nil {
                 currentUserID = Int64(UserDefaults.standard.integer(forKey: Self.currentUserIDDefaultsKey))
             }
+            if deviceToken != nil {
+                isStaff = UserDefaults.standard.bool(forKey: Self.isStaffDefaultsKey)
+            }
         }
         startMonitoringConnectivity()
     }
 
-    /// Replays queued outbox entries whenever connectivity comes back.
     private func startMonitoringConnectivity() {
         let monitor = NWPathMonitor()
         monitor.pathUpdateHandler = { [weak self] path in
@@ -103,13 +105,11 @@ final class AppSession {
         pathMonitor = monitor
     }
 
-    /// Replays every queued outbox entry.
     func replayOutbox() async {
         guard isAuthenticated else { return }
         await makeSyncServices().outboxSync.replayPending()
     }
 
-    /// Refetches every syncable entity type from the server.
     func syncAll() async throws {
         guard isAuthenticated else { return }
         let services = makeSyncServices()
@@ -138,7 +138,6 @@ final class AppSession {
         timeKeeperNotificationService = nil
     }
 
-    /// Subscribes to live server-side transcription progress events.
     func transcriptionEvents() async -> AsyncStream<TranscriptionNotificationService.Event> {
         guard let client = apiClient else {
             return AsyncStream { $0.finish() }
@@ -149,7 +148,6 @@ final class AppSession {
         return await service.subscribe()
     }
 
-    /// Subscribes to live cross-device `TimeKeeper` start/stop/reset events.
     func timeKeeperEvents() async -> AsyncStream<TimeKeeperNotificationService.Event> {
         guard let client = apiClient else {
             return AsyncStream { $0.finish() }
@@ -165,18 +163,19 @@ final class AppSession {
             throw AppSessionError.invalidServerURL
         }
         configureClient(baseURL: url)
-        let deviceTokenDTO = try await authManager?.signIn(username: username, password: password, deviceLabel: Self.deviceLabel)
+        let result = try await authManager?.signIn(username: username, password: password, deviceLabel: Self.deviceLabel)
         UserDefaults.standard.set(serverURLString, forKey: Self.baseURLDefaultsKey)
         deviceToken = keychain.load()
         isStandalone = false
         UserDefaults.standard.set(false, forKey: Self.standaloneDefaultsKey)
-        if let userID = deviceTokenDTO?.user {
+        if let userID = result?.deviceToken.user {
             currentUserID = Int64(userID)
             UserDefaults.standard.set(userID, forKey: Self.currentUserIDDefaultsKey)
         }
+        isStaff = result?.isStaff ?? false
+        UserDefaults.standard.set(isStaff, forKey: Self.isStaffDefaultsKey)
     }
 
-    /// Checks for local-only records left over from standalone mode, offering to import them if any exist.
     func checkForLocalRecordsToImport() async {
         let count = (try? await makeSyncServices().localNotebookImportSync.countLocalOnlyRecords()) ?? 0
         if count > 0 {
@@ -184,7 +183,6 @@ final class AppSession {
         }
     }
 
-    /// Enqueues and syncs every local-only record left over from standalone mode.
     func importLocalNotebook() async {
         isImportingLocalNotebook = true
         defer {
@@ -194,12 +192,10 @@ final class AppSession {
         await makeSyncServices().localNotebookImportSync.importAll()
     }
 
-    /// Dismisses the local-import prompt without importing anything.
     func dismissLocalImportPrompt() {
         pendingLocalImportCount = nil
     }
 
-    /// Parses a `cupcake://annotation?session=&id=` URL and publishes it as a pending deep link.
     func handleDeepLink(_ url: URL) {
         guard url.scheme == "cupcake", url.host == "annotation",
               let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
@@ -215,13 +211,11 @@ final class AppSession {
         pendingDeepLink = DeepLinkTarget(sessionClientID: session.clientID, annotationServerID: annotationServerID)
     }
 
-    /// Consumes the pending deep link so it's only acted on once.
     func consumeDeepLink() -> DeepLinkTarget? {
         defer { pendingDeepLink = nil }
         return pendingDeepLink
     }
 
-    /// Signs in via ORCID, presenting its login page in an `ASWebAuthenticationSession`.
     func signInWithORCID(serverURLString: String) async throws {
         guard let url = URL(string: serverURLString) else {
             throw AppSessionError.invalidServerURL
@@ -243,13 +237,15 @@ final class AppSession {
             throw AppSessionError.orcidSignInFailed(errorMessage ?? "No auth code returned")
         }
 
-        let deviceTokenDTO = try await authManager.completeORCIDSignIn(authCode: authCode, deviceLabel: Self.deviceLabel)
+        let result = try await authManager.completeORCIDSignIn(authCode: authCode, deviceLabel: Self.deviceLabel)
         UserDefaults.standard.set(serverURLString, forKey: Self.baseURLDefaultsKey)
         deviceToken = keychain.load()
         isStandalone = false
         UserDefaults.standard.set(false, forKey: Self.standaloneDefaultsKey)
-        currentUserID = Int64(deviceTokenDTO.user)
-        UserDefaults.standard.set(deviceTokenDTO.user, forKey: Self.currentUserIDDefaultsKey)
+        currentUserID = Int64(result.deviceToken.user)
+        UserDefaults.standard.set(result.deviceToken.user, forKey: Self.currentUserIDDefaultsKey)
+        isStaff = result.isStaff
+        UserDefaults.standard.set(isStaff, forKey: Self.isStaffDefaultsKey)
     }
 
     private var activeORCIDSession: ASWebAuthenticationSession?
@@ -284,21 +280,20 @@ final class AppSession {
         deviceToken = nil
         currentUserID = nil
         UserDefaults.standard.removeObject(forKey: Self.currentUserIDDefaultsKey)
+        isStaff = false
+        UserDefaults.standard.removeObject(forKey: Self.isStaffDefaultsKey)
     }
 
-    /// Enters standalone mode: no backend configured, no login, purely local content.
     func continueOffline() {
         isStandalone = true
         UserDefaults.standard.set(true, forKey: Self.standaloneDefaultsKey)
     }
 
-    /// Leaves standalone mode to return to the login screen; local content is not deleted.
     func exitStandalone() {
         isStandalone = false
         UserDefaults.standard.set(false, forKey: Self.standaloneDefaultsKey)
     }
 
-    /// Constructs the set of sync services for the current server/token, or a placeholder client if none is configured.
     func makeSyncServices() -> SyncServices {
         let client = apiClient ?? APIClient(baseURL: Self.placeholderBaseURL)
         let tokenSnapshot = deviceToken
@@ -338,6 +333,7 @@ final class AppSession {
         let storedReagentAnnotationSync = StoredReagentAnnotationSyncService(modelContainer: modelContainer, apiClient: client, deviceToken: { tokenSnapshot })
         let reagentSubscriptionSync = ReagentSubscriptionSyncService(modelContainer: modelContainer, apiClient: client, deviceToken: { tokenSnapshot })
         let samplePoolSync = SamplePoolSyncService(modelContainer: modelContainer, apiClient: client, deviceToken: { tokenSnapshot })
+        let metadataTableSync = MetadataTableSyncService(apiClient: client, deviceToken: { tokenSnapshot })
         return SyncServices(
             protocolSync: protocolSync,
             sessionSync: sessionSync,
@@ -363,13 +359,13 @@ final class AppSession {
             protocolRatingSync: protocolRatingSync,
             storedReagentAnnotationSync: storedReagentAnnotationSync,
             reagentSubscriptionSync: reagentSubscriptionSync,
-            samplePoolSync: samplePoolSync
+            samplePoolSync: samplePoolSync,
+            metadataTableSync: metadataTableSync
         )
     }
 
     private static let placeholderBaseURL = URL(string: "https://cupcake.invalid/api/v1/")!
 
-    /// Resets persisted auth/standalone state to a signed-out, non-standalone starting point.
     static func resetPersistedStateForUITesting() {
         UserDefaults.standard.removeObject(forKey: baseURLDefaultsKey)
         UserDefaults.standard.removeObject(forKey: standaloneDefaultsKey)

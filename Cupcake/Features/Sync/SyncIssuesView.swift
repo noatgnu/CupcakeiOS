@@ -3,7 +3,6 @@ import CupcakeTranscription
 import SwiftData
 import SwiftUI
 
-/// Lists everything queued in the outbox, with a manual "Retry Now" action.
 struct SyncIssuesView: View {
     @Environment(AppSession.self) private var appSession
     @Query(sort: \OutboxEntry.sequence) private var entries: [OutboxEntry]
@@ -22,7 +21,6 @@ struct SyncIssuesView: View {
 
     @State private var isRetrying = false
 
-    /// Builds a display title for the given outbox entry by looking up its related local record.
     private func title(for entry: OutboxEntry) -> String {
         guard let operation = OutboxOperationType(rawValue: entry.operationType) else { return entry.operationType }
         switch operation {

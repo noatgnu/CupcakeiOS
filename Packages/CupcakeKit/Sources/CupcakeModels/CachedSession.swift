@@ -1,7 +1,6 @@
 import Foundation
 import SwiftData
 
-/// A cached session; `protocolClientIDs` holds its 0..N attached protocols.
 @Model
 public final class CachedSession {
     @Attribute(.unique) public var clientID: UUID
@@ -9,14 +8,12 @@ public final class CachedSession {
     public var uniqueID: String?
     public var name: String?
     public var enabled: Bool
-    /// Nullable — the server can serialize this as JSON `null` for an unstarted session.
     public var isRunning: Bool?
     public var status: String
     public var protocolServerIDs: [Int64]
     public var protocolClientIDs: [UUID]
     @available(*, deprecated, message: "Use protocolClientIDs instead — kept for one release.")
     public var primaryProtocolClientID: UUID?
-    /// When this device first learned about the session; used for sorting the sessions list.
     public var createdAt: Date
 
     public init(
@@ -49,7 +46,6 @@ public final class CachedSession {
 extension CachedSession {
     private static let backfillDefaultsKey = "cupcake.didBackfillProtocolClientIDs"
 
-    /// One-time migration backfilling `protocolClientIDs` from the old `primaryProtocolClientID`.
     @MainActor
     public static func backfillProtocolClientIDsIfNeeded(in modelContainer: ModelContainer) {
         guard !UserDefaults.standard.bool(forKey: backfillDefaultsKey) else { return }

@@ -1,9 +1,7 @@
 import SwiftUI
 
-/// A two-panel explorer layout (sidebar + detail) with a breadcrumb bar.
 struct TwoPanelExplorerView<SidebarHeader: View, Sidebar: View, Detail: View>: View {
     @Binding var pathStack: [BreadcrumbSegment]
-    /// True for flat selection lists, where compact width pushes a dedicated detail page instead of stacking.
     let pushesDetailOnCompact: Bool
     let sidebarHeader: () -> SidebarHeader
     let sidebar: () -> Sidebar
@@ -47,11 +45,17 @@ struct TwoPanelExplorerView<SidebarHeader: View, Sidebar: View, Detail: View>: V
         } detail: {
             NavigationStack {
                 detail()
-                    // Suppresses the native title, which would duplicate the breadcrumb bar's last segment.
                     .toolbar(removing: .title)
                     .toolbar {
-                        ToolbarItem(placement: .navigation) {
-                            BreadcrumbBar(segments: pathStack, onGoBack: goBack, onSelect: goToSegment)
+                        if #available(macOS 26.0, iOS 26.0, *) {
+                            ToolbarItem(placement: .navigation) {
+                                BreadcrumbBar(segments: pathStack, onGoBack: goBack, onSelect: goToSegment)
+                            }
+                            .sharedBackgroundVisibility(.hidden)
+                        } else {
+                            ToolbarItem(placement: .navigation) {
+                                BreadcrumbBar(segments: pathStack, onGoBack: goBack, onSelect: goToSegment)
+                            }
                         }
                     }
             }
@@ -59,7 +63,6 @@ struct TwoPanelExplorerView<SidebarHeader: View, Sidebar: View, Detail: View>: V
         .navigationSplitViewStyle(.balanced)
     }
 
-    /// Sidebar header showing this panel's fixed name. iOS/iPadOS only — macOS shows it via the breadcrumb bar.
     @ViewBuilder
     private var sectionTitle: some View {
         #if os(macOS)
@@ -87,6 +90,11 @@ struct TwoPanelExplorerView<SidebarHeader: View, Sidebar: View, Detail: View>: V
         }
         .onAppear { syncNavigationPath() }
         .onChange(of: pathStack) { syncNavigationPath() }
+        .onChange(of: navigationPath) { _, newPath in
+            if newPath.count < pathStack.count - 1 {
+                pathStack = Array(pathStack.prefix(newPath.count + 1))
+            }
+        }
     }
 
     private func syncNavigationPath() {
@@ -97,7 +105,6 @@ struct TwoPanelExplorerView<SidebarHeader: View, Sidebar: View, Detail: View>: V
         navigationPath = path
     }
 
-    /// The root compact page: sidebar only when pushing detail separately, else sidebar+detail stacked.
     private var compactSidebarPage: some View {
         VStack(spacing: 0) {
             sectionTitle

@@ -1,7 +1,6 @@
 import CupcakeNetworking
 import Foundation
 
-/// Live push updates for server-side transcription, over one shared WebSocket connection.
 public actor TranscriptionNotificationService {
     public enum Event: Sendable, Equatable {
         case started(annotationServerID: Int64)

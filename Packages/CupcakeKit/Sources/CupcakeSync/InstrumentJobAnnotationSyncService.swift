@@ -3,7 +3,6 @@ import CupcakeNetworking
 import Foundation
 import SwiftData
 
-/// Online-only, since the metadata-merge signal this flow exists for is server-side and synchronous.
 public actor InstrumentJobAnnotationSyncService {
     private let apiClient: APIClient
     private let deviceToken: @Sendable () -> String?
@@ -37,7 +36,6 @@ public actor InstrumentJobAnnotationSyncService {
         }
     }
 
-    /// Sets the job's `instrument` FK (required for the merge signal to fire), then runs the 3-call booking sequence and refreshes the job's metadata table.
     @discardableResult
     public func createBookingAnnotation(
         jobServerID: Int64,

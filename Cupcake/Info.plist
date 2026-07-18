@@ -8,6 +8,8 @@
 	</array>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Cupcake records audio annotations for sessions and steps.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Cupcake records video annotations and scans reagent barcodes.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>Cupcake transcribes audio annotations on-device.</string>
 	<key>CFBundleURLTypes</key>

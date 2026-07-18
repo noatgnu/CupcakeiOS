@@ -3,7 +3,6 @@ import CupcakeNetworking
 import Foundation
 import SwiftData
 
-/// Fetches, creates, and syncs session-level annotations.
 public actor SessionAnnotationSyncService {
     private let apiClient: APIClient
     private let deviceToken: @Sendable () -> String?
@@ -34,7 +33,6 @@ public actor SessionAnnotationSyncService {
         }
     }
 
-    /// Persists the recorded file locally and inserts a local record, with no network call.
     @discardableResult
     public func createAudioAnnotation(
         sessionClientID: UUID,
@@ -54,7 +52,6 @@ public actor SessionAnnotationSyncService {
         )
     }
 
-    /// Persists a photo's JPEG data locally and inserts a local record, with no network call.
     @discardableResult
     public func createImageAnnotation(sessionClientID: UUID, imageData: Data) async throws -> UUID {
         let clientID = UUID()
@@ -67,7 +64,6 @@ public actor SessionAnnotationSyncService {
         )
     }
 
-    /// Persists a video's file data locally and inserts a local record, with no network call.
     @discardableResult
     public func createVideoAnnotation(
         sessionClientID: UUID,
@@ -90,7 +86,6 @@ public actor SessionAnnotationSyncService {
         )
     }
 
-    /// Persists a sketch's JSON vector data locally and inserts a local record, with no network call.
     @discardableResult
     public func createSketchAnnotation(sessionClientID: UUID, sketchData: Data) async throws -> UUID {
         let clientID = UUID()
@@ -103,7 +98,6 @@ public actor SessionAnnotationSyncService {
         )
     }
 
-    /// Persists any not-yet-synced file annotation (audio, photo, video) locally with no network call.
     @discardableResult
     public func createFileAnnotation(
         sessionClientID: UUID,
@@ -127,31 +121,26 @@ public actor SessionAnnotationSyncService {
         )
     }
 
-    /// Pushes an already locally-created audio annotation to the server.
     @discardableResult
     public func syncLocallyCreatedAudioAnnotation(clientID: UUID) async throws -> Int64 {
         try await syncLocallyCreatedFileAnnotation(clientID: clientID)
     }
 
-    /// Pushes an already locally-created photo annotation to the server.
     @discardableResult
     public func syncLocallyCreatedImageAnnotation(clientID: UUID) async throws -> Int64 {
         try await syncLocallyCreatedFileAnnotation(clientID: clientID)
     }
 
-    /// Pushes an already locally-created video annotation to the server.
     @discardableResult
     public func syncLocallyCreatedVideoAnnotation(clientID: UUID) async throws -> Int64 {
         try await syncLocallyCreatedFileAnnotation(clientID: clientID)
     }
 
-    /// Pushes an already locally-created sketch annotation to the server.
     @discardableResult
     public func syncLocallyCreatedSketchAnnotation(clientID: UUID) async throws -> Int64 {
         try await syncLocallyCreatedFileAnnotation(clientID: clientID)
     }
 
-    /// Pushes any not-yet-synced file annotation, deriving its MIME type from the annotation type and file extension.
     @discardableResult
     public func syncLocallyCreatedFileAnnotation(clientID: UUID) async throws -> Int64 {
         guard let token = deviceToken() else {
@@ -201,7 +190,6 @@ public actor SessionAnnotationSyncService {
         return sessionAnnotationID
     }
 
-    /// Fetches a fresh copy of an already-synced annotation, for a live, unexpired signed `fileUrl`, never persisted locally.
     public func fetchDetail(clientID: UUID) async throws -> SessionAnnotationDTO {
         guard let token = deviceToken() else {
             throw SessionAnnotationSyncError.noDeviceToken
@@ -212,7 +200,6 @@ public actor SessionAnnotationSyncService {
         return try await apiClient.get("session-annotations/\(serverID)/", authorizationHeader: "DeviceToken \(token)")
     }
 
-    /// Re-fetches and caches a session annotation's transcription; no-ops if the server ID is unknown.
     @discardableResult
     public func refreshTranscription(serverID: Int64) async throws -> Bool {
         guard let token = deviceToken(), try await store.hasLocalRecord(serverID: serverID) else { return false }
@@ -221,7 +208,6 @@ public actor SessionAnnotationSyncService {
         return true
     }
 
-    /// Fetches the raw bytes of an already-synced file annotation, re-fetching the detail record first for a live URL.
     public func downloadFile(clientID: UUID) async throws -> (data: Data, suggestedFilename: String?) {
         guard let token = deviceToken() else {
             throw SessionAnnotationSyncError.noDeviceToken
@@ -233,7 +219,6 @@ public actor SessionAnnotationSyncService {
         return try await apiClient.downloadData(from: url, authorizationHeader: "DeviceToken \(token)")
     }
 
-    /// Toggles the `scratched` (soft-hide) flag on an already-synced annotation. Online-only.
     public func setScratched(clientID: UUID, scratched: Bool) async throws {
         guard let token = deviceToken() else {
             throw SessionAnnotationSyncError.noDeviceToken
@@ -250,7 +235,6 @@ public actor SessionAnnotationSyncService {
         try await store.setScratchedLocally(clientID: clientID, scratched: scratched)
     }
 
-    /// Hard-deletes an already-synced annotation. Owner/editor-gated server-side; a 403 surfaces as a normal error.
     public func deleteAnnotation(clientID: UUID) async throws {
         guard let token = deviceToken() else {
             throw SessionAnnotationSyncError.noDeviceToken

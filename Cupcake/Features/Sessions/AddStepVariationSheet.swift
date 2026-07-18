@@ -2,7 +2,6 @@ import CupcakeNetworking
 import CupcakeSync
 import SwiftUI
 
-/// Sheet for adding a session-scoped step variation. Online-only.
 struct AddStepVariationSheet: View {
     @Environment(AppSession.self) private var appSession
     @Environment(\.dismiss) private var dismiss

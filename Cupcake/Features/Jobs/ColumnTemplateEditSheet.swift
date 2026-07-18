@@ -33,12 +33,19 @@ struct ColumnTemplateEditSheet: View {
     @State private var columnType: String
     @State private var ontologyType: String
     @State private var defaultValue: String
+    @State private var defaultPositionText: String
     @State private var visibility: VisibilityOption
     @State private var labGroupServerID: Int64?
     @State private var category: String
+    @State private var tagsText: String
+    @State private var enableTypeahead: Bool
+    @State private var notAvailable: Bool
+    @State private var excelValidation: Bool
     @State private var isSaving = false
     @State private var errorMessage: String?
     @State private var isShowingError = false
+    @State private var ontologySuggestions: [OntologySuggestionDTO] = []
+    @State private var ontologySearchTask: Task<Void, Never>?
 
     init(template: MetadataColumnTemplateDTO?, onSaved: @escaping () async -> Void) {
         self.template = template
@@ -49,9 +56,14 @@ struct ColumnTemplateEditSheet: View {
         _columnType = State(initialValue: template?.columnType ?? "characteristics")
         _ontologyType = State(initialValue: template?.ontologyType ?? "")
         _defaultValue = State(initialValue: template?.defaultValue ?? "")
+        _defaultPositionText = State(initialValue: template?.defaultPosition.map(String.init) ?? "")
         _visibility = State(initialValue: VisibilityOption(rawValue: template?.visibility ?? "private") ?? .private)
         _labGroupServerID = State(initialValue: template?.labGroup)
         _category = State(initialValue: template?.category ?? "")
+        _tagsText = State(initialValue: (template?.tags ?? []).joined(separator: ", "))
+        _enableTypeahead = State(initialValue: template?.enableTypeahead ?? true)
+        _notAvailable = State(initialValue: template?.notAvailable ?? false)
+        _excelValidation = State(initialValue: template?.excelValidation ?? true)
     }
 
     private var canSave: Bool {
@@ -67,6 +79,8 @@ struct ColumnTemplateEditSheet: View {
                     TextField("Description", text: $description)
                         .accessibilityIdentifier("columnTemplateDescriptionField")
                     TextField("Category", text: $category)
+                    TextField("Tags (comma-separated)", text: $tagsText)
+                        .accessibilityIdentifier("columnTemplateTagsField")
                 }
                 Section("Column") {
                     TextField("Column Name (SDRF)", text: $columnName)
@@ -76,8 +90,30 @@ struct ColumnTemplateEditSheet: View {
                             Text(type).tag(type)
                         }
                     }
+                    TextField("Default Position", text: $defaultPositionText)
+                        .accessibilityIdentifier("columnTemplateDefaultPositionField")
                     TextField("Ontology Type", text: $ontologyType)
+                        .accessibilityIdentifier("columnTemplateOntologyTypeField")
                     TextField("Default Value", text: $defaultValue)
+                        .accessibilityIdentifier("columnTemplateDefaultValueField")
+                        .onChange(of: defaultValue) { scheduleOntologySearch() }
+                    if !ontologySuggestions.isEmpty {
+                        ForEach(ontologySuggestions) { suggestion in
+                            Button(suggestion.displayName) {
+                                defaultValue = suggestion.value
+                                ontologySuggestions = []
+                            }
+                            .accessibilityIdentifier("columnTemplateOntologySuggestion_\(suggestion.value)")
+                        }
+                    }
+                }
+                Section("Options") {
+                    Toggle("Enable Typeahead", isOn: $enableTypeahead)
+                        .accessibilityIdentifier("columnTemplateEnableTypeaheadToggle")
+                    Toggle("Not Available by Default", isOn: $notAvailable)
+                        .accessibilityIdentifier("columnTemplateNotAvailableToggle")
+                    Toggle("Excel Dropdown Validation", isOn: $excelValidation)
+                        .accessibilityIdentifier("columnTemplateExcelValidationToggle")
                 }
                 Section("Visibility") {
                     Picker("Visibility", selection: $visibility) {
@@ -119,9 +155,37 @@ struct ColumnTemplateEditSheet: View {
         }
     }
 
+    private func scheduleOntologySearch() {
+        ontologySearchTask?.cancel()
+        guard !ontologyType.isEmpty else {
+            ontologySuggestions = []
+            return
+        }
+        ontologySearchTask = Task {
+            try? await Task.sleep(for: .milliseconds(300))
+            guard !Task.isCancelled, defaultValue.count >= 2 else {
+                ontologySuggestions = []
+                return
+            }
+            do {
+                let services = appSession.makeSyncServices()
+                let found = try await services.metadataColumnSync.fetchOntologySuggestions(ontologyType: ontologyType, customFilters: nil, search: defaultValue)
+                guard !Task.isCancelled else { return }
+                ontologySuggestions = found
+            } catch {
+                guard !Task.isCancelled else { return }
+                ontologySuggestions = []
+            }
+        }
+    }
+
     private func save() async {
         isSaving = true
         defer { isSaving = false }
+        let tags = tagsText
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
         let request = CreateColumnTemplateRequest(
             name: name,
             description: description.isEmpty ? nil : description,
@@ -129,9 +193,14 @@ struct ColumnTemplateEditSheet: View {
             columnType: columnType,
             ontologyType: ontologyType.isEmpty ? nil : ontologyType,
             defaultValue: defaultValue.isEmpty ? nil : defaultValue,
+            defaultPosition: Int(defaultPositionText),
             visibility: visibility.rawValue,
             labGroup: visibility == .group ? labGroupServerID : nil,
-            category: category.isEmpty ? nil : category
+            category: category.isEmpty ? nil : category,
+            enableTypeahead: enableTypeahead,
+            notAvailable: notAvailable,
+            excelValidation: excelValidation,
+            tags: tags
         )
         do {
             let services = appSession.makeSyncServices()

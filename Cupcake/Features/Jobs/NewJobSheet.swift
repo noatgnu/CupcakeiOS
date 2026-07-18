@@ -4,12 +4,11 @@ import CupcakeSync
 import SwiftData
 import SwiftUI
 
-/// Creates a job, picking from already-created projects. Created locally then synced or queued.
 struct NewJobSheet: View {
     @Environment(AppSession.self) private var appSession
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
-    @Query(sort: \CachedProject.projectName) private var projects: [CachedProject]
+    @Query(sort: \CachedProject.createdAt, order: .reverse) private var projects: [CachedProject]
 
     @State private var jobName = ""
     @State private var jobType = "analysis"

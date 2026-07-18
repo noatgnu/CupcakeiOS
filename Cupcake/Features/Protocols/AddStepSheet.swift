@@ -1,24 +1,30 @@
+import CupcakeModels
 import SwiftUI
 
-/// Adds/edits a step's description and optional duration (entered as minutes, stored as seconds).
 struct AddStepSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     let navigationTitle: String
-    let onSave: (_ description: String, _ durationSeconds: Int?) -> Void
+    let stepReagents: [(stepReagent: CachedStepReagent, reagent: CachedReagent)]
+    let onAttachNewReagent: ((_ draftHTML: String, _ draftDurationSeconds: Int?) -> Void)?
+    let onSave: (_ descriptionHTML: String, _ durationSeconds: Int?) -> Void
 
     @State private var description: String
     @State private var durationMinutesText: String
 
     init(
         navigationTitle: String = "New Step",
-        initialDescription: String = "",
+        initialDescriptionHTML: String = "",
         initialDurationSeconds: Int? = nil,
-        onSave: @escaping (_ description: String, _ durationSeconds: Int?) -> Void
+        stepReagents: [(stepReagent: CachedStepReagent, reagent: CachedReagent)] = [],
+        onAttachNewReagent: ((_ draftHTML: String, _ draftDurationSeconds: Int?) -> Void)? = nil,
+        onSave: @escaping (_ descriptionHTML: String, _ durationSeconds: Int?) -> Void
     ) {
         self.navigationTitle = navigationTitle
+        self.stepReagents = stepReagents
+        self.onAttachNewReagent = onAttachNewReagent
         self.onSave = onSave
-        _description = State(initialValue: initialDescription)
+        _description = State(initialValue: initialDescriptionHTML)
         _durationMinutesText = State(initialValue: initialDurationSeconds.map { String($0 / 60) } ?? "")
     }
 
@@ -31,8 +37,13 @@ struct AddStepSheet: View {
         NavigationStack {
             Form {
                 Section("What's this step?") {
-                    TextField("Description", text: $description, axis: .vertical)
-                        .accessibilityIdentifier("addTextSheetField")
+                    StepRichTextEditor(
+                        html: $description,
+                        stepReagents: stepReagents,
+                        onAttachNewReagent: onAttachNewReagent.map { callback in
+                            { callback(description, trimmedDurationSeconds) }
+                        }
+                    )
                 }
                 Section("Duration") {
                     TextField("Minutes (optional)", text: $durationMinutesText)
@@ -58,6 +69,6 @@ struct AddStepSheet: View {
                 }
             }
         }
-        .frame(minWidth: 320, minHeight: 280)
+        .frame(minWidth: 360, minHeight: 420)
     }
 }

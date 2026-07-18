@@ -1,6 +1,5 @@
 import SwiftUI
 
-/// The user's chosen appearance, persisted via `@AppStorage("appAppearance")`.
 enum AppAppearance: String, CaseIterable, Identifiable {
     case system, light, dark
 

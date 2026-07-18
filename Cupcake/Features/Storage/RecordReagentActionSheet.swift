@@ -4,7 +4,6 @@ import CupcakeSync
 import SwiftData
 import SwiftUI
 
-/// Records an Add/Reserve action for a reagent, updating `currentQuantity` locally then syncing or queuing.
 struct RecordReagentActionSheet: View {
     @Environment(AppSession.self) private var appSession
     @Environment(\.dismiss) private var dismiss
@@ -78,7 +77,6 @@ struct RecordReagentActionSheet: View {
             notes: notes.isEmpty ? nil : notes
         )
         modelContext.insert(action)
-        // Optimistic local update, ahead of the server's own round-trip.
         storedReagent.currentQuantity += actionType == "add" ? quantity : -quantity
         try? modelContext.save()
 

@@ -3,7 +3,6 @@ import CupcakeNetworking
 import Foundation
 import SwiftData
 
-/// Per-session/step countdown timers. Online-only, get-or-create per session+step.
 public actor TimeKeeperSyncService {
     private let apiClient: APIClient
     private let deviceToken: @Sendable () -> String?
@@ -23,7 +22,6 @@ public actor TimeKeeperSyncService {
         try await store.upsert(fetchTimeKeepers(sessionServerID: sessionServerID), sessionClientID: store.sessionClientID(serverID: sessionServerID))
     }
 
-    /// A pure network fetch with no cache write, for callers applying the result onto their own `ModelContext`.
     public func fetchTimeKeepers(sessionServerID: Int64) async throws -> [TimeKeeperDTO] {
         guard let token = deviceToken() else { return [] }
         let page: PaginatedResponse<TimeKeeperDTO> = try await apiClient.get(
@@ -34,7 +32,6 @@ public actor TimeKeeperSyncService {
         return page.results
     }
 
-    /// Creates, or reuses an existing match for, the timer for a session+step combination.
     @discardableResult
     public func create(sessionServerID: Int64, sessionClientID: UUID, stepServerID: Int64?, stepClientID: UUID?, durationSeconds: Int) async throws -> Int64 {
         guard let token = deviceToken() else {

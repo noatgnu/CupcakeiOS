@@ -2,7 +2,6 @@ import CupcakeNetworking
 import CupcakeSync
 import SwiftUI
 
-/// Creates a maintenance log for an instrument. Online-only.
 struct LogMaintenanceSheet: View {
     @Environment(AppSession.self) private var appSession
     @Environment(\.dismiss) private var dismiss

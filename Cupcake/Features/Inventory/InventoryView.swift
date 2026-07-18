@@ -1,7 +1,9 @@
+import SwiftData
 import SwiftUI
 
-/// Switches between Storage and Instruments via a segmented picker.
 struct InventoryView: View {
+    let ontologyStore: ModelContainer
+
     private enum Section: String, CaseIterable {
         case storage = "Storage"
         case instruments = "Instruments"
@@ -12,9 +14,9 @@ struct InventoryView: View {
     var body: some View {
         switch selection {
         case .storage:
-            StorageListView(sectionPicker: { sectionPicker })
+            StorageListView(ontologyStore: ontologyStore, sectionPicker: { sectionPicker })
         case .instruments:
-            InstrumentListView(sectionPicker: { sectionPicker })
+            InstrumentListView(ontologyStore: ontologyStore, sectionPicker: { sectionPicker })
         }
     }
 

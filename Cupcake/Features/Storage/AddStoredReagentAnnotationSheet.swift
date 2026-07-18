@@ -2,7 +2,6 @@ import CupcakeNetworking
 import CupcakeSync
 import SwiftUI
 
-/// Creates a document/note for a stored reagent, filed into one of its predefined folders. Online-only.
 struct AddStoredReagentAnnotationSheet: View {
     @Environment(AppSession.self) private var appSession
     @Environment(\.dismiss) private var dismiss
@@ -12,6 +11,7 @@ struct AddStoredReagentAnnotationSheet: View {
 
     @State private var folders: [AnnotationFolderDTO] = []
     @State private var selectedFolderID: Int64?
+    @State private var folderSearchText = ""
     @State private var text = ""
     @State private var isLoadingFolders = true
     @State private var isSaving = false
@@ -25,12 +25,18 @@ struct AddStoredReagentAnnotationSheet: View {
                     if isLoadingFolders {
                         ProgressView()
                     } else {
-                        Picker("Folder", selection: $selectedFolderID) {
-                            ForEach(folders, id: \.id) { folder in
-                                Text(folder.folderName).tag(Optional(folder.id))
-                            }
+                        SearchableSelectionList(
+                            items: folders,
+                            searchPlaceholder: "Search folders",
+                            searchFieldIdentifier: "storedReagentAnnotationFolderSearchField",
+                            searchText: $folderSearchText,
+                            matches: { $0.folderName.localizedCaseInsensitiveContains($1) },
+                            isSelected: { $0.id == selectedFolderID },
+                            rowIdentifier: { "storedReagentAnnotationFolderRow_\($0.folderName)" },
+                            onSelect: { selectedFolderID = $0.id }
+                        ) { folder in
+                            Text(folder.folderName)
                         }
-                        .accessibilityIdentifier("storedReagentAnnotationFolderPicker")
                     }
                     TextField("Note", text: $text, axis: .vertical)
                         .accessibilityIdentifier("storedReagentAnnotationTextField")

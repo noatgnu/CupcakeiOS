@@ -4,7 +4,6 @@ import CupcakeSync
 import SwiftData
 import SwiftUI
 
-/// Creates a protocol (title, description, "enabled"/public flag), created locally then synced or queued.
 struct NewProtocolView: View {
     @Environment(AppSession.self) private var appSession
     @Environment(\.dismiss) private var dismiss

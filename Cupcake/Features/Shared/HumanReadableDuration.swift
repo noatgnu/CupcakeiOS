@@ -1,6 +1,5 @@
 import Foundation
 
-/// Formats a duration in seconds as a natural days/hours/minutes string.
 enum HumanReadableDuration {
     static func format(seconds: Int) -> String {
         formatter.string(from: TimeInterval(seconds)) ?? "\(seconds)s"

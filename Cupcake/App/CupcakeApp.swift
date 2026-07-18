@@ -1,7 +1,3 @@
-//
-//  CupcakeApp.swift
-//  Cupcake
-//
 
 import CupcakeModels
 import CupcakeOntology
@@ -13,6 +9,7 @@ import SwiftUI
 struct CupcakeApp: App {
     #if os(macOS)
     @NSApplicationDelegateAdaptor(MacWindowPlacementFixer.self) private var windowPlacementFixer
+    @Environment(\.openWindow) private var openWindow
     #endif
 
     let cupcakeStore: ModelContainer
@@ -49,6 +46,10 @@ struct CupcakeApp: App {
             context.insert(instrument)
             try? context.save()
         }
+
+        if ProcessInfo.processInfo.arguments.contains("--ui-testing-seed-real-protocol") {
+            RealProtocolFixture.seed(into: ModelContext(store))
+        }
     }
 
     var body: some Scene {
@@ -63,17 +64,39 @@ struct CupcakeApp: App {
         .modelContainer(cupcakeStore)
         #if os(macOS)
         .defaultSize(width: 1200, height: 700)
+        .commands {
+            CommandGroup(replacing: .newItem) {
+                Button("New Protocol…") { NotificationCenter.default.post(name: .newProtocolRequested, object: nil) }
+                    .keyboardShortcut("n", modifiers: [.command])
+                Button("New Job…") { NotificationCenter.default.post(name: .newJobRequested, object: nil) }
+                    .keyboardShortcut("n", modifiers: [.command, .shift])
+                Button("New Session…") { NotificationCenter.default.post(name: .newSessionRequested, object: nil) }
+                Button("New Project…") { NotificationCenter.default.post(name: .newProjectRequested, object: nil) }
+            }
+            CommandGroup(replacing: .sidebar) {}
+            CommandGroup(replacing: .help) {}
+            CommandGroup(after: .windowArrangement) {
+                Button("Metadata Table Templates") { PlatformWindowPreference.openOrFocusWindow(id: "table-template-manager", using: openWindow) }
+                Button("Column Templates") { PlatformWindowPreference.openOrFocusWindow(id: "column-template-manager", using: openWindow) }
+                Button("Metadata Tables") { PlatformWindowPreference.openOrFocusWindow(id: "metadata-tables-browser", using: openWindow) }
+                Button("My Favourites") { PlatformWindowPreference.openOrFocusWindow(id: "favourites-manager", using: openWindow) }
+                Button("Sync Issues") { PlatformWindowPreference.openOrFocusWindow(id: "sync-issues", using: openWindow) }
+            }
+        }
         #endif
 
         WindowGroup("Metadata Table Templates", id: "table-template-manager") {
             NavigationStack {
-                TableTemplateManagementView()
+                TableTemplateManagementView(ontologyStore: cupcakeOntologyStore)
             }
             .environment(appSession)
             .preferredColorScheme(resolvedColorScheme)
         }
         .modelContainer(cupcakeStore)
         .defaultSize(width: 480, height: 520)
+        #if os(macOS)
+        .defaultLaunchBehavior(.suppressed)
+        #endif
 
         WindowGroup("Column Templates", id: "column-template-manager") {
             NavigationStack {
@@ -84,6 +107,22 @@ struct CupcakeApp: App {
         }
         .modelContainer(cupcakeStore)
         .defaultSize(width: 380, height: 420)
+        #if os(macOS)
+        .defaultLaunchBehavior(.suppressed)
+        #endif
+
+        WindowGroup("Metadata Tables", id: "metadata-tables-browser") {
+            NavigationStack {
+                MetadataTablesBrowserView(ontologyStore: cupcakeOntologyStore)
+            }
+            .environment(appSession)
+            .preferredColorScheme(resolvedColorScheme)
+        }
+        .modelContainer(cupcakeStore)
+        .defaultSize(width: 700, height: 600)
+        #if os(macOS)
+        .defaultLaunchBehavior(.suppressed)
+        #endif
 
         WindowGroup("My Favourites", id: "favourites-manager") {
             NavigationStack {
@@ -94,6 +133,9 @@ struct CupcakeApp: App {
         }
         .modelContainer(cupcakeStore)
         .defaultSize(width: 380, height: 440)
+        #if os(macOS)
+        .defaultLaunchBehavior(.suppressed)
+        #endif
 
         WindowGroup("Sync Issues", id: "sync-issues") {
             NavigationStack {
@@ -104,6 +146,9 @@ struct CupcakeApp: App {
         }
         .modelContainer(cupcakeStore)
         .defaultSize(width: 360, height: 400)
+        #if os(macOS)
+        .defaultLaunchBehavior(.suppressed)
+        #endif
 
         WindowGroup("Edit Value", id: "metadata-value-editor", for: MetadataValueEditWindowID.self) { $windowID in
             MetadataValueEditWindowContent(windowID: windowID, ontologyStore: cupcakeOntologyStore)
@@ -112,6 +157,20 @@ struct CupcakeApp: App {
         }
         .modelContainer(cupcakeStore)
         .defaultSize(width: 360, height: 480)
+        #if os(macOS)
+        .defaultLaunchBehavior(.suppressed)
+        #endif
+
+        WindowGroup("Metadata Table", id: "metadata-table-detail", for: MetadataTableDetailWindowID.self) { $windowID in
+            MetadataTableDetailWindowContent(windowID: windowID, ontologyStore: cupcakeOntologyStore)
+                .environment(appSession)
+                .preferredColorScheme(resolvedColorScheme)
+        }
+        .modelContainer(cupcakeStore)
+        .defaultSize(width: 700, height: 600)
+        #if os(macOS)
+        .defaultLaunchBehavior(.suppressed)
+        #endif
 
         WindowGroup("Protocol", id: "protocol-detail-window", for: ProtocolDetailWindowID.self) { $windowID in
             ProtocolDetailWindowContent(windowID: windowID)
@@ -120,6 +179,9 @@ struct CupcakeApp: App {
         }
         .modelContainer(cupcakeStore)
         .defaultSize(width: 600, height: 700)
+        #if os(macOS)
+        .defaultLaunchBehavior(.suppressed)
+        #endif
 
         WindowGroup("Job", id: "job-detail-window", for: JobDetailWindowID.self) { $windowID in
             JobDetailWindowContent(windowID: windowID, ontologyStore: cupcakeOntologyStore)
@@ -128,6 +190,9 @@ struct CupcakeApp: App {
         }
         .modelContainer(cupcakeStore)
         .defaultSize(width: 500, height: 600)
+        #if os(macOS)
+        .defaultLaunchBehavior(.suppressed)
+        #endif
 
         WindowGroup("Session", id: "session-detail-window", for: SessionDetailWindowID.self) { $windowID in
             SessionDetailWindowContent(windowID: windowID)
@@ -136,6 +201,31 @@ struct CupcakeApp: App {
         }
         .modelContainer(cupcakeStore)
         .defaultSize(width: 600, height: 700)
+        #if os(macOS)
+        .defaultLaunchBehavior(.suppressed)
+        #endif
+
+        WindowGroup("Step", id: "step-session-window", for: StepSessionWindowID.self) { $windowID in
+            StepSessionWindowContent(windowID: windowID)
+                .environment(appSession)
+                .preferredColorScheme(resolvedColorScheme)
+        }
+        .modelContainer(cupcakeStore)
+        .defaultSize(width: 420, height: 500)
+        #if os(macOS)
+        .defaultLaunchBehavior(.suppressed)
+        #endif
+
+        WindowGroup("Step", id: "step-detail-window", for: StepDetailWindowID.self) { $windowID in
+            StepDetailWindowContent(windowID: windowID)
+                .environment(appSession)
+                .preferredColorScheme(resolvedColorScheme)
+        }
+        .modelContainer(cupcakeStore)
+        .defaultSize(width: 420, height: 500)
+        #if os(macOS)
+        .defaultLaunchBehavior(.suppressed)
+        #endif
 
         #if os(macOS)
         Settings {
@@ -151,6 +241,9 @@ struct CupcakeApp: App {
                 .preferredColorScheme(resolvedColorScheme)
         }
         .defaultSize(width: 500, height: 400)
+        #if os(macOS)
+        .defaultLaunchBehavior(.suppressed)
+        #endif
         #endif
     }
 

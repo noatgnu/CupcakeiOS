@@ -18,12 +18,15 @@ struct NewMetadataTableTemplateSheet: View {
         var id: String { rawValue }
     }
 
+    private static let layers = ["Technology", "Sample", "Experiment", "Other"]
+
     @State private var startingPoint: StartingPoint = .blank
     @State private var name = ""
     @State private var description = ""
     @State private var useJobLabGroup = false
     @State private var availableSchemas: [CachedSDRFSchema] = []
     @State private var selectedSchemaNames: Set<String> = []
+    @State private var schemaSearchText = ""
     @State private var isSaving = false
     @State private var errorMessage: String?
     @State private var isShowingError = false
@@ -59,34 +62,23 @@ struct NewMetadataTableTemplateSheet: View {
                     }
                 }
                 if startingPoint == .fromSchema {
-                    Section("Schemas") {
-                        if availableSchemas.isEmpty {
+                    if availableSchemas.isEmpty {
+                        Section("Schemas") {
                             Text("No schemas downloaded yet — import them from Settings.")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
-                        } else {
-                            ForEach(availableSchemas) { schema in
-                                Button {
-                                    toggleSchema(schema.name)
-                                } label: {
-                                    HStack {
-                                        VStack(alignment: .leading, spacing: 2) {
-                                            Text(schema.displayName ?? schema.name)
-                                            if let description = schema.schemaDescription {
-                                                Text(description)
-                                                    .font(.caption)
-                                                    .foregroundStyle(.secondary)
-                                            }
-                                        }
-                                        Spacer()
-                                        if selectedSchemaNames.contains(schema.name) {
-                                            Image(systemName: "checkmark")
-                                                .foregroundStyle(.tint)
-                                        }
+                        }
+                    } else {
+                        TextField("Search schemas", text: $schemaSearchText)
+                            .accessibilityIdentifier("schemaSearchField")
+                        ForEach(Self.layers, id: \.self) { layer in
+                            let schemasInLayer = schemas(inLayer: layer)
+                            if !schemasInLayer.isEmpty {
+                                Section(layer) {
+                                    ForEach(schemasInLayer) { schema in
+                                        schemaRow(schema)
                                     }
                                 }
-                                .buttonStyle(.plain)
-                                .accessibilityIdentifier("schemaRow_\(schema.name)")
                             }
                         }
                     }
@@ -129,6 +121,45 @@ struct NewMetadataTableTemplateSheet: View {
         } else {
             selectedSchemaNames.insert(name)
         }
+    }
+
+    private func schemas(inLayer layer: String) -> [CachedSDRFSchema] {
+        availableSchemas.filter { schema in
+            if !schemaSearchText.isEmpty, !(schema.displayName ?? schema.name).localizedCaseInsensitiveContains(schemaSearchText), !schema.name.localizedCaseInsensitiveContains(schemaSearchText) {
+                return false
+            }
+            if let rawLayer = schema.layer, !rawLayer.isEmpty {
+                return rawLayer.caseInsensitiveCompare(layer) == .orderedSame
+            }
+            return layer == "Other"
+        }
+    }
+
+    @ViewBuilder
+    private func schemaRow(_ schema: CachedSDRFSchema) -> some View {
+        Button {
+            toggleSchema(schema.name)
+        } label: {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(schema.displayName ?? schema.name)
+                    if let description = schema.schemaDescription {
+                        Text(description)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Spacer()
+                if selectedSchemaNames.contains(schema.name) {
+                    Image(systemName: "checkmark")
+                        .foregroundStyle(.tint)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("schemaRow_\(schema.name)")
     }
 
     private func save() async {

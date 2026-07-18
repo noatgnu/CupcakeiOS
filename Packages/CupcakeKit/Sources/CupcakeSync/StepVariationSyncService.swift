@@ -3,7 +3,6 @@ import CupcakeNetworking
 import Foundation
 import SwiftData
 
-/// Syncs alternate step descriptions/durations. Online-only.
 public actor StepVariationSyncService {
     private let apiClient: APIClient
     private let deviceToken: @Sendable () -> String?

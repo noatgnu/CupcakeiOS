@@ -2,7 +2,6 @@ import CupcakeNetworking
 import CupcakeSync
 import SwiftUI
 
-/// Drill-down folder picker for moving a folder to a new parent, excluding the folder itself.
 struct MoveAnnotationFolderSheet: View {
     @Environment(AppSession.self) private var appSession
     @Environment(\.dismiss) private var dismiss
