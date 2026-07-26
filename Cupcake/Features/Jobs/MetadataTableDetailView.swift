@@ -3,6 +3,7 @@ import CupcakeNetworking
 import CupcakeSync
 import SwiftData
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct MetadataTableDetailWindowID: Codable, Hashable {
     let metadataTableServerID: Int64
@@ -47,6 +48,7 @@ struct MetadataTableDetailView: View {
 
     @Environment(AppSession.self) private var appSession
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.openWindow) private var openWindow
     @Query private var allColumns: [CachedMetadataColumn]
 
     private enum ViewMode: String, CaseIterable, Identifiable {
@@ -68,12 +70,25 @@ struct MetadataTableDetailView: View {
     @State private var autofillTarget: CachedMetadataColumn?
     @State private var errorMessage: String?
     @State private var isShowingError = false
+    @State private var isExportingSDRF = false
+    @State private var isExportingExcel = false
+    @State private var isShowingAsyncTaskCenter = false
+    @State private var exportedTaskMessage: String?
+    @State private var isShowingExportedTaskMessage = false
+    @State private var isShowingImportPicker = false
+    @State private var isImporting = false
+    @State private var replaceExistingOnImport = false
+    @State private var importScope: AsyncMetadataImportScope = .userMetadata
 
-    private var columns: [CachedMetadataColumn] {
+    private var allTableColumns: [CachedMetadataColumn] {
         allColumns
             .filter { $0.metadataTableServerID == metadataTableServerID }
-            .filter { columnFilter.isEmpty || ($0.displayName ?? $0.name).localizedCaseInsensitiveContains(columnFilter) }
             .sorted { $0.columnPosition < $1.columnPosition }
+    }
+
+    private var columns: [CachedMetadataColumn] {
+        allTableColumns
+            .filter { columnFilter.isEmpty || ($0.displayName ?? $0.name).localizedCaseInsensitiveContains(columnFilter) }
     }
 
     private var totalPages: Int {
@@ -122,10 +137,105 @@ struct MetadataTableDetailView: View {
         }
         .formStyle(.grouped)
         .navigationTitle("Metadata Table")
+        .toolbar {
+            ToolbarItem {
+                Menu {
+                    Button {
+                        Task { await submitExport(format: .sdrf) }
+                    } label: {
+                        if isExportingSDRF {
+                            ProgressView()
+                        } else {
+                            Text("Export as SDRF")
+                        }
+                    }
+                    .accessibilityIdentifier("exportSDRFButton")
+                    .disabled(allTableColumns.isEmpty || isExportingSDRF || isExportingExcel)
+                    Button {
+                        Task { await submitExport(format: .excel) }
+                    } label: {
+                        if isExportingExcel {
+                            ProgressView()
+                        } else {
+                            Text("Export as Excel")
+                        }
+                    }
+                    .accessibilityIdentifier("exportExcelButton")
+                    .disabled(allTableColumns.isEmpty || isExportingSDRF || isExportingExcel)
+                } label: {
+                    Label("Export", systemImage: "square.and.arrow.up")
+                }
+                .accessibilityIdentifier("exportMenu")
+                .help("Export Table")
+            }
+            if canEdit {
+                ToolbarItem {
+                    Menu {
+                        Toggle("Replace Existing Data", isOn: $replaceExistingOnImport)
+                            .accessibilityIdentifier("importReplaceExistingToggle")
+                        if appSession.isStaff {
+                            Picker("Columns to Import", selection: $importScope) {
+                                ForEach(AsyncMetadataImportScope.allCases, id: \.self) { scope in
+                                    Text(scope.displayName).tag(scope)
+                                }
+                            }
+                            .accessibilityIdentifier("importScopePicker")
+                        }
+                        Button {
+                            isShowingImportPicker = true
+                        } label: {
+                            if isImporting {
+                                ProgressView()
+                            } else {
+                                Text("Choose SDRF File…")
+                            }
+                        }
+                        .accessibilityIdentifier("importSDRFButton")
+                        .disabled(isImporting)
+                    } label: {
+                        Label("Import", systemImage: "square.and.arrow.down")
+                    }
+                    .accessibilityIdentifier("importMenu")
+                    .help("Import Table")
+                }
+            }
+            ToolbarItem {
+                Button {
+                    if PlatformWindowPreference.prefersSeparateWindow {
+                        PlatformWindowPreference.openOrFocusWindow(id: "async-task-center", using: openWindow)
+                    } else {
+                        isShowingAsyncTaskCenter = true
+                    }
+                } label: {
+                    Label("Async Tasks", systemImage: "clock.arrow.circlepath")
+                }
+                .accessibilityIdentifier("openAsyncTaskCenterButton")
+                .help("Async Tasks")
+            }
+        }
         .alert("Couldn't load sample pools", isPresented: $isShowingError) {
             Button("OK") {}
         } message: {
             Text(errorMessage ?? "")
+        }
+        .alert("Export Queued", isPresented: $isShowingExportedTaskMessage) {
+            Button("OK") {}
+        } message: {
+            Text(exportedTaskMessage ?? "")
+        }
+        .sheet(isPresented: $isShowingAsyncTaskCenter) {
+            NavigationStack {
+                AsyncTaskCenterView()
+            }
+        }
+        .fileImporter(isPresented: $isShowingImportPicker, allowedContentTypes: [.tabSeparatedText, .commaSeparatedText, .plainText, .data]) { result in
+            switch result {
+            case .success(let url):
+                Task { await submitImport(fileURL: url) }
+            case .failure(let error):
+                errorMessage = error.localizedDescription
+                isShowingError = true
+            }
         }
         .sheet(item: $editingCell) { target in
             MetadataValueEditSheet(column: target.column, sampleIndex: target.sampleIndex, projectServerID: projectServerID, ontologyStore: ontologyStore)
@@ -222,6 +332,7 @@ struct MetadataTableDetailView: View {
                             Image(systemName: "ellipsis.circle")
                         }
                         .accessibilityIdentifier("metadataTableColumnMenu_\(column.name)")
+                        .help("Column Actions")
                     }
                     .swipeActions(edge: .leading) {
                         Button {
@@ -263,6 +374,7 @@ struct MetadataTableDetailView: View {
                 }
                 .disabled(currentPage <= 1)
                 .accessibilityIdentifier("metadataTablePreviousPageButton")
+                .help("Previous Page")
                 Text("Page \(currentPage) of \(totalPages)")
                     .font(.caption)
                 Button {
@@ -272,6 +384,7 @@ struct MetadataTableDetailView: View {
                 }
                 .disabled(currentPage >= totalPages)
                 .accessibilityIdentifier("metadataTableNextPageButton")
+                .help("Next Page")
             }
         }
         Section("Samples") {
@@ -302,7 +415,7 @@ struct MetadataTableDetailView: View {
                                     Button {
                                         editingCell = MetadataCellEditTarget(column: column, sampleIndex: sampleIndex)
                                     } label: {
-                                        Text(cellValue.isEmpty ? "—" : cellValue)
+                                        Text(cellValue.isEmpty ? "-" : cellValue)
                                             .font(.caption)
                                             .lineLimit(1)
                                             .frame(minWidth: 80, alignment: .leading)
@@ -346,7 +459,7 @@ struct MetadataTableDetailView: View {
                                     .foregroundStyle(.secondary)
                                 ForEach(columns) { column in
                                     let poolValue = (pool.metadataColumns ?? []).first(where: { $0.name == column.name })?.value ?? ""
-                                    Text(poolValue.isEmpty ? "—" : poolValue)
+                                    Text(poolValue.isEmpty ? "-" : poolValue)
                                         .font(.caption)
                                         .lineLimit(1)
                                         .frame(minWidth: 80, alignment: .leading)
@@ -403,6 +516,64 @@ struct MetadataTableDetailView: View {
                 ))
             }
             try modelContext.save()
+        } catch {
+            errorMessage = error.userFacingMessage
+            isShowingError = true
+        }
+    }
+
+    private enum ExportFormat {
+        case sdrf, excel
+    }
+
+    private func submitExport(format: ExportFormat) async {
+        switch format {
+        case .sdrf: isExportingSDRF = true
+        case .excel: isExportingExcel = true
+        }
+        defer {
+            switch format {
+            case .sdrf: isExportingSDRF = false
+            case .excel: isExportingExcel = false
+            }
+        }
+        do {
+            let services = appSession.makeSyncServices()
+            let columnIDs = allTableColumns.compactMap(\.serverID)
+            let taskID: String
+            switch format {
+            case .sdrf:
+                taskID = try await services.asyncTaskSync.exportSDRFFile(
+                    metadataTableServerID: metadataTableServerID, metadataColumnIDs: columnIDs,
+                    sampleNumber: sampleCount, includePools: !samplePools.isEmpty
+                )
+            case .excel:
+                taskID = try await services.asyncTaskSync.exportExcelTemplate(
+                    metadataTableServerID: metadataTableServerID, metadataColumnIDs: columnIDs,
+                    sampleNumber: sampleCount, includePools: !samplePools.isEmpty
+                )
+            }
+            exportedTaskMessage = "Export queued (task \(taskID.prefix(8))…). Check Async Tasks for progress and download."
+            isShowingExportedTaskMessage = true
+        } catch {
+            errorMessage = error.userFacingMessage
+            isShowingError = true
+        }
+    }
+
+    private func submitImport(fileURL: URL) async {
+        isImporting = true
+        defer { isImporting = false }
+        let didAccess = fileURL.startAccessingSecurityScopedResource()
+        defer { if didAccess { fileURL.stopAccessingSecurityScopedResource() } }
+        do {
+            let services = appSession.makeSyncServices()
+            let taskID = try await services.asyncTaskSync.importSDRFFile(
+                metadataTableServerID: metadataTableServerID, fileURL: fileURL, replaceExisting: replaceExistingOnImport,
+                importScope: appSession.isStaff ? importScope : .userMetadata
+            )
+            exportedTaskMessage = "Import queued (task \(taskID.prefix(8))…). Check Async Tasks for progress."
+            isShowingExportedTaskMessage = true
         } catch {
             errorMessage = error.userFacingMessage
             isShowingError = true

@@ -11,14 +11,14 @@ public actor AuthManager {
     }
 
     @discardableResult
-    public func signIn(username: String, password: String, deviceLabel: String) async throws -> (deviceToken: DeviceTokenDTO, isStaff: Bool) {
+    public func signIn(username: String, password: String, deviceLabel: String) async throws -> (deviceToken: DeviceTokenDTO, user: AuthUserDTO) {
         let login = try await authService.login(username: username, password: password)
         let deviceToken = try await authService.createDeviceToken(
             accessToken: login.accessToken,
             label: deviceLabel
         )
         try keychain.save(deviceToken.token)
-        return (deviceToken, login.user.isStaff)
+        return (deviceToken, login.user)
     }
 
     public nonisolated func orcidLoginURL() -> URL {
@@ -26,14 +26,14 @@ public actor AuthManager {
     }
 
     @discardableResult
-    public func completeORCIDSignIn(authCode: String, deviceLabel: String) async throws -> (deviceToken: DeviceTokenDTO, isStaff: Bool) {
+    public func completeORCIDSignIn(authCode: String, deviceLabel: String) async throws -> (deviceToken: DeviceTokenDTO, user: AuthUserDTO) {
         let login = try await authService.exchangeAuthCode(authCode)
         let deviceToken = try await authService.createDeviceToken(
             accessToken: login.accessToken,
             label: deviceLabel
         )
         try keychain.save(deviceToken.token)
-        return (deviceToken, login.user.isStaff)
+        return (deviceToken, login.user)
     }
 
     public func storedDeviceToken() -> String? {

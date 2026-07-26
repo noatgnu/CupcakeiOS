@@ -51,6 +51,7 @@ struct AddAnnotationSheet: View {
     let onSaveVideo: (URL, String?, String?, String?) async throws -> Void
     let onSaveCalculator: (Data) -> Void
     let onSaveMolarityCalculator: (Data) -> Void
+    var contextualVocabulary: [String] = []
 
     @Environment(\.dismiss) private var dismiss
     @State private var selectedKind: AnnotationKind?
@@ -73,7 +74,7 @@ struct AddAnnotationSheet: View {
     var body: some View {
         Group {
             if isShowingVideoRecorder {
-                RecordMediaAnnotationSheet(initialMode: .video, onSaveLocally: saveRecordedMedia, onSaved: { dismiss() })
+                RecordMediaAnnotationSheet(initialMode: .video, onSaveLocally: saveRecordedMedia, onSaved: { dismiss() }, contextualVocabulary: contextualVocabulary)
             } else {
             switch selectedKind {
             case nil:
@@ -108,7 +109,7 @@ struct AddAnnotationSheet: View {
                     dismiss()
                 }, onCancel: { dismiss() })
             case .audio:
-                RecordMediaAnnotationSheet(initialMode: .audio, onSaveLocally: saveRecordedMedia, onSaved: { dismiss() })
+                RecordMediaAnnotationSheet(initialMode: .audio, onSaveLocally: saveRecordedMedia, onSaved: { dismiss() }, contextualVocabulary: contextualVocabulary)
             case .calculator:
                 CalculatorAnnotationView(onSave: { data in
                     onSaveCalculator(data)

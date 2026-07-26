@@ -10,6 +10,7 @@ struct InstrumentListView<SectionPicker: View>: View {
 
     @Environment(AppSession.self) private var appSession
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Query(sort: \CachedInstrument.createdAt, order: .reverse) private var instruments: [CachedInstrument]
     @State private var pathStack: [BreadcrumbSegment] = [BreadcrumbSegment(id: nil, name: "Instruments")]
     @State private var selectedInstrumentServerID: Int64?
@@ -18,9 +19,18 @@ struct InstrumentListView<SectionPicker: View>: View {
     @State private var errorMessage: String?
     @State private var isShowingError = false
     @State private var searchText = ""
+    @State private var showAllInstruments = false
+
+    private func canView(_ instrument: CachedInstrument) -> Bool {
+        if showAllInstruments && appSession.isStaff { return true }
+        if let ownerServerID = instrument.ownerServerID, ownerServerID == appSession.currentUserID { return true }
+        return instrument.enabled && !instrument.isVaulted
+    }
 
     private var filteredInstruments: [CachedInstrument] {
-        instruments.filter { searchText.isEmpty || $0.instrumentName.localizedCaseInsensitiveContains(searchText) }
+        instruments
+            .filter(canView)
+            .filter { searchText.isEmpty || $0.instrumentName.localizedCaseInsensitiveContains(searchText) }
     }
 
     var body: some View {
@@ -90,6 +100,11 @@ struct InstrumentListView<SectionPicker: View>: View {
                     .accessibilityIdentifier("instrumentSearchField")
                     .padding(.horizontal, 12)
                     .padding(.top, 8)
+                if appSession.isStaff {
+                    Toggle("Show All (Admin)", isOn: $showAllInstruments)
+                        .padding(.horizontal, 12)
+                        .accessibilityIdentifier("showAllInstrumentsToggle")
+                }
                 sectionPicker()
             }
         }
@@ -104,6 +119,10 @@ struct InstrumentListView<SectionPicker: View>: View {
             if newValue.count == 1 {
                 selectedInstrumentServerID = nil
             }
+            appSession.isShowingPushedDetail = newValue.count > 1 && horizontalSizeClass == .compact
+        }
+        .onAppear {
+            appSession.isShowingPushedDetail = pathStack.count > 1 && horizontalSizeClass == .compact
         }
         .sheet(isPresented: $isShowingNewInstrumentSheet) {
             EditInstrumentSheet()

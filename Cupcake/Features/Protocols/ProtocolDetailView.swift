@@ -138,7 +138,7 @@ struct ProtocolDetailView: View {
             try? await appSession.makeSyncServices().protocolRatingSync.refetchMyRating(protocolServerID: protocolServerID, userID: userID)
         }
         .sheet(isPresented: $isShowingStartSessionSheet) {
-            StartSessionSheet(defaultName: "\(protocolModel.protocolTitle) — \(Date().formatted(date: .abbreviated, time: .shortened))") { name, enabled in
+            StartSessionSheet(defaultName: "\(protocolModel.protocolTitle), \(Date().formatted(date: .abbreviated, time: .shortened))") { name, enabled in
                 Task { await startSession(name: name, enabled: enabled) }
             }
         }
@@ -218,6 +218,8 @@ struct ProtocolDetailView: View {
                 .padding(6)
                 .background(Circle().fill(.secondary.opacity(0.2)))
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
     }
 
     private func sectionDetailContent(_ section: CachedProtocolSection) -> some View {
@@ -241,6 +243,8 @@ struct ProtocolDetailView: View {
                                     .foregroundStyle(.secondary)
                             }
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                     .accessibilityIdentifier("stepRow_\(step.clientID)")

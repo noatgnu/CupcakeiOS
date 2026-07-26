@@ -50,4 +50,73 @@ struct WebVTTFormatterTests {
         let plain = WebVTTFormatter.extractPlainText(from: vtt)
         #expect(plain == "Gloves are on. Sample ready.")
     }
+
+    @Test("parse then serialize round-trips a real format(segments:) output exactly")
+    func parseSerializeRoundTripsFormatOutput() {
+        let segments = [
+            TranscriptionSegment(text: "Gloves", timestamp: 0.0, duration: 0.4),
+            TranscriptionSegment(text: "on.", timestamp: 0.4, duration: 0.3),
+            TranscriptionSegment(text: "Sample", timestamp: 1.0, duration: 0.4),
+            TranscriptionSegment(text: "ready.", timestamp: 1.4, duration: 0.3),
+        ]
+        let original = WebVTTFormatter.format(segments: segments)
+        let cues = WebVTTFormatter.parse(original)
+        #expect(cues.count == 2)
+        #expect(cues[0].text == "Gloves on.")
+        #expect(cues[0].start == 0.0)
+        #expect(cues[0].end == 0.7)
+        #expect(cues[1].text == "Sample ready.")
+        let roundTripped = WebVTTFormatter.serialize(cues: cues)
+        #expect(roundTripped == original)
+    }
+
+    @Test("parse tolerates real-world formatting variance: extra whitespace, no trailing blank line, cue identifiers, cue settings")
+    func parseTolerantOfVariance() {
+        let vtt = """
+        WEBVTT
+
+        1
+        00:00:00.000 --> 00:00:00.900 align:middle line:90%
+          Gloves are on.
+
+        2
+        00:00:01.000   -->   00:00:01.700
+        Sample ready.
+        """
+        let cues = WebVTTFormatter.parse(vtt)
+        #expect(cues.count == 2)
+        #expect(cues[0].start == 0.0)
+        #expect(cues[0].end == 0.9)
+        #expect(cues[0].text == "Gloves are on.")
+        #expect(cues[1].start == 1.0)
+        #expect(cues[1].end == 1.7)
+        #expect(cues[1].text == "Sample ready.")
+    }
+
+    @Test("parse supports MM:SS.mmm timestamps without an hours component")
+    func parseSupportsShortTimestamps() {
+        let vtt = "WEBVTT\n\n00:05.500 --> 00:07.250\nHello.\n"
+        let cues = WebVTTFormatter.parse(vtt)
+        #expect(cues.count == 1)
+        #expect(cues[0].start == 5.5)
+        #expect(cues[0].end == 7.25)
+    }
+
+    @Test("parse returns an empty array for a bare WEBVTT header")
+    func parseEmptyHeader() {
+        #expect(WebVTTFormatter.parse("WEBVTT\n").isEmpty)
+    }
+
+    @Test("serialize produces cues that reformat the given start/end/text")
+    func serializeProducesExpectedFormat() {
+        let cues = [
+            WebVTTCue(start: 0, end: 2.5, text: "Gloves are on."),
+            WebVTTCue(start: 3, end: 4.125, text: "Sample ready."),
+        ]
+        let vtt = WebVTTFormatter.serialize(cues: cues)
+        #expect(vtt.contains("00:00:00.000 --> 00:00:02.500"))
+        #expect(vtt.contains("Gloves are on."))
+        #expect(vtt.contains("00:00:03.000 --> 00:00:04.125"))
+        #expect(vtt.contains("Sample ready."))
+    }
 }

@@ -320,6 +320,7 @@ struct StepRichTextEditor: View {
                         Image(systemName: "bold")
                     }
                     .accessibilityIdentifier("stepEditorBoldButton")
+                    .help("Bold")
 
                     Button {
                         controller.toggleItalic()
@@ -327,6 +328,7 @@ struct StepRichTextEditor: View {
                         Image(systemName: "italic")
                     }
                     .accessibilityIdentifier("stepEditorItalicButton")
+                    .help("Italic")
 
                     Button {
                         controller.toggleUnderline()
@@ -334,6 +336,7 @@ struct StepRichTextEditor: View {
                         Image(systemName: "underline")
                     }
                     .accessibilityIdentifier("stepEditorUnderlineButton")
+                    .help("Underline")
 
                     Button {
                         controller.toggleBulletList()
@@ -341,6 +344,7 @@ struct StepRichTextEditor: View {
                         Image(systemName: "list.bullet")
                     }
                     .accessibilityIdentifier("stepEditorBulletListButton")
+                    .help("Bullet List")
 
                     Button {
                         controller.toggleNumberedList()
@@ -348,6 +352,7 @@ struct StepRichTextEditor: View {
                         Image(systemName: "list.number")
                     }
                     .accessibilityIdentifier("stepEditorNumberedListButton")
+                    .help("Numbered List")
                 }
                 .buttonStyle(.bordered)
 
@@ -363,6 +368,7 @@ struct StepRichTextEditor: View {
             }
             .buttonStyle(.bordered)
             .accessibilityIdentifier("insertReagentTokenButton")
+            .help("Insert Reagent Token")
         }
         .popover(isPresented: $isShowingInsertReagentPicker) {
             InsertReagentTokenView(

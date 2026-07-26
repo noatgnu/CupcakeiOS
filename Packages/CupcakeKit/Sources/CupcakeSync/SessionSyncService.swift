@@ -170,7 +170,8 @@ actor SessionStore {
                 status: dto.status ?? "draft",
                 protocolServerIDs: dto.protocols,
                 protocolClientIDs: resolvedClientIDs,
-                primaryProtocolClientID: resolvedClientIDs.first
+                primaryProtocolClientID: resolvedClientIDs.first,
+                createdAt: Date.parsedISO8601(dto.createdAt)
             )
             modelContext.insert(created)
             return created

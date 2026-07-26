@@ -5,7 +5,7 @@ import Testing
 
 @Suite("APIError.userFacingMessage")
 struct APIErrorTests {
-    @Test("extracts a field validation error — confirmed live shape: values are always arrays")
+    @Test("extracts a field validation error, confirmed live shape: values are always arrays")
     func extractsFieldValidationError() {
         let body = Data("""
         {"lab_group": ["Lab group is required when staff members are assigned to the job"]}

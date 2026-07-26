@@ -38,30 +38,31 @@ public actor MetadataColumnSyncService {
         return response.column
     }
 
-    public func fetchOntologySuggestions(columnServerID: Int64, search: String, limit: Int = 10) async throws -> [OntologySuggestionDTO] {
+    public func fetchOntologySuggestions(columnServerID: Int64, search: String, limit: Int = 10, matchType: OntologyMatchType = .contains) async throws -> [OntologySuggestionDTO] {
         guard let token = deviceToken(), search.count >= 2 else { return [] }
         let authorization = "DeviceToken \(token)"
+        let searchType = matchType == .contains ? "icontains" : "istartswith"
         let response: OntologySuggestionsResponse = try await apiClient.get(
             "metadata-columns/ontology_suggestions/",
             query: [
                 URLQueryItem(name: "column_id", value: String(columnServerID)),
                 URLQueryItem(name: "search", value: search),
                 URLQueryItem(name: "limit", value: String(limit)),
-                URLQueryItem(name: "search_type", value: "icontains"),
+                URLQueryItem(name: "search_type", value: searchType),
             ],
             authorizationHeader: authorization
         )
         return response.suggestions
     }
 
-    public func fetchOntologySuggestions(ontologyType: String, customFilters: [String: [String: String]]?, search: String, limit: Int = 10) async throws -> [OntologySuggestionDTO] {
+    public func fetchOntologySuggestions(ontologyType: String, customFilters: [String: [String: String]]?, search: String, limit: Int = 10, match: String = "contains") async throws -> [OntologySuggestionDTO] {
         guard let token = deviceToken(), search.count >= 2 else { return [] }
         let authorization = "DeviceToken \(token)"
         var query = [
             URLQueryItem(name: "q", value: search),
             URLQueryItem(name: "type", value: ontologyType),
             URLQueryItem(name: "limit", value: String(limit)),
-            URLQueryItem(name: "match", value: "contains"),
+            URLQueryItem(name: "match", value: match),
         ]
         if let customFilters, let data = try? JSONEncoder().encode(customFilters), let json = String(data: data, encoding: .utf8) {
             query.append(URLQueryItem(name: "custom_filters", value: json))

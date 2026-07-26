@@ -19,6 +19,8 @@ struct InstrumentDetailView: View {
     @State private var isDeleting = false
     @State private var errorMessage: String?
     @State private var isShowingError = false
+    @State private var editingMetadataColumn: CachedMetadataColumn?
+    @State private var isShowingAddMetadataColumnSheet = false
 
     private var instrument: CachedInstrument? {
         instruments.first(where: { $0.serverID == instrumentServerID })
@@ -76,9 +78,13 @@ struct InstrumentDetailView: View {
                     }
                 }
             }
-            MetadataFieldsSection(metadataTableServerID: instrument?.metadataTableServerID, ontologyStore: ontologyStore) {
-                await refreshMetadataTable()
-            }
+            MetadataFieldsSection(
+                metadataTableServerID: instrument?.metadataTableServerID,
+                ontologyStore: ontologyStore,
+                onColumnsChanged: { await refreshMetadataTable() },
+                editingColumn: $editingMetadataColumn,
+                isShowingAddColumnSheet: $isShowingAddMetadataColumnSheet
+            )
             Section("Maintenance") {
                 if logs.isEmpty {
                     Text("No maintenance logged yet")
@@ -101,6 +107,14 @@ struct InstrumentDetailView: View {
                                 }
                                 .tint(.green)
                                 .accessibilityIdentifier("completeMaintenanceLogButton")
+                            }
+                        }
+                        .contextMenu {
+                            if log.status != "completed" {
+                                Button("Complete") {
+                                    Task { await markComplete(log) }
+                                }
+                                .accessibilityIdentifier("completeMaintenanceLogMenuButton")
                             }
                         }
                     }
@@ -162,6 +176,16 @@ struct InstrumentDetailView: View {
         .sheet(isPresented: $isShowingEditSheet) {
             if let instrument {
                 EditInstrumentSheet(existingInstrument: instrument)
+            }
+        }
+        .sheet(item: $editingMetadataColumn) { column in
+            MetadataValueEditSheet(column: column, projectServerID: nil, ontologyStore: ontologyStore)
+        }
+        .sheet(isPresented: $isShowingAddMetadataColumnSheet) {
+            if let tableServerID = instrument?.metadataTableServerID {
+                AddMetadataColumnSheet(tableServerID: tableServerID, ontologyStore: ontologyStore) {
+                    await refreshMetadataTable()
+                }
             }
         }
         .alert("Couldn't update instrument", isPresented: $isShowingError) {

@@ -64,7 +64,7 @@ struct NewMetadataTableTemplateSheet: View {
                 if startingPoint == .fromSchema {
                     if availableSchemas.isEmpty {
                         Section("Schemas") {
-                            Text("No schemas downloaded yet — import them from Settings.")
+                            Text("No schemas downloaded yet. Import them from Settings.")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }

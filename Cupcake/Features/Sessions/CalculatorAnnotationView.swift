@@ -65,6 +65,7 @@ struct CalculatorAnnotationView: View {
                         Image(systemName: "gearshape")
                     }
                     .accessibilityIdentifier("calculatorModeMenu")
+                    .help("Calculator Mode")
                 }
             }
             .alert("Calculator error", isPresented: $isShowingError) {
@@ -184,6 +185,13 @@ struct CalculatorAnnotationView: View {
                     }
                     .opacity(entry.scratched == true ? 0.5 : 1)
                     .swipeActions(edge: .trailing) {
+                        Button(role: .destructive) {
+                            history.removeAll { $0.id == entry.id }
+                        } label: {
+                            Label("Delete", systemImage: "trash")
+                        }
+                    }
+                    .contextMenu {
                         Button(role: .destructive) {
                             history.removeAll { $0.id == entry.id }
                         } label: {

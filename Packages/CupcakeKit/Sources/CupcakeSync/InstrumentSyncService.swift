@@ -153,6 +153,8 @@ actor InstrumentStore {
                     allowOverlappingBookings: dto.allowOverlappingBookings,
                     maintenanceOverdue: dto.maintenanceOverdue,
                     metadataTableServerID: dto.metadataTableId,
+                    ownerServerID: dto.user,
+                    isVaulted: dto.isVaulted,
                     createdAt: Date.parsedISO8601(dto.createdAt)
                 )
                 modelContext.insert(created)
@@ -165,6 +167,8 @@ actor InstrumentStore {
             instrument.allowOverlappingBookings = dto.allowOverlappingBookings
             instrument.maintenanceOverdue = dto.maintenanceOverdue
             instrument.metadataTableServerID = dto.metadataTableId
+            instrument.ownerServerID = dto.user
+            instrument.isVaulted = dto.isVaulted
             instrument.updatedAt = Date.parsedISO8601(dto.updatedAt, fallback: instrument.updatedAt)
         }
         try modelContext.save()

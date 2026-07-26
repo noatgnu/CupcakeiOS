@@ -4,6 +4,7 @@ import SwiftUI
 
 struct RootNavigationView: View {
     @Environment(AppSession.self) private var appSession
+    @Environment(\.openWindow) private var openWindow
     let ontologyStore: ModelContainer
 
     private enum Tab: CaseIterable {
@@ -29,6 +30,7 @@ struct RootNavigationView: View {
     }
 
     @State private var selectedTab: Tab = .protocols
+    @State private var isShowingSettings = false
 
     var body: some View {
         Group {
@@ -36,7 +38,7 @@ struct RootNavigationView: View {
                 ZStack {
                     switch selectedTab {
                     case .protocols:
-                        ProtocolListView(ontologyStore: ontologyStore)
+                        ProtocolListView()
                     case .sessions:
                         SessionListView()
                     case .jobs:
@@ -46,12 +48,29 @@ struct RootNavigationView: View {
                     }
                 }
                 .safeAreaInset(edge: .bottom) {
-                    floatingTabSelector
-                        .padding(.bottom, 16)
+                    if !appSession.isShowingPushedDetail {
+                        floatingTabSelector
+                            .padding(.bottom, 16)
+                    }
                 }
+                .overlay(alignment: .top) {
+                    if let progress = appSession.syncProgress {
+                        SyncProgressBanner(progress: progress)
+                            .padding(.top, 8)
+                            .transition(.move(edge: .top).combined(with: .opacity))
+                    }
+                }
+                .animation(.default, value: appSession.syncProgress)
                 .task {
                     try? await appSession.syncAll()
                 }
+                #if !os(macOS)
+                .sheet(isPresented: $isShowingSettings) {
+                    SettingsView()
+                        .modelContainer(ontologyStore)
+                        .frame(minWidth: 400, minHeight: 500)
+                }
+                #endif
             } else {
                 NavigationStack {
                     LoginView()
@@ -81,28 +100,66 @@ struct RootNavigationView: View {
     }
 
     private var floatingTabSelector: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: 10) {
             ForEach(Tab.allCases, id: \.self) { tab in
-                Button {
+                capsuleButton(systemImage: tab.systemImage, label: tab.label, isSelected: selectedTab == tab) {
                     selectedTab = tab
-                } label: {
-                    Image(systemName: tab.systemImage)
-                        .font(.system(size: 17, weight: .medium))
-                        .frame(width: 44, height: 44)
-                        .foregroundStyle(selectedTab == tab ? Color.accentColor : .secondary)
-                        .background(
-                            Circle().fill(selectedTab == tab ? Color.accentColor.opacity(0.15) : .clear)
-                        )
                 }
-                .buttonStyle(.plain)
-                .help(tab.label)
-                .accessibilityLabel(tab.label)
-                .accessibilityIdentifier(tab.label)
             }
+            #if !os(macOS)
+            Divider()
+                .frame(height: 24)
+            capsuleButton(systemImage: "gearshape", label: "Settings", accessibilityIdentifier: "settingsButton", isSelected: false) {
+                if PlatformWindowPreference.prefersSeparateWindow {
+                    PlatformWindowPreference.openOrFocusWindow(id: "settings", using: openWindow)
+                } else {
+                    isShowingSettings = true
+                }
+            }
+            if appSession.isAuthenticated {
+                Menu {
+                    Button("Switch Instance…") {
+                        appSession.leaveActiveInstance()
+                    }
+                    .accessibilityIdentifier("switchInstanceButton")
+                    Button("Sign Out", role: .destructive) {
+                        Task { await appSession.signOut() }
+                    }
+                    .accessibilityIdentifier("signOutButton")
+                } label: {
+                    capsuleIcon(systemImage: "person.crop.circle", isSelected: false)
+                }
+                .accessibilityIdentifier("accountMenu")
+                .help("Account")
+            }
+            #endif
         }
-        .padding(6)
-        .background(.regularMaterial, in: Capsule())
-        .overlay(Capsule().strokeBorder(.separator, lineWidth: 0.5))
-        .shadow(color: .black.opacity(0.15), radius: 8, y: 2)
+    }
+
+    private func capsuleButton(systemImage: String, label: String, accessibilityIdentifier: String? = nil, isSelected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            capsuleIcon(systemImage: systemImage, isSelected: isSelected)
+        }
+        .buttonStyle(.plain)
+        .help(label)
+        .accessibilityLabel(label)
+        .accessibilityIdentifier(accessibilityIdentifier ?? label)
+    }
+
+    private func capsuleIcon(systemImage: String, isSelected: Bool) -> some View {
+        Image(systemName: systemImage)
+            .font(.system(size: 17, weight: .medium))
+            .frame(width: 44, height: 44)
+            .foregroundStyle(isSelected ? Color.accentColor : .secondary)
+            .background(
+                Circle().fill(isSelected ? Color.accentColor.opacity(0.15) : .clear)
+            )
+            .background(
+                Circle().fill(.regularMaterial)
+            )
+            .overlay(
+                Circle().strokeBorder(.separator, lineWidth: 0.5)
+            )
+            .shadow(color: .black.opacity(0.15), radius: 6, y: 2)
     }
 }

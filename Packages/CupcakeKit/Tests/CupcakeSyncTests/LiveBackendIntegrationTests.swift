@@ -56,11 +56,11 @@ struct LiveBackendIntegrationTests {
                 try await annotationSync.createTextAnnotation(
                     sessionClientID: session.clientID,
                     stepClientID: firstStep.clientID,
-                    text: "iOS integration test annotation — safe to ignore/delete."
+                    text: "iOS integration test annotation, safe to ignore/delete."
                 )
 
                 let cachedAnnotations = try context.fetch(FetchDescriptor<CachedStepAnnotation>())
-                #expect(cachedAnnotations.first?.annotationText == "iOS integration test annotation — safe to ignore/delete.")
+                #expect(cachedAnnotations.first?.annotationText == "iOS integration test annotation, safe to ignore/delete.")
             }
         } catch {
             bodyError = error

@@ -251,7 +251,7 @@ struct MetadataColumnAutofillSheet: View {
                 .accessibilityIdentifier("advancedAutofillTemplateSamplesField")
             TextField("Target Sample Count", text: $targetSampleCountText)
                 .accessibilityIdentifier("advancedAutofillTargetSampleCountField")
-            Text("Must be at most \(sampleCount) — this table's own sample count.")
+            Text("Must be at most \(sampleCount), this table's own sample count.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             Picker("Fill Strategy", selection: $fillStrategy) {

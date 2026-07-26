@@ -251,12 +251,14 @@ struct TableTemplateEditSheet: View {
                         Image(systemName: "chevron.up")
                     }
                     .disabled(index == 0)
+                    .help("Move Column Up")
                     Button {
                         Task { await moveColumn(column, index: index, delta: 1) }
                     } label: {
                         Image(systemName: "chevron.down")
                     }
                     .disabled(index == columns.count - 1)
+                    .help("Move Column Down")
                 }
                 .buttonStyle(.plain)
                 .font(.caption)
@@ -276,6 +278,22 @@ struct TableTemplateEditSheet: View {
                 }
                 .tint(.blue)
                 .accessibilityIdentifier("duplicateTemplateColumnButton_\(column.name)")
+            }
+        }
+        .contextMenu {
+            if !isSelecting {
+                Button {
+                    Task { await duplicateColumn(column) }
+                } label: {
+                    Label("Duplicate", systemImage: "plus.square.on.square")
+                }
+                .accessibilityIdentifier("duplicateTemplateColumnMenuButton_\(column.name)")
+                Button(role: .destructive) {
+                    Task { await removeColumn(column) }
+                } label: {
+                    Label("Delete", systemImage: "trash")
+                }
+                .accessibilityIdentifier("deleteTemplateColumnMenuButton_\(column.name)")
             }
         }
     }

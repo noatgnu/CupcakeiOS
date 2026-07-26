@@ -1,6 +1,7 @@
 import CupcakeModels
 import CupcakeNetworking
 import CupcakeSync
+import CupcakeTranscription
 import PhotosUI
 import SwiftData
 import SwiftUI
@@ -152,6 +153,7 @@ struct SessionDetailView: View {
     @State private var hideScratched = false
     @State private var isShowingEditSheet = false
     @State private var isDeleting = false
+    @State private var isRefreshing = false
 
     var focusedStepClientID: UUID? = nil
 
@@ -230,6 +232,16 @@ struct SessionDetailView: View {
         return instrumentUsages.first(where: { $0.serverID == usageServerID })
     }
 
+    private func transcriptionVocabulary(for step: CachedProtocolStep?) -> [String] {
+        let additionalContextText = step.map { HTMLText.lightweightPlainText(from: $0.stepDescription) }
+        return ProtocolTranscriptionContext.vocabulary(
+            protocols: protocols,
+            stepReagents: allStepReagents,
+            reagents: allReagents,
+            additionalContextText: additionalContextText
+        )
+    }
+
     private func stepReagents(for step: CachedProtocolStep) -> [(stepReagent: CachedStepReagent, reagent: CachedReagent)] {
         allStepReagents
             .filter { $0.stepClientID == step.clientID }
@@ -266,7 +278,15 @@ struct SessionDetailView: View {
                             VideoAnnotationPreview(
                                 annotationServerID: annotation.serverID,
                                 transcription: annotation.transcription,
+                                translation: annotation.translation,
+                                language: annotation.language,
                                 refreshTranscription: annotation.serverID.map { id in { await refreshSessionTranscription(serverID: id) } },
+                                onUpdateTranscription: annotation.serverID.map { id in
+                                    { transcription, language, translation in
+                                        try await appSession.makeSyncServices().sessionAnnotationSync.updateTranscription(serverID: id, transcription: transcription, language: language, translation: translation)
+                                    }
+                                },
+                                contextualVocabulary: transcriptionVocabulary(for: nil),
                                 loadData: { try await sessionAnnotationFile(clientID: annotation.clientID) }
                             )
                         } else if annotation.annotationType == "sketch" {
@@ -278,6 +298,12 @@ struct SessionDetailView: View {
                                 translation: annotation.translation,
                                 language: annotation.language,
                                 refreshTranscription: annotation.serverID.map { id in { await refreshSessionTranscription(serverID: id) } },
+                                onUpdateTranscription: annotation.serverID.map { id in
+                                    { transcription, language, translation in
+                                        try await appSession.makeSyncServices().sessionAnnotationSync.updateTranscription(serverID: id, transcription: transcription, language: language, translation: translation)
+                                    }
+                                },
+                                contextualVocabulary: transcriptionVocabulary(for: nil),
                                 loadData: { try await sessionAnnotationFile(clientID: annotation.clientID) }
                             )
                         }
@@ -309,6 +335,25 @@ struct SessionDetailView: View {
                         .tint(.orange)
                         .accessibilityIdentifier("scratchSessionAnnotationButton")
                     }
+                    .contextMenu {
+                        if let shareURL = deepLinkURL(annotationServerID: annotation.serverID) {
+                            ShareLink(item: shareURL) {
+                                Label("Share Link", systemImage: "link")
+                            }
+                        }
+                        Button {
+                            Task { await toggleSessionAnnotationScratched(annotation) }
+                        } label: {
+                            Label(scratchActionTitle(scratched: annotation.scratched), systemImage: scratchActionIcon(scratched: annotation.scratched))
+                        }
+                        .accessibilityIdentifier("scratchSessionAnnotationMenuButton")
+                        Button(role: .destructive) {
+                            Task { await deleteSessionAnnotation(annotation) }
+                        } label: {
+                            Label("Delete", systemImage: "trash")
+                        }
+                        .accessibilityIdentifier("deleteSessionAnnotationMenuButton")
+                    }
                 }
                 Button("Add Annotation…") {
                     isShowingSessionAnnotationSheet = true
@@ -326,7 +371,30 @@ struct SessionDetailView: View {
             }
             if isProtocolMode {
             ForEach(steps) { step in
-                Section {
+                Section(step.section?.sectionDescription ?? "Untitled Section") {
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(alignment: .top) {
+                            HTMLText(html: StepTemplateRenderer.render(stepDescription: step.stepDescription, reagents: stepReagents(for: step)))
+                            if focusedStepClientID == nil, PlatformWindowPreference.prefersSeparateWindow {
+                                Spacer()
+                                Button {
+                                    openWindow(id: "step-session-window", value: StepSessionWindowID(sessionClientID: sessionClientID, stepClientID: step.clientID))
+                                } label: {
+                                    Image(systemName: "macwindow.badge.plus")
+                                }
+                                .buttonStyle(.borderless)
+                                .labelStyle(.iconOnly)
+                                .accessibilityLabel("Open Step in New Window")
+                                .accessibilityIdentifier("openStepSessionInWindowButton_\(step.clientID)")
+                                .help("Open Step in New Window")
+                            }
+                        }
+                        if let sessionServerID {
+                            StepTimerView(sessionServerID: sessionServerID, sessionClientID: sessionClientID, step: step) {
+                                await refreshTimeKeepers(sessionServerID: sessionServerID)
+                            }
+                        }
+                    }
                     ForEach(annotations(for: step)) { annotation in
                         Group {
                             if annotation.annotationType == "audio" {
@@ -336,6 +404,12 @@ struct SessionDetailView: View {
                                     translation: annotation.translation,
                                     language: annotation.language,
                                     refreshTranscription: annotation.serverID.map { id in { await refreshStepTranscription(serverID: id) } },
+                                    onUpdateTranscription: annotation.serverID.map { id in
+                                        { transcription, language, translation in
+                                            try await appSession.makeSyncServices().stepAnnotationSync.updateTranscription(serverID: id, transcription: transcription, language: language, translation: translation)
+                                        }
+                                    },
+                                    contextualVocabulary: transcriptionVocabulary(for: step),
                                     loadData: { try await stepAnnotationFile(clientID: annotation.clientID) }
                                 )
                             } else if annotation.annotationType == "image" {
@@ -344,7 +418,15 @@ struct SessionDetailView: View {
                                 VideoAnnotationPreview(
                                     annotationServerID: annotation.serverID,
                                     transcription: annotation.transcription,
+                                    translation: annotation.translation,
+                                    language: annotation.language,
                                     refreshTranscription: annotation.serverID.map { id in { await refreshStepTranscription(serverID: id) } },
+                                    onUpdateTranscription: annotation.serverID.map { id in
+                                        { transcription, language, translation in
+                                            try await appSession.makeSyncServices().stepAnnotationSync.updateTranscription(serverID: id, transcription: transcription, language: language, translation: translation)
+                                        }
+                                    },
+                                    contextualVocabulary: transcriptionVocabulary(for: step),
                                     loadData: { try await stepAnnotationFile(clientID: annotation.clientID) }
                                 )
                             } else if annotation.annotationType == "sketch" {
@@ -386,6 +468,25 @@ struct SessionDetailView: View {
                             .tint(.orange)
                             .accessibilityIdentifier("scratchStepAnnotationButton")
                         }
+                        .contextMenu {
+                            if let shareURL = deepLinkURL(annotationServerID: annotation.serverID) {
+                                ShareLink(item: shareURL) {
+                                    Label("Share Link", systemImage: "link")
+                                }
+                            }
+                            Button {
+                                Task { await toggleStepAnnotationScratched(annotation) }
+                            } label: {
+                                Label(scratchActionTitle(scratched: annotation.scratched), systemImage: scratchActionIcon(scratched: annotation.scratched))
+                            }
+                            .accessibilityIdentifier("scratchStepAnnotationMenuButton")
+                            Button(role: .destructive) {
+                                Task { await deleteStepAnnotation(annotation) }
+                            } label: {
+                                Label("Delete", systemImage: "trash")
+                            }
+                            .accessibilityIdentifier("deleteStepAnnotationMenuButton")
+                        }
                     }
                     ForEach(stepVariations(for: step)) { variation in
                         Text("Variation: \(variation.variationDescription) (\(HumanReadableDuration.format(seconds: variation.variationDuration)))")
@@ -403,29 +504,6 @@ struct SessionDetailView: View {
                             Label("Add Variation", systemImage: "arrow.triangle.branch")
                         }
                         .accessibilityIdentifier("addVariationButton")
-                    }
-                } header: {
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack(alignment: .top) {
-                            HTMLText(html: StepTemplateRenderer.render(stepDescription: step.stepDescription, reagents: stepReagents(for: step)))
-                            if focusedStepClientID == nil, PlatformWindowPreference.prefersSeparateWindow {
-                                Spacer()
-                                Button {
-                                    openWindow(id: "step-session-window", value: StepSessionWindowID(sessionClientID: sessionClientID, stepClientID: step.clientID))
-                                } label: {
-                                    Image(systemName: "macwindow.badge.plus")
-                                }
-                                .buttonStyle(.borderless)
-                                .labelStyle(.iconOnly)
-                                .accessibilityLabel("Open Step in New Window")
-                                .accessibilityIdentifier("openStepSessionInWindowButton_\(step.clientID)")
-                            }
-                        }
-                        if let sessionServerID {
-                            StepTimerView(sessionServerID: sessionServerID, sessionClientID: sessionClientID, step: step) {
-                                await refreshTimeKeepers(sessionServerID: sessionServerID)
-                            }
-                        }
                     }
                 }
             }
@@ -471,6 +549,19 @@ struct SessionDetailView: View {
                 }
             }
             if currentSession?.serverID != nil {
+                ToolbarItem {
+                    Button {
+                        Task { await refreshFromServer() }
+                    } label: {
+                        if isRefreshing {
+                            ProgressView()
+                        } else {
+                            Label("Refresh", systemImage: "arrow.clockwise")
+                        }
+                    }
+                    .disabled(isRefreshing)
+                    .accessibilityIdentifier("refreshSessionButton")
+                }
                 ToolbarItem {
                     Button {
                         isShowingEditSheet = true
@@ -537,7 +628,8 @@ struct SessionDetailView: View {
                 onSaveAudio: onSaveStepAudio,
                 onSaveVideo: onSaveStepVideo,
                 onSaveCalculator: { data in Task { await handleStepCalculator(step: step, data: data) } },
-                onSaveMolarityCalculator: { data in Task { await handleStepMolarityCalculator(step: step, data: data) } }
+                onSaveMolarityCalculator: { data in Task { await handleStepMolarityCalculator(step: step, data: data) } },
+                contextualVocabulary: transcriptionVocabulary(for: step)
             )
         }
         .sheet(isPresented: $isShowingSessionAnnotationSheet) {
@@ -576,7 +668,8 @@ struct SessionDetailView: View {
                 onSaveAudio: onSaveSessionAudio,
                 onSaveVideo: onSaveSessionVideo,
                 onSaveCalculator: { _ in },
-                onSaveMolarityCalculator: { _ in }
+                onSaveMolarityCalculator: { _ in },
+                contextualVocabulary: transcriptionVocabulary(for: nil)
             )
         }
         .sheet(item: $variationTargetStep, onDismiss: {
@@ -627,6 +720,18 @@ struct SessionDetailView: View {
             guard let stepServerID = step.serverID else { continue }
             try? await appSession.makeSyncServices().stepVariationSync.refetch(stepServerID: stepServerID, sessionServerID: sessionServerID)
         }
+    }
+
+    private func refreshFromServer() async {
+        guard let sessionServerID else { return }
+        isRefreshing = true
+        defer { isRefreshing = false }
+        let services = appSession.makeSyncServices()
+        try? await services.sessionSync.refetchAll()
+        try? await services.sessionAnnotationSync.refetchAll()
+        try? await services.stepAnnotationSync.refetchAll()
+        await refreshTimeKeepers(sessionServerID: sessionServerID)
+        await refetchStepVariations()
     }
 
     private func refreshTimeKeepers(sessionServerID: Int64) async {

@@ -223,6 +223,20 @@ public struct UnimodFullData: Decodable, Sendable {
     public let deltaMonoMass: String?
     public let deltaComposition: String?
     public let specifications: [String: [String: String]]
+
+    private enum CodingKeys: String, CodingKey {
+        case accession, name, definition, deltaMonoMass, deltaComposition, specifications
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        accession = try container.decodeIfPresent(String.self, forKey: .accession)
+        name = try container.decodeIfPresent(String.self, forKey: .name)
+        definition = try container.decodeIfPresent(String.self, forKey: .definition)
+        deltaMonoMass = try container.decodeIfPresent(String.self, forKey: .deltaMonoMass)
+        deltaComposition = try container.decodeIfPresent(String.self, forKey: .deltaComposition)
+        specifications = try container.decodeIfPresent([String: [String: String]].self, forKey: .specifications) ?? [:]
+    }
 }
 
 public struct OntologySuggestionDTO: Decodable, Sendable, Identifiable {

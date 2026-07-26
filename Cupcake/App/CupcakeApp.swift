@@ -12,7 +12,7 @@ struct CupcakeApp: App {
     @Environment(\.openWindow) private var openWindow
     #endif
 
-    let cupcakeStore: ModelContainer
+    @State private var cupcakeStore: ModelContainer
     let cupcakeOntologyStore: ModelContainer
     @State private var appSession: AppSession
     @AppStorage("appAppearance") private var appearanceRawValue: String = AppAppearance.system.rawValue
@@ -26,10 +26,11 @@ struct CupcakeApp: App {
         if isUITesting {
             AppSession.resetPersistedStateForUITesting()
         }
-        let store = Self.makeCupcakeStore(inMemoryOnly: isUITesting)
-        cupcakeStore = store
+        let initialContext: AppSession.ActiveContext = isUITesting ? .none : AppSession.resolveInitialContext()
+        let store = Self.makeCupcakeStore(storeFileName: AppSession.storeFileName(for: initialContext), inMemoryOnly: isUITesting)
+        _cupcakeStore = State(initialValue: store)
         cupcakeOntologyStore = Self.makeOntologyStore(inMemoryOnly: isUITesting)
-        _appSession = State(initialValue: AppSession(modelContainer: store))
+        _appSession = State(initialValue: AppSession(modelContainer: store, activeContext: initialContext, isUITesting: isUITesting))
 
         if ProcessInfo.processInfo.arguments.contains("--ui-testing-seed-storage-instrument") {
             let context = ModelContext(store)
@@ -57,8 +58,14 @@ struct CupcakeApp: App {
             RootNavigationView(ontologyStore: cupcakeOntologyStore)
                 .environment(appSession)
                 .preferredColorScheme(resolvedColorScheme)
+                .id(ObjectIdentifier(cupcakeStore))
                 .onOpenURL { url in
                     appSession.handleDeepLink(url)
+                }
+                .onAppear {
+                    appSession.onRequestContainerSwap = { newContainer in
+                        cupcakeStore = newContainer
+                    }
                 }
         }
         .modelContainer(cupcakeStore)
@@ -79,8 +86,14 @@ struct CupcakeApp: App {
                 Button("Metadata Table Templates") { PlatformWindowPreference.openOrFocusWindow(id: "table-template-manager", using: openWindow) }
                 Button("Column Templates") { PlatformWindowPreference.openOrFocusWindow(id: "column-template-manager", using: openWindow) }
                 Button("Metadata Tables") { PlatformWindowPreference.openOrFocusWindow(id: "metadata-tables-browser", using: openWindow) }
+                Button("Lab Groups") { PlatformWindowPreference.openOrFocusWindow(id: "lab-group-manager", using: openWindow) }
                 Button("My Favourites") { PlatformWindowPreference.openOrFocusWindow(id: "favourites-manager", using: openWindow) }
                 Button("Sync Issues") { PlatformWindowPreference.openOrFocusWindow(id: "sync-issues", using: openWindow) }
+                Button("Async Tasks") { PlatformWindowPreference.openOrFocusWindow(id: "async-task-center", using: openWindow) }
+            }
+            CommandGroup(replacing: .appSettings) {
+                Button("Settings…") { PlatformWindowPreference.openOrFocusWindow(id: "settings", using: openWindow) }
+                    .keyboardShortcut(",", modifiers: .command)
             }
         }
         #endif
@@ -124,6 +137,19 @@ struct CupcakeApp: App {
         .defaultLaunchBehavior(.suppressed)
         #endif
 
+        WindowGroup("Lab Groups", id: "lab-group-manager") {
+            NavigationStack {
+                LabGroupListView()
+            }
+            .environment(appSession)
+            .preferredColorScheme(resolvedColorScheme)
+        }
+        .modelContainer(cupcakeStore)
+        .defaultSize(width: 700, height: 560)
+        #if os(macOS)
+        .defaultLaunchBehavior(.suppressed)
+        #endif
+
         WindowGroup("My Favourites", id: "favourites-manager") {
             NavigationStack {
                 FavouritesManagementSheet()
@@ -146,6 +172,19 @@ struct CupcakeApp: App {
         }
         .modelContainer(cupcakeStore)
         .defaultSize(width: 360, height: 400)
+        #if os(macOS)
+        .defaultLaunchBehavior(.suppressed)
+        #endif
+
+        WindowGroup("Async Tasks", id: "async-task-center") {
+            NavigationStack {
+                AsyncTaskCenterView()
+            }
+            .environment(appSession)
+            .preferredColorScheme(resolvedColorScheme)
+        }
+        .modelContainer(cupcakeStore)
+        .defaultSize(width: 420, height: 480)
         #if os(macOS)
         .defaultLaunchBehavior(.suppressed)
         #endif
@@ -227,23 +266,18 @@ struct CupcakeApp: App {
         .defaultLaunchBehavior(.suppressed)
         #endif
 
-        #if os(macOS)
-        Settings {
-            SettingsView()
-                .modelContainer(cupcakeOntologyStore)
-                .preferredColorScheme(resolvedColorScheme)
-                .frame(minWidth: 500, minHeight: 400)
-        }
-        #else
         WindowGroup("Settings", id: "settings") {
             SettingsView()
+                .environment(appSession)
                 .modelContainer(cupcakeOntologyStore)
                 .preferredColorScheme(resolvedColorScheme)
+                #if os(macOS)
+                .frame(minWidth: 500, minHeight: 400)
+                #endif
         }
         .defaultSize(width: 500, height: 400)
         #if os(macOS)
         .defaultLaunchBehavior(.suppressed)
-        #endif
         #endif
     }
 
@@ -255,7 +289,7 @@ struct CupcakeApp: App {
         }
     }
 
-    private static func makeCupcakeStore(inMemoryOnly: Bool) -> ModelContainer {
+    static func makeCupcakeStore(storeFileName: String = "CupcakeStore.store", inMemoryOnly: Bool) -> ModelContainer {
         let schema = Schema([
             CachedProtocol.self,
             CachedProtocolSection.self,
@@ -287,12 +321,13 @@ struct CupcakeApp: App {
             CachedReagentSubscription.self,
             CachedSamplePool.self,
             OutboxEntry.self,
+            InstanceMetadata.self,
         ])
         let configuration: ModelConfiguration
         if inMemoryOnly {
             configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
         } else {
-            let storeURL = Self.applicationSupportDirectory.appendingPathComponent("CupcakeStore.store")
+            let storeURL = Self.applicationSupportDirectory.appendingPathComponent(storeFileName)
             configuration = ModelConfiguration(schema: schema, url: storeURL)
         }
         do {
@@ -302,7 +337,7 @@ struct CupcakeApp: App {
         }
     }
 
-    private static var applicationSupportDirectory: URL {
+    static var applicationSupportDirectory: URL {
         let url = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url

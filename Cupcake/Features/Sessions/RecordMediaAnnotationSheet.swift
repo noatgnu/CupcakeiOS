@@ -108,15 +108,28 @@ struct RecordMediaAnnotationSheet: View {
 
     let onSaveLocally: (RecordingMode, URL, String?, String?, String?) async throws -> Void
     let onSaved: () -> Void
+    let contextualVocabulary: [String]
 
     private static let commonLocales = [
         "en-US", "es-ES", "fr-FR", "de-DE", "zh-Hans", "ja-JP",
     ]
 
+    private static func defaultLocaleIdentifier() -> String {
+        let current = Locale.current.identifier
+        if commonLocales.contains(current) {
+            return current
+        }
+        if let languageCode = Locale.current.language.languageCode?.identifier,
+           let match = commonLocales.first(where: { Locale(identifier: $0).language.languageCode?.identifier == languageCode }) {
+            return match
+        }
+        return commonLocales[0]
+    }
+
     @State private var mode: RecordingMode
     @State private var audioRecorder = AudioRecorder()
     @State private var videoRecorder = VideoRecorder()
-    @State private var localeIdentifier = Locale.current.identifier
+    @State private var localeIdentifier = Self.defaultLocaleIdentifier()
     @State private var transcript = ""
     @State private var transcriptSegments: [TranscriptionSegment] = []
     @State private var translatedText = ""
@@ -136,11 +149,13 @@ struct RecordMediaAnnotationSheet: View {
     init(
         initialMode: RecordingMode,
         onSaveLocally: @escaping (RecordingMode, URL, String?, String?, String?) async throws -> Void,
-        onSaved: @escaping () -> Void
+        onSaved: @escaping () -> Void,
+        contextualVocabulary: [String] = []
     ) {
         self._mode = State(initialValue: initialMode)
         self.onSaveLocally = onSaveLocally
         self.onSaved = onSaved
+        self.contextualVocabulary = contextualVocabulary
     }
 
     private var isRecording: Bool {
@@ -181,8 +196,8 @@ struct RecordMediaAnnotationSheet: View {
                     }
                     .disabled(isRecording || hasRecordedFile)
                     .accessibilityIdentifier("spokenLanguagePicker")
-                    if !SpeechTranscriber.supportsOnDeviceRecognition(localeIdentifier: localeIdentifier) {
-                        Text("On-device recognition isn't available for this language — transcription will use network recognition instead, and requires an internet connection.")
+                    if !TranscriptionEngineFactory.makeEngine().supportsOnDeviceRecognition(languageCode: localeIdentifier) {
+                        Text("On-device recognition isn't available for this language. Transcription will use network recognition instead, and requires an internet connection.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -371,7 +386,13 @@ struct RecordMediaAnnotationSheet: View {
             }
             guard let fileURL else { return }
             do {
-                let result = try await SpeechTranscriber.transcribe(fileURL: fileURL, localeIdentifier: localeIdentifier)
+                let engine = TranscriptionEngineFactory.makeEngine()
+                let vocabulary = TranscriptionVocabularyStore.currentTexts() + contextualVocabulary
+                let result = try await engine.transcribe(
+                    fileURL: fileURL,
+                    languageCode: localeIdentifier,
+                    vocabulary: vocabulary
+                )
                 transcript = result.text
                 transcriptSegments = result.segments
             } catch {

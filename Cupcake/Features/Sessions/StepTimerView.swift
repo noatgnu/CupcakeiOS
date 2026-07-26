@@ -52,10 +52,10 @@ struct StepTimerView: View {
     }
 
     private static func remainingSeconds(for timeKeeper: CachedTimeKeeper) -> Int {
-        guard timeKeeper.started, let startTimeString = timeKeeper.startTime,
-              let startDate = ISO8601DateFormatter().date(from: startTimeString) else {
+        guard timeKeeper.started, let startTimeString = timeKeeper.startTime else {
             return timeKeeper.currentDuration
         }
+        let startDate = Date.parsedISO8601(startTimeString)
         let elapsed = Int(Date().timeIntervalSince(startDate))
         return max(0, timeKeeper.currentDuration - elapsed)
     }

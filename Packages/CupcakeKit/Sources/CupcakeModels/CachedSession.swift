@@ -12,7 +12,7 @@ public final class CachedSession {
     public var status: String
     public var protocolServerIDs: [Int64]
     public var protocolClientIDs: [UUID]
-    @available(*, deprecated, message: "Use protocolClientIDs instead — kept for one release.")
+    @available(*, deprecated, message: "Use protocolClientIDs instead, kept for one release.")
     public var primaryProtocolClientID: UUID?
     public var createdAt: Date
 

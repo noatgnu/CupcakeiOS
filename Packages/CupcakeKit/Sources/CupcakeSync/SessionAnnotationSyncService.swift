@@ -208,6 +208,19 @@ public actor SessionAnnotationSyncService {
         return true
     }
 
+    public func updateTranscription(serverID: Int64, transcription: String?, language: String?, translation: String?) async throws {
+        guard let token = deviceToken() else {
+            throw SessionAnnotationSyncError.noDeviceToken
+        }
+        let _: SessionAnnotationDTO = try await apiClient.send(
+            "session-annotations/\(serverID)/",
+            method: .patch,
+            body: UpdateSessionAnnotationTranscriptionRequest(transcription: transcription, language: language, translation: translation),
+            authorizationHeader: "DeviceToken \(token)"
+        )
+        try await store.updateTranscriptionLocally(serverID: serverID, transcription: transcription, language: language, translation: translation)
+    }
+
     public func downloadFile(clientID: UUID) async throws -> (data: Data, suggestedFilename: String?) {
         guard let token = deviceToken() else {
             throw SessionAnnotationSyncError.noDeviceToken
@@ -285,6 +298,9 @@ actor SessionAnnotationStore {
             annotation.annotationType = dto.annotationType
             annotation.order = dto.order
             annotation.scratched = dto.scratched
+            annotation.transcription = dto.transcription
+            annotation.language = dto.language
+            annotation.translation = dto.translation
             annotation.createdAt = dto.createdAt
         }
         try modelContext.save()

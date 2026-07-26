@@ -30,11 +30,13 @@ public struct DeviceTokenCreateRequest: Encodable, Sendable {
     public var label: String
     public var description: String
     public var permission: String
+    public var expiresAt: String?
 
-    public init(label: String, description: String = "", permission: String = "write") {
+    public init(label: String, description: String = "", permission: String = "write", expiresAt: String? = nil) {
         self.label = label
         self.description = description
         self.permission = permission
+        self.expiresAt = expiresAt
     }
 }
 
@@ -46,7 +48,7 @@ public struct ExchangeAuthCodeRequest: Encodable, Sendable {
     }
 }
 
-public struct DeviceTokenDTO: Decodable, Sendable {
+public struct DeviceTokenDTO: Decodable, Sendable, Identifiable {
     public let id: Int
     public let token: String
     public let label: String
@@ -59,4 +61,24 @@ public struct DeviceTokenDTO: Decodable, Sendable {
     public let lastUsedAt: String?
     public let expiresAt: String?
     public let isExpired: Bool
+}
+
+public struct UpdateDeviceTokenRequest: Encodable, Sendable {
+    public var label: String?
+    public var description: String?
+    public var permission: String?
+
+    public init(label: String? = nil, description: String? = nil, permission: String? = nil) {
+        self.label = label
+        self.description = description
+        self.permission = permission
+    }
+}
+
+public struct RotateDeviceTokenResponse: Decodable, Sendable {
+    public let token: String
+}
+
+public struct ToggleDeviceTokenResponse: Decodable, Sendable {
+    public let enabled: Bool
 }

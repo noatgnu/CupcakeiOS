@@ -16,6 +16,8 @@ struct StoredReagentDetailView: View {
     @State private var isShowingRecordActionSheet = false
     @State private var isShowingAddDocumentSheet = false
     @State private var documentSearchText = ""
+    @State private var editingMetadataColumn: CachedMetadataColumn?
+    @State private var isShowingAddMetadataColumnSheet = false
 
     private var storedReagent: CachedStoredReagent? {
         storedReagents.first(where: { $0.clientID == storedReagentClientID })
@@ -79,9 +81,13 @@ struct StoredReagentDetailView: View {
                 }
             }
             if storedReagent?.serverID != nil {
-                MetadataFieldsSection(metadataTableServerID: storedReagent?.metadataTableServerID, ontologyStore: ontologyStore) {
-                    await refreshMetadataTable()
-                }
+                MetadataFieldsSection(
+                    metadataTableServerID: storedReagent?.metadataTableServerID,
+                    ontologyStore: ontologyStore,
+                    onColumnsChanged: { await refreshMetadataTable() },
+                    editingColumn: $editingMetadataColumn,
+                    isShowingAddColumnSheet: $isShowingAddMetadataColumnSheet
+                )
                 Section("Documents") {
                     if documentsHere.isEmpty {
                         Text("No documents yet")
@@ -152,6 +158,16 @@ struct StoredReagentDetailView: View {
         .sheet(isPresented: $isShowingAddDocumentSheet) {
             if let serverID = storedReagent?.serverID {
                 AddStoredReagentAnnotationSheet(storedReagentServerID: serverID, reagentName: storedReagent?.reagentName ?? "Reagent")
+            }
+        }
+        .sheet(item: $editingMetadataColumn) { column in
+            MetadataValueEditSheet(column: column, projectServerID: nil, ontologyStore: ontologyStore)
+        }
+        .sheet(isPresented: $isShowingAddMetadataColumnSheet) {
+            if let tableServerID = storedReagent?.metadataTableServerID {
+                AddMetadataColumnSheet(tableServerID: tableServerID, ontologyStore: ontologyStore) {
+                    await refreshMetadataTable()
+                }
             }
         }
         .task(id: storedReagent?.serverID) {

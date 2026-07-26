@@ -1,4 +1,5 @@
 
+import CryptoKit
 import XCTest
 
 #if os(macOS)
@@ -20,8 +21,7 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
 
         let serverURLField = app.textFields["serverURLField"]
         XCTAssertTrue(serverURLField.waitForExistence(timeout: 5))
-        serverURLField.tap()
-        replaceText(in: serverURLField, with: "http://127.0.0.1:8002/api/v1/")
+        replaceText(in: serverURLField, with: "http://127.0.0.1:8002/api/v1/", in: app)
 
         XCTAssertEqual(serverURLField.value as? String, "http://127.0.0.1:8002/api/v1/", "The server URL field should contain exactly the pasted text, not a mix of old and new")
 
@@ -56,7 +56,46 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         matchingRows.firstMatch.tap()
 
         XCTAssertFalse(elementContaining("Pending sync", in: app).exists, "A protocol created while signed in against a reachable backend should sync immediately, not queue")
-        XCTAssertFalse(elementContaining("Local only", in: app).exists, "\"Local only\" is standalone-mode-only phrasing — shouldn't appear when signed in")
+        XCTAssertFalse(elementContaining("Local only", in: app).exists, "\"Local only\" is standalone-mode-only phrasing, shouldn't appear when signed in")
+    }
+
+    @MainActor
+    func testSyncProgressBannerShowsPullDuringSignInSync() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing-reset-state"]
+        app.launch()
+        signIn(app)
+
+        let bannerPredicate = NSPredicate(format: "identifier == %@", "syncProgressBanner")
+        var sawPullBanner = false
+        var sawPullLabel = ""
+        let deadline = Date().addingTimeInterval(20)
+        while Date() < deadline {
+            let candidates = [app.otherElements.matching(bannerPredicate), app.staticTexts.matching(bannerPredicate)]
+            for query in candidates {
+                let element = query.firstMatch
+                if element.exists {
+                    let label = element.label
+                    if label.hasPrefix("Pulling") {
+                        sawPullBanner = true
+                        sawPullLabel = label
+                    }
+                }
+            }
+            if sawPullBanner { break }
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+
+        XCTAssertTrue(sawPullBanner, "The sync-progress banner should show a \"Pulling …\" label at some point during the automatic sign-in sync against a real backend with real data to pull")
+        if sawPullBanner {
+            XCTAssertTrue(sawPullLabel.hasSuffix("…"), "The pull label should end with an ellipsis, e.g. \"Pulling protocols…\" — got \"\(sawPullLabel)\"")
+        }
+
+        let bannerDeadline = Date().addingTimeInterval(30)
+        while Date() < bannerDeadline, app.otherElements.matching(bannerPredicate).firstMatch.exists || app.staticTexts.matching(bannerPredicate).firstMatch.exists {
+            Thread.sleep(forTimeInterval: 0.2)
+        }
+        XCTAssertFalse(app.otherElements.matching(bannerPredicate).firstMatch.exists, "The banner should disappear once syncAll() finishes, not stay stuck")
     }
 
     @MainActor
@@ -85,8 +124,7 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
 
         let serverURLField = app.textFields["serverURLField"]
         XCTAssertTrue(serverURLField.waitForExistence(timeout: 5))
-        serverURLField.tap()
-        replaceText(in: serverURLField, with: "http://127.0.0.1:8002/api/v1/")
+        replaceText(in: serverURLField, with: "http://127.0.0.1:8002/api/v1/", in: app)
 
         let usernameField = app.textFields["usernameField"]
         usernameField.tap()
@@ -153,7 +191,7 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         let valueField = app.textFields["metadataValueField"]
         XCTAssertTrue(valueField.waitForExistence(timeout: 5))
         let newValue = "SN-\(Int(Date().timeIntervalSince1970))"
-        replaceText(in: valueField, with: newValue)
+        replaceText(in: valueField, with: newValue, in: app)
 
         let saveMetadataValueButton = app.buttons["saveMetadataValueButton"]
         XCTAssertTrue(saveMetadataValueButton.waitForExistence(timeout: 10))
@@ -269,8 +307,7 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
 
         let serverURLField = app.textFields["serverURLField"]
         XCTAssertTrue(serverURLField.waitForExistence(timeout: 5))
-        serverURLField.tap()
-        replaceText(in: serverURLField, with: "http://127.0.0.1:8002/api/v1/")
+        replaceText(in: serverURLField, with: "http://127.0.0.1:8002/api/v1/", in: app)
 
         let usernameField = app.textFields["usernameField"]
         usernameField.tap()
@@ -302,8 +339,7 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         let nameField = app.textFields["tableTemplateNameField"]
         XCTAssertTrue(nameField.waitForExistence(timeout: 5))
         let renamedName = templateName + " Renamed"
-        nameField.tap()
-        replaceText(in: nameField, with: renamedName)
+        replaceText(in: nameField, with: renamedName, in: app)
         app.buttons["saveTableTemplateButton"].tap()
 
         #if os(iOS)
@@ -313,8 +349,7 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
             templatesBackButton.tap()
         }
         #endif
-        searchField.tap()
-        replaceText(in: searchField, with: renamedName)
+        replaceText(in: searchField, with: renamedName, in: app)
         let renamedRow = app.buttons.matching(identifier: "myTableTemplateRow_\(renamedName)").firstMatch
         XCTAssertTrue(renamedRow.waitForExistence(timeout: 10), "The renamed template should appear in the management list")
     }
@@ -400,7 +435,7 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         XCTAssertTrue(msProteomicsRow.waitForExistence(timeout: 10), "ms-proteomics should be selectable since the sdrf dataset was just imported")
         msProteomicsRow.tap()
 
-        replaceText(in: schemaSearchField, with: "human")
+        replaceText(in: schemaSearchField, with: "human", in: app)
         let humanRow = app.buttons["schemaRow_human"]
         XCTAssertTrue(humanRow.waitForExistence(timeout: 10), "human should be selectable since the sdrf dataset was just imported")
         humanRow.tap()
@@ -552,22 +587,22 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         let columnTemplateName = "Flow Column Template \(timestamp)"
         let columnTemplateNameField = app.textFields["columnTemplateNameField"]
         XCTAssertTrue(columnTemplateNameField.waitForExistence(timeout: 5))
-        replaceText(in: columnTemplateNameField, with: columnTemplateName)
+        replaceText(in: columnTemplateNameField, with: columnTemplateName, in: app)
         columnTemplateNameField.typeText("\n")
         Thread.sleep(forTimeInterval: 0.3)
 
         let columnTemplateColumnNameField = app.textFields["columnTemplateColumnNameField"]
-        replaceText(in: columnTemplateColumnNameField, with: "characteristics[flow column template]")
+        replaceText(in: columnTemplateColumnNameField, with: "characteristics[flow column template]", in: app)
         columnTemplateColumnNameField.typeText("\n")
         Thread.sleep(forTimeInterval: 0.3)
 
         let tagsField = app.textFields["columnTemplateTagsField"]
-        replaceText(in: tagsField, with: "flowtest, verify")
+        replaceText(in: tagsField, with: "flowtest, verify", in: app)
         tagsField.typeText("\n")
         Thread.sleep(forTimeInterval: 0.3)
 
         let defaultPositionField = app.textFields["columnTemplateDefaultPositionField"]
-        replaceText(in: defaultPositionField, with: "2")
+        replaceText(in: defaultPositionField, with: "2", in: app)
 
         app.buttons["saveColumnTemplateButton"].tap()
 
@@ -623,6 +658,7 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
 
         let openFullTableViewButton = app.buttons["openFullMetadataTableViewButton"]
         XCTAssertTrue(openFullTableViewButton.waitForExistence(timeout: 15))
+        scrollDownUntilVisible(openFullTableViewButton, in: app)
         openFullTableViewButton.tap()
 
         tapSegment("List", within: "metadataTableViewModePicker", in: app)
@@ -657,8 +693,7 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
 
         let templateSamplesField = app.textFields["advancedAutofillTemplateSamplesField"]
         XCTAssertTrue(templateSamplesField.waitForExistence(timeout: 5))
-        templateSamplesField.tap()
-        replaceText(in: templateSamplesField, with: "1")
+        replaceText(in: templateSamplesField, with: "1", in: app)
 
         let targetCountField = app.textFields["advancedAutofillTargetSampleCountField"]
         targetCountField.tap()
@@ -721,13 +756,46 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
 
         let sampleCountField = app.textFields["metadataTableEditSampleCountField"]
         XCTAssertTrue(sampleCountField.waitForExistence(timeout: 5))
-        sampleCountField.tap()
-        replaceText(in: sampleCountField, with: "1")
+        replaceText(in: sampleCountField, with: "1", in: app)
         app.buttons["saveMetadataTableEditButton"].tap()
 
         XCTAssertTrue(app.alerts["Reduce Sample Count?"].waitForExistence(timeout: 10), "Reducing an already-populated sample count should ask for confirmation, not silently apply")
         app.buttons["confirmSampleCountReductionButton"].tap()
         XCTAssertFalse(app.alerts["Couldn't save table"].waitForExistence(timeout: 5), "Confirming the reduction should let the save go through")
+    }
+
+    @MainActor
+    func testOntologyBrowserSearchesOnlineAcrossEnabledDatabases() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing-reset-state"]
+        app.launch()
+        signIn(app)
+
+        tapTab("Protocols", in: app, timeout: 30)
+        #if os(macOS)
+        app.typeKey(",", modifierFlags: .command)
+        #else
+        tapToolbarButton("settingsButton", label: "Settings", in: app)
+        #endif
+        XCTAssertTrue(waitForTextAppearing("Ontology Browser", in: app, timeout: 10))
+        elementContaining("Ontology Browser", in: app).tap()
+
+        tapSegment("Online", within: "ontologyBrowserModePicker", in: app)
+
+        let searchField = app.textFields["ontologyBrowserSearchField"]
+        XCTAssertTrue(searchField.waitForExistence(timeout: 10))
+        searchField.tap()
+        searchField.typeText("Phospho")
+
+        XCTAssertTrue(waitForTextAppearing("UNIMOD", in: app, timeout: 15), "A Unimod section should appear for a Phospho search (native List section headers render uppercase)")
+        XCTAssertTrue(waitForTextAppearing("Phospho", in: app, timeout: 10), "A Phospho result row should appear")
+
+        let phosphoRow = elementContaining("Phospho", in: app)
+        XCTAssertTrue(phosphoRow.waitForExistence(timeout: 5))
+        phosphoRow.tap()
+
+        XCTAssertTrue(waitForTextAppearing("Delta Mono Mass", in: app, timeout: 10), "The Unimod detail view should show mass/composition fields, not the generic Simple Term layout")
+        XCTAssertTrue(waitForTextAppearing("79.966331", in: app, timeout: 5), "The real Phospho delta mono mass should be shown")
     }
 
     @MainActor
@@ -787,9 +855,11 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
             stepSyncErrorAlert.buttons.firstMatch.tap()
         }
 
-        let rateButton = app.buttons["rateProtocolButton"]
-        XCTAssertTrue(rateButton.waitForExistence(timeout: 5))
-        rateButton.tap()
+        let backToProtocolButton = app.navigationBars.buttons.element(boundBy: 0)
+        if backToProtocolButton.waitForExistence(timeout: 5), backToProtocolButton.isHittable {
+            backToProtocolButton.tap()
+        }
+        tapToolbarButton("rateProtocolButton", label: "Rate Protocol", in: app, timeout: 10)
 
         let complexitySlider = app.sliders["complexityRatingSlider"]
         XCTAssertTrue(complexitySlider.waitForExistence(timeout: 5))
@@ -837,9 +907,12 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         XCTAssertTrue(bookingKindButton.waitForExistence(timeout: 5), "\"Booking\" should be offered once the session and step both have serverIDs")
         bookingKindButton.tap()
 
-        app.buttons["bookingAnnotationInstrumentRow_Test Centrifuge"].tap()
+        let instrumentRow = app.buttons["bookingAnnotationInstrumentRow_Test Centrifuge"]
+        XCTAssertTrue(instrumentRow.waitForExistence(timeout: 10))
+        instrumentRow.tap()
 
         let bookingDescField = app.textFields["bookingAnnotationDescriptionField"]
+        scrollDownUntilVisible(bookingDescField, in: app)
         XCTAssertTrue(bookingDescField.waitForExistence(timeout: 5))
         bookingDescField.tap()
         bookingDescField.typeText("Spin test samples")
@@ -968,7 +1041,7 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         signIn(app)
 
         tapTab("Inventory", in: app, timeout: 30)
-        tapSegment("Instruments", in: app)
+        tapSegment("Instruments", in: app, timeout: 15)
 
         tapToolbarButton("newInstrumentButton", label: "New Instrument", in: app, timeout: 10)
         let instrumentName = "Live Metadata Instrument \(timestamp)"
@@ -989,6 +1062,7 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
 
         let addInstrumentMetadataButton = app.buttons["addMetadataColumnButton"]
         XCTAssertTrue(addInstrumentMetadataButton.waitForExistence(timeout: 15), "The Metadata section should appear once the instrument's auto-created metadata table syncs")
+        scrollDownUntilVisible(addInstrumentMetadataButton, in: app)
         addInstrumentMetadataButton.tap()
 
         let templateSearchField = app.textFields["addColumnSearchField"]
@@ -998,14 +1072,11 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
 
         let templateRow = app.buttons["addColumnGroupRow_\(columnName)"]
         XCTAssertTrue(templateRow.waitForExistence(timeout: 10), "The already-seeded \"salinity\" column template should appear in the search results")
+        templateRow.tap()
 
         let instrumentFieldRow = app.buttons["metadataColumnRow_\(columnName)"]
-        for _ in 0..<3 {
-            guard templateRow.exists else { break }
-            templateRow.tap()
-            if instrumentFieldRow.waitForExistence(timeout: 5) { break }
-        }
         XCTAssertTrue(instrumentFieldRow.waitForExistence(timeout: 15), "The newly-added metadata field should appear once synced")
+        scrollDownUntilVisible(instrumentFieldRow, in: app)
         instrumentFieldRow.tap()
 
         let instrumentValueField = firstExisting(app.textFields["metadataValueField"], app.textViews["metadataValueField"])
@@ -1016,7 +1087,6 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
 
         XCTAssertTrue(waitForTextAppearing("42.5", in: app, timeout: 15), "The edited metadata value should appear once synced")
 
-        tapTab("Inventory", in: app, timeout: 15)
         tapSegment("Storage", in: app)
 
         tapMenuItem("storageAddMenu", item: "New Location", in: app)
@@ -1105,16 +1175,16 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         let personalRow = app.buttons["metadataTemplateRow_\(seed.personalTemplateName)"]
         XCTAssertTrue(personalRow.waitForExistence(timeout: 10), "The personal template should be listed under the Personal category")
 
-        replaceText(in: templateSearchFieldForTiers, with: seed.jobGroupTemplateName)
+        replaceText(in: templateSearchFieldForTiers, with: seed.jobGroupTemplateName, in: app)
         selectPickerOption("templateCategoryFilterPicker", option: "Job's Lab Group", in: app)
         XCTAssertTrue(app.buttons["metadataTemplateRow_\(seed.jobGroupTemplateName)"].waitForExistence(timeout: 10), "The job's own lab-group template should be listed under Job's Lab Group")
 
-        replaceText(in: templateSearchFieldForTiers, with: seed.otherGroupTemplateName)
+        replaceText(in: templateSearchFieldForTiers, with: seed.otherGroupTemplateName, in: app)
         selectPickerOption("templateCategoryFilterPicker", option: "Shared With Me", in: app)
         XCTAssertTrue(app.buttons["metadataTemplateRow_\(seed.otherGroupTemplateName)"].waitForExistence(timeout: 10), "The other lab group's template should be listed under Shared With Me")
 
         selectPickerOption("templateCategoryFilterPicker", option: "All", in: app)
-        replaceText(in: templateSearchFieldForTiers, with: seed.personalTemplateName)
+        replaceText(in: templateSearchFieldForTiers, with: seed.personalTemplateName, in: app)
         XCTAssertTrue(personalRow.waitForExistence(timeout: 10))
         personalRow.tap()
 
@@ -1129,16 +1199,497 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         XCTAssertTrue(firstColumnRow.waitForExistence(timeout: 15), "The metadata table's first column should render")
 
         let firstGridCell = app.buttons["metadataCell_\(seed.firstColumnName)_1"]
+        scrollDownUntilVisible(firstGridCell, in: app)
         XCTAssertTrue(firstGridCell.waitForExistence(timeout: 10), "The per-sample grid should render a cell for sample 1")
 
     }
 
     @MainActor
-    private func signIn(_ app: XCUIApplication) {
+    func testMetadataTablesBrowserOpensAsRealWindowOnRegularWidth() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing-reset-state"]
+        app.launch()
+        signIn(app)
+
+        tapTab("Jobs", in: app, timeout: 30)
+
+        #if os(macOS)
+        let windowCountBefore = app.windows.count
+        #endif
+
+        tapToolbarButton("metadataTablesBrowserButton", label: "Metadata Tables", in: app, timeout: 10)
+
+        let searchField = app.textFields["metadataTablesBrowserSearchField"]
+        XCTAssertTrue(searchField.waitForExistence(timeout: 10), "The Metadata Tables browser's own content should be reachable")
+
+        #if os(macOS)
+        XCTAssertGreaterThan(app.windows.count, windowCountBefore, "On macOS, Metadata Tables should open in a genuinely separate window, not a sheet")
+        #endif
+    }
+
+    @MainActor
+    func testWorkOfflineToggleQueuesThenSyncsBackOnReconnect() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing-reset-state"]
+        app.launch()
+        signIn(app)
+
+        tapTab("Protocols", in: app, timeout: 30)
+        openConnectionSettings(in: app)
+
+        tapWorkOfflineToggle(in: app)
+
+        closeSettings(in: app)
+
+        tapTab("Protocols", in: app, timeout: 10)
+        tapToolbarButton("newProtocolButton", label: "New Protocol", in: app)
+
+        let protocolTitle = "Work Offline Test Protocol \(Date().timeIntervalSince1970)"
+        let titleField = app.textFields["newProtocolTitleField"]
+        XCTAssertTrue(titleField.waitForExistence(timeout: 5))
+        titleField.tap()
+        titleField.typeText(protocolTitle)
+        app.buttons["createProtocolButton"].tap()
+
+        let matchingRows = app.staticTexts.matching(NSPredicate(format: "label == %@ OR value == %@", protocolTitle, protocolTitle))
+        XCTAssertTrue(matchingRows.firstMatch.waitForExistence(timeout: 15), "The protocol should still be created locally while Work Offline is on")
+
+        XCTAssertTrue(
+            waitForTextAppearing("Pending sync", in: app, timeout: 10),
+            "A protocol created while Work Offline is on should queue instead of syncing immediately, exactly like a genuine transport failure would"
+        )
+
+        openConnectionSettings(in: app)
+
+        tapWorkOfflineToggle(in: app)
+
+        closeSettings(in: app)
+
+        tapTab("Protocols", in: app, timeout: 10)
+
+        XCTAssertTrue(
+            waitForTextDisappearing("Pending sync", in: app, timeout: 20),
+            "Turning Work Offline back off should automatically replay the outbox and sync the queued protocol"
+        )
+    }
+
+    @MainActor
+    func testEditCaptionsOnAudioAnnotationSyncsLive() throws {
+        let unique = Int(Date().timeIntervalSince1970)
+        let seed = try seedStepAudioAnnotationWithTranscriptionViaAPI(
+            protocolTitle: "Caption Editor Test Protocol \(unique)",
+            sessionName: "Caption Editor Test Session \(unique)"
+        )
+
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing-reset-state"]
+        app.launch()
+        signIn(app, baseURL: "https://127.0.0.1:8080/api/v1/")
+
+        tapTab("Sessions", in: app, timeout: 30)
+        let sessionRow = waitForMatchAcrossTypes(
+            NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", seed.sessionName, seed.sessionName),
+            in: app, timeout: 30
+        )
+        XCTAssertTrue(sessionRow.exists, "The session seeded via the API should appear once synced")
+        sessionRow.tap()
+
+        let editCaptionsButton = app.buttons["editCaptionsButton"].firstMatch
+        scrollDownUntilVisible(editCaptionsButton, in: app)
+        XCTAssertTrue(editCaptionsButton.waitForExistence(timeout: 15), "The seeded audio annotation already has a transcription, so Edit Captions should be reachable")
+        editCaptionsButton.tap()
+
+        let firstCue = app.textViews["captionCueTextField_0"].firstMatch
+        let firstCueField = firstExisting(firstCue, app.textFields["captionCueTextField_0"])
+        XCTAssertTrue(firstCueField.waitForExistence(timeout: 10), "The seeded WebVTT should parse into at least one editable cue")
+        XCTAssertTrue((firstCueField.value as? String)?.contains("This is a caption") ?? false, "The first cue's real seeded text should display")
+
+        let secondCue = firstExisting(app.textViews["captionCueTextField_1"], app.textFields["captionCueTextField_1"])
+        XCTAssertTrue(secondCue.waitForExistence(timeout: 10), "The seeded WebVTT has two cues")
+        replaceText(in: secondCue, with: "editor test recording, hand-edited.", in: app)
+
+        let saveButton = app.buttons["saveCaptionsButton"].firstMatch
+        XCTAssertTrue(saveButton.waitForExistence(timeout: 5))
+        saveButton.tap()
+
+        XCTAssertTrue(waitForTextDisappearing("Edit Captions", in: app, timeout: 15) || !app.buttons["saveCaptionsButton"].exists, "Saving should dismiss the caption editor")
+
+        let readback = try getJSON("step-annotations/\(seed.stepAnnotationID)/", deviceToken: seed.deviceToken)
+        let transcription = readback["transcription"] as? String ?? ""
+        XCTAssertTrue(transcription.contains("This is a caption"), "The unedited first cue should round-trip unchanged")
+        XCTAssertTrue(transcription.contains("hand-edited"), "The hand-edited second cue should have persisted through the real PATCH round-trip")
+    }
+
+    @MainActor
+    func testLabGroupCreateAndInviteSyncsLive() throws {
+        let unique = Int(Date().timeIntervalSince1970)
+        let groupName = "Live Lab Group Test \(unique)"
+
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing-reset-state"]
+        app.launch()
+        signIn(app)
+
+        tapTab("Jobs", in: app, timeout: 30)
+        tapToolbarButton("labGroupsButton", label: "Lab Groups", in: app, timeout: 15)
+
+        let newLabGroupButton = app.buttons["newLabGroupButton"].firstMatch
+        XCTAssertTrue(newLabGroupButton.waitForExistence(timeout: 10))
+        newLabGroupButton.tap()
+
+        let nameField = app.textFields["labGroupNameField"]
+        XCTAssertTrue(nameField.waitForExistence(timeout: 5))
+        nameField.tap()
+        replaceText(in: nameField, with: groupName, in: app)
+
+        let saveButton = app.buttons["saveLabGroupButton"]
+        XCTAssertTrue(saveButton.waitForExistence(timeout: 5))
+        saveButton.tap()
+
+        let groupRow = waitForMatchAcrossTypes(
+            NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", groupName, groupName),
+            in: app, timeout: 20
+        )
+        XCTAssertTrue(groupRow.exists, "The newly-created lab group should appear in the list once synced")
+        groupRow.tap()
+
+        let inviteButton = app.buttons["inviteMemberButton"]
+        XCTAssertTrue(inviteButton.waitForExistence(timeout: 10), "The creator should be able to invite, since invite defaults to true for a new group")
+        inviteButton.tap()
+
+        let emailField = app.textFields["inviteEmailField"]
+        XCTAssertTrue(emailField.waitForExistence(timeout: 5))
+        emailField.tap()
+        let inviteEmail = "livetest-\(unique)@example.com"
+        replaceText(in: emailField, with: inviteEmail, in: app)
+
+        let sendInviteButton = app.buttons["sendInviteButton"]
+        XCTAssertTrue(sendInviteButton.waitForExistence(timeout: 5))
+        sendInviteButton.tap()
+
+        XCTAssertTrue(waitForTextDisappearing("Invite Member", in: app, timeout: 15) || !app.buttons["sendInviteButton"].exists, "Sending the invite should dismiss the sheet")
+
+        let deviceToken = try fetchDeviceTokenViaAPI()
+        let groups = try getJSON("lab-groups/my_groups/?limit=500", deviceToken: deviceToken)
+        let results = groups["results"] as? [[String: Any]] ?? []
+        XCTAssertTrue(results.contains { ($0["name"] as? String) == groupName }, "The lab group created via the real UI should exist server-side")
+    }
+
+    #if !os(macOS)
+    @MainActor
+    func testSettingsAndAccountReachableFromNonProtocolsTab() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing-reset-state"]
+        app.launch()
+        signIn(app)
+
+        tapTab("Sessions", in: app, timeout: 30)
+
+        let settingsButton = app.buttons["settingsButton"]
+        XCTAssertTrue(settingsButton.waitForExistence(timeout: 10), "Settings should be reachable from the Sessions tab, not just Protocols")
+        settingsButton.tap()
+        XCTAssertTrue(waitForTextAppearing("Appearance", in: app, timeout: 10) || waitForTextAppearing("Connection", in: app, timeout: 10), "Settings should open correctly from a non-Protocols tab")
+        #if os(iOS)
+        if UIDevice.current.userInterfaceIdiom == .phone {
+            let doneButton = app.buttons["Done"].firstMatch
+            if doneButton.waitForExistence(timeout: 3) {
+                doneButton.tap()
+            }
+        }
+        #endif
+
+        tapTab("Sessions", in: app, timeout: 10)
+        let accountMenu = app.buttons["accountMenu"]
+        XCTAssertTrue(accountMenu.waitForExistence(timeout: 10), "Account should be reachable from the Sessions tab, not just Protocols")
+        accountMenu.tap()
+        let switchInstanceItem = firstExisting(app.menuItems["Switch Instance…"], app.buttons["Switch Instance…"])
+        XCTAssertTrue(switchInstanceItem.waitForExistence(timeout: 5), "The Account menu should list Switch Instance and Sign Out")
+    }
+
+    @MainActor
+    func testAccountProfileEditSyncsLive() throws {
+        let unique = Int(Date().timeIntervalSince1970)
+        let lastName = "TestEdit\(unique)"
+
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing-reset-state"]
+        app.launch()
+        signIn(app)
+
+        let settingsButton = app.buttons["settingsButton"]
+        XCTAssertTrue(settingsButton.waitForExistence(timeout: 15))
+        settingsButton.tap()
+
+        let accountRow = elementContaining("Account", in: app)
+        XCTAssertTrue(accountRow.waitForExistence(timeout: 10))
+        accountRow.tap()
+
+        let editButton = app.buttons["editAccountProfileButton"]
+        XCTAssertTrue(editButton.waitForExistence(timeout: 10), "Account should show the signed-in user's profile with an edit entry point")
+        editButton.tap()
+
+        let lastNameField = app.textFields["accountLastNameField"]
+        XCTAssertTrue(lastNameField.waitForExistence(timeout: 5))
+        replaceText(in: lastNameField, with: lastName, in: app)
+
+        let saveButton = app.buttons["saveAccountProfileButton"]
+        XCTAssertTrue(saveButton.waitForExistence(timeout: 5))
+        saveButton.tap()
+
+        let editButtonReturned = app.buttons["editAccountProfileButton"]
+        XCTAssertTrue(editButtonReturned.waitForExistence(timeout: 15), "Saving should return to the read-only profile view")
+
+        let deviceToken = try fetchDeviceTokenViaAPI()
+        let profile = try getJSON("users/1/", deviceToken: deviceToken)
+        XCTAssertEqual(profile["last_name"] as? String, lastName, "The profile edit made through the real UI should persist server-side")
+
+        try patchJSON("users/1/", body: ["last_name": ""], deviceToken: deviceToken)
+    }
+
+    @MainActor
+    func testDeviceTokenCreateAndDeleteSyncsLive() throws {
+        let unique = Int(Date().timeIntervalSince1970)
+        let label = "Live Token Test \(unique)"
+
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing-reset-state"]
+        app.launch()
+        signIn(app)
+
+        let settingsButton = app.buttons["settingsButton"]
+        XCTAssertTrue(settingsButton.waitForExistence(timeout: 15))
+        settingsButton.tap()
+
+        let tokensRow = elementContaining("API Tokens", in: app)
+        XCTAssertTrue(tokensRow.waitForExistence(timeout: 10))
+        tokensRow.tap()
+
+        let newTokenButton = app.buttons["newDeviceTokenButton"]
+        XCTAssertTrue(newTokenButton.waitForExistence(timeout: 10))
+        newTokenButton.tap()
+
+        let labelField = app.textFields["newDeviceTokenLabelField"]
+        XCTAssertTrue(labelField.waitForExistence(timeout: 5))
+        labelField.tap()
+        replaceText(in: labelField, with: label, in: app)
+
+        let createButton = app.buttons["createDeviceTokenButton"]
+        XCTAssertTrue(createButton.waitForExistence(timeout: 5))
+        createButton.tap()
+
+        XCTAssertTrue(waitForTextAppearing("TOKEN CREATED", in: app, timeout: 15), "Creating a token through the real UI should show the one-time reveal")
+
+        let doneButton = app.buttons["Done"].firstMatch
+        XCTAssertTrue(doneButton.waitForExistence(timeout: 5))
+        doneButton.tap()
+
+        let createdRow = elementContaining(label, in: app)
+        XCTAssertTrue(createdRow.waitForExistence(timeout: 15), "The newly-created token should appear in the list once synced")
+
+        let deviceToken = try fetchDeviceTokenViaAPI()
+        let listing = try getJSON("device-tokens/?limit=1000", deviceToken: deviceToken)
+        let results = listing["results"] as? [[String: Any]] ?? []
+        guard let created = results.first(where: { ($0["label"] as? String) == label }) else {
+            XCTFail("The token created via the real UI should exist server-side")
+            return
+        }
+        let createdID = created["id"] as! Int
+        try deleteResource("device-tokens/\(createdID)/", deviceToken: deviceToken)
+    }
+    #endif
+
+    @MainActor
+    func testAsyncTaskExportSDRFQueuesAndAppearsInTaskCenter() throws {
+        let timestamp = Int(Date().timeIntervalSince1970)
+        let jobName = "Async Task Job \(timestamp)"
+        let seed = try seedJobWithMetadataTableViaAPI(jobName: jobName)
+
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing-reset-state"]
+        app.launch()
+        signIn(app)
+
+        tapTab("Jobs", in: app, timeout: 30)
+        findAndTapJobRow(named: jobName, in: app)
+
+        let createFromTemplateButton = app.buttons["createMetadataFromTemplateButton"]
+        scrollDownUntilVisible(createFromTemplateButton, in: app)
+        XCTAssertTrue(createFromTemplateButton.waitForExistence(timeout: 15))
+        createFromTemplateButton.tap()
+
+        selectPickerOption("templateCategoryFilterPicker", option: "All", in: app)
+        let templateSearchField = app.textFields["templateSearchField"]
+        XCTAssertTrue(templateSearchField.waitForExistence(timeout: 10))
+        templateSearchField.tap()
+        templateSearchField.typeText(seed.templateName)
+
+        let templateRow = app.buttons["metadataTemplateRow_\(seed.templateName)"]
+        XCTAssertTrue(templateRow.waitForExistence(timeout: 15))
+        templateRow.tap()
+
+        let sampleCountField = app.textFields["metadataSampleCountField"]
+        XCTAssertTrue(sampleCountField.waitForExistence(timeout: 5))
+        sampleCountField.tap()
+        sampleCountField.typeText("\(seed.sampleCount)")
+        app.buttons["createMetadataTableButton"].tap()
+
+        let openFullTableViewButton = app.buttons["openFullMetadataTableViewButton"]
+        XCTAssertTrue(openFullTableViewButton.waitForExistence(timeout: 15))
+        scrollDownUntilVisible(openFullTableViewButton, in: app)
+        openFullTableViewButton.tap()
+
+        let exportMenu = app.buttons["exportMenu"]
+        XCTAssertTrue(exportMenu.waitForExistence(timeout: 10), "The Export menu should be reachable once the table has columns")
+        exportMenu.tap()
+
+        let exportSDRFButton = app.buttons["exportSDRFButton"]
+        XCTAssertTrue(exportSDRFButton.waitForExistence(timeout: 5))
+        exportSDRFButton.tap()
+
+        XCTAssertTrue(app.alerts["Export Queued"].waitForExistence(timeout: 15), "Submitting an SDRF export should queue a real async task server-side")
+        app.alerts["Export Queued"].buttons["OK"].tap()
+
+        let openAsyncTaskCenterButton = app.buttons["openAsyncTaskCenterButton"]
+        XCTAssertTrue(openAsyncTaskCenterButton.waitForExistence(timeout: 5))
+        openAsyncTaskCenterButton.tap()
+
+        let taskRowPredicate = NSPredicate(format: "identifier BEGINSWITH %@", "asyncTaskRow_")
+        let taskRow = app.staticTexts.matching(taskRowPredicate).firstMatch
+        XCTAssertTrue(taskRow.waitForExistence(timeout: 15), "The just-submitted export task should appear in the Async Tasks list")
+
+        let deviceToken = try fetchDeviceTokenViaAPI()
+        let listing = try getJSON("async-tasks/?task_type=EXPORT_SDRF&limit=1", deviceToken: deviceToken)
+        let results = listing["results"] as? [[String: Any]] ?? []
+        guard let task = results.first else {
+            XCTFail("The export task submitted via the real UI should exist server-side (list is ordered most-recent-first)")
+            return
+        }
+        let taskID = task["id"] as! String
+        try deleteResource("async-tasks/\(taskID)/cancel/", deviceToken: deviceToken)
+    }
+
+    @MainActor
+    func testAsyncTaskImportSDRFReachableAndScopedToTableEditors() throws {
+        let timestamp = Int(Date().timeIntervalSince1970)
+        let jobName = "Async Import Job \(timestamp)"
+        let seed = try seedJobWithEditableColumnViaAPI(jobName: jobName)
+
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing-reset-state"]
+        app.launch()
+        signIn(app)
+
+        tapTab("Jobs", in: app, timeout: 30)
+        findAndTapJobRow(named: jobName, in: app)
+
+        let createFromTemplateButton = app.buttons["createMetadataFromTemplateButton"]
+        scrollDownUntilVisible(createFromTemplateButton, in: app)
+        XCTAssertTrue(createFromTemplateButton.waitForExistence(timeout: 15))
+        createFromTemplateButton.tap()
+
+        selectPickerOption("templateCategoryFilterPicker", option: "All", in: app)
+        let templateSearchField = app.textFields["templateSearchField"]
+        XCTAssertTrue(templateSearchField.waitForExistence(timeout: 10))
+        templateSearchField.tap()
+        templateSearchField.typeText(seed.templateName)
+
+        let templateRow = app.buttons["metadataTemplateRow_\(seed.templateName)"]
+        XCTAssertTrue(templateRow.waitForExistence(timeout: 15))
+        templateRow.tap()
+
+        let sampleCountField = app.textFields["metadataSampleCountField"]
+        XCTAssertTrue(sampleCountField.waitForExistence(timeout: 5))
+        sampleCountField.tap()
+        sampleCountField.typeText("1")
+        app.buttons["createMetadataTableButton"].tap()
+
+        let openFullTableViewButton = app.buttons["openFullMetadataTableViewButton"]
+        XCTAssertTrue(openFullTableViewButton.waitForExistence(timeout: 15))
+        scrollDownUntilVisible(openFullTableViewButton, in: app)
+        openFullTableViewButton.tap()
+
+        let importMenu = app.buttons["importMenu"]
+        XCTAssertTrue(importMenu.waitForExistence(timeout: 10), "The Import menu should be reachable for the table's owner")
+        importMenu.tap()
+        let importButton = app.buttons["importSDRFButton"]
+        XCTAssertTrue(importButton.waitForExistence(timeout: 5), "Choose SDRF File should be reachable inside the Import menu")
+        XCTAssertTrue(importButton.isEnabled, "The import trigger should be enabled for the table's owner/editor")
+
+        let deviceToken = try fetchDeviceTokenViaAPI()
+        let jobJSON = try getJSON("instrument-jobs/\(seed.jobID)/", deviceToken: deviceToken)
+        guard let metadataTableID = jobJSON["metadata_table"] as? Int else {
+            XCTFail("The job created through the real UI should have a metadata table by now")
+            return
+        }
+
+        let sdrfContent = "source name\tcharacteristics[organism]\nHCC-001\thomo sapiens\n"
+
+        let ownerResult = try postSDRFImportViaAPI(metadataTableID: Int64(metadataTableID), fileContent: sdrfContent, replaceExisting: true, deviceToken: deviceToken)
+        XCTAssertEqual(ownerResult.statusCode, 202, "The table's owner (also staff on this backend) should be able to queue a real import")
+        guard let ownerTaskID = ownerResult.json["task_id"] as? String else {
+            XCTFail("A successful import should return a task_id")
+            return
+        }
+        try deleteResource("async-tasks/\(ownerTaskID)/cancel/", deviceToken: deviceToken)
+
+        let nonStaffDeviceToken = try fetchDeviceTokenViaAPI(username: "importtestuser", password: "importtestuser123")
+        let nonOwnerResult = try postSDRFImportViaAPI(metadataTableID: Int64(metadataTableID), fileContent: sdrfContent, replaceExisting: true, deviceToken: nonStaffDeviceToken)
+        XCTAssertEqual(nonOwnerResult.statusCode, 403, "A non-owner, non-staff user must be denied editing another user's table")
+        XCTAssertEqual(nonOwnerResult.json["error"] as? String, "Permission denied: cannot edit this metadata table")
+
+        let ownTableID = try seedStandaloneMetadataTableViaAPI(named: "Non-Staff Scope Table \(timestamp)", deviceToken: nonStaffDeviceToken)
+        let scopedResult = try postSDRFImportViaAPI(metadataTableID: ownTableID, fileContent: sdrfContent, replaceExisting: false, importType: "both", deviceToken: nonStaffDeviceToken)
+        XCTAssertEqual(scopedResult.statusCode, 202, "A non-staff user should still be able to import into their own table")
+        guard let scopedTaskID = scopedResult.json["task_id"] as? String else {
+            XCTFail("A successful scoped import should return a task_id")
+            return
+        }
+        let scopedTaskJSON = try getJSON("async-tasks/\(scopedTaskID)/", deviceToken: nonStaffDeviceToken)
+        let recordedParameters = scopedTaskJSON["parameters"] as? [String: Any]
+        XCTAssertEqual(recordedParameters?["import_type"] as? String, "user_metadata", "A non-staff user's requested 'both' scope must be recorded as the downgraded 'user_metadata' scope, not the raw request")
+        try deleteResource("async-tasks/\(scopedTaskID)/cancel/", deviceToken: nonStaffDeviceToken)
+    }
+
+    @MainActor
+    private func openConnectionSettings(in app: XCUIApplication) {
+        #if os(macOS)
+        app.typeKey(",", modifierFlags: .command)
+        #else
+        tapToolbarButton("settingsButton", label: "Settings", in: app)
+        #endif
+        XCTAssertTrue(waitForTextAppearing("Connection", in: app, timeout: 10))
+        elementContaining("Connection", in: app).tap()
+    }
+
+    @MainActor
+    private func closeSettings(in app: XCUIApplication) {
+        #if os(macOS)
+        app.typeKey("w", modifierFlags: .command)
+        #else
+        tapToolbarButton("doneButton", label: "Done", in: app, timeout: 3)
+        #endif
+    }
+
+    @MainActor
+    private func tapWorkOfflineToggle(in app: XCUIApplication) {
+        let toggle = firstExisting(app.switches["forceOfflineToggle"], app.checkBoxes["forceOfflineToggle"])
+        XCTAssertTrue(toggle.waitForExistence(timeout: 10), "The Work Offline toggle should be reachable from Settings > Connection")
+        let valueBeforeTap = toggle.value as? String
+        var valueAfterTap = valueBeforeTap
+        for _ in 0..<3 {
+            toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+            Thread.sleep(forTimeInterval: 0.5)
+            valueAfterTap = toggle.value as? String
+            if valueAfterTap != valueBeforeTap { break }
+        }
+        XCTAssertNotEqual(valueBeforeTap, valueAfterTap, "Tapping the Work Offline toggle should flip its reported value (before: \(valueBeforeTap ?? "nil"), after: \(valueAfterTap ?? "nil"))")
+    }
+
+    @MainActor
+    private func signIn(_ app: XCUIApplication, baseURL: String = "http://127.0.0.1:8002/api/v1/") {
         let serverURLField = app.textFields["serverURLField"]
         XCTAssertTrue(serverURLField.waitForExistence(timeout: 5))
-        serverURLField.tap()
-        replaceText(in: serverURLField, with: "http://127.0.0.1:8002/api/v1/")
+        replaceText(in: serverURLField, with: baseURL, in: app)
 
         let usernameField = app.textFields["usernameField"]
         usernameField.tap()
@@ -1266,8 +1817,8 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         )
     }
 
-    private func fetchDeviceTokenViaAPI() throws -> String {
-        let loginData = try JSONSerialization.data(withJSONObject: ["username": "testuser", "password": "testuser123"])
+    private func fetchDeviceTokenViaAPI(username: String = "testuser", password: String = "testuser123") throws -> String {
+        let loginData = try JSONSerialization.data(withJSONObject: ["username": username, "password": password])
         var loginRequest = URLRequest(url: URL(string: "http://127.0.0.1:8002/api/v1/auth/login/")!)
         loginRequest.httpMethod = "POST"
         loginRequest.httpBody = loginData
@@ -1310,6 +1861,13 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         request.httpMethod = "PATCH"
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("DeviceToken \(deviceToken)", forHTTPHeaderField: "Authorization")
+        _ = try synchronousData(for: request)
+    }
+
+    private func deleteResource(_ path: String, deviceToken: String) throws {
+        var request = URLRequest(url: URL(string: "http://127.0.0.1:8002/api/v1/\(path)")!)
+        request.httpMethod = "DELETE"
         request.setValue("DeviceToken \(deviceToken)", forHTTPHeaderField: "Authorization")
         _ = try synchronousData(for: request)
     }
@@ -1450,6 +2008,102 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         return json
     }
 
+    @discardableResult
+    private func postSDRFImportViaAPI(metadataTableID: Int64, fileContent: String, replaceExisting: Bool, importType: String? = nil, deviceToken: String) throws -> (statusCode: Int, json: [String: Any]) {
+        let boundary = "Boundary-\(UUID().uuidString)"
+        var request = URLRequest(url: URL(string: "http://127.0.0.1:8002/api/v1/async-import/sdrf_file/")!)
+        request.httpMethod = "POST"
+        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        request.setValue("DeviceToken \(deviceToken)", forHTTPHeaderField: "Authorization")
+
+        var body = Data()
+        func addField(_ name: String, _ value: String) {
+            body.append("--\(boundary)\r\n".data(using: .utf8)!)
+            body.append("Content-Disposition: form-data; name=\"\(name)\"\r\n\r\n".data(using: .utf8)!)
+            body.append("\(value)\r\n".data(using: .utf8)!)
+        }
+        addField("metadata_table_id", String(metadataTableID))
+        addField("replace_existing", replaceExisting ? "true" : "false")
+        if let importType {
+            addField("import_type", importType)
+        }
+        body.append("--\(boundary)\r\n".data(using: .utf8)!)
+        body.append("Content-Disposition: form-data; name=\"file\"; filename=\"import_test.sdrf.tsv\"\r\n".data(using: .utf8)!)
+        body.append("Content-Type: text/tab-separated-values\r\n\r\n".data(using: .utf8)!)
+        body.append(fileContent.data(using: .utf8)!)
+        body.append("\r\n--\(boundary)--\r\n".data(using: .utf8)!)
+        request.httpBody = body
+
+        let (data, response) = try synchronousData(for: request)
+        let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
+        let json = (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
+        return (statusCode, json ?? [:])
+    }
+
+    private func uploadStepAudioAnnotationViaAPI(sessionID: Int, stepID: Int, fileData: Data, deviceToken: String) throws -> Int64 {
+        let boundary = "Boundary-\(UUID().uuidString)"
+        var request = URLRequest(url: URL(string: "http://127.0.0.1:8002/api/v1/upload/step-annotation-chunks/")!)
+        request.httpMethod = "POST"
+        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        request.setValue("DeviceToken \(deviceToken)", forHTTPHeaderField: "Authorization")
+
+        var body = Data()
+        func addField(_ name: String, _ value: String) {
+            body.append("--\(boundary)\r\n".data(using: .utf8)!)
+            body.append("Content-Disposition: form-data; name=\"\(name)\"\r\n\r\n".data(using: .utf8)!)
+            body.append("\(value)\r\n".data(using: .utf8)!)
+        }
+        let sha256 = SHA256.hash(data: fileData).map { String(format: "%02x", $0) }.joined()
+        addField("filename", "caption_test_audio.m4a")
+        addField("sha256", sha256)
+        addField("session_id", String(sessionID))
+        addField("step_id", String(stepID))
+        addField("annotation_type", "audio")
+        addField("auto_transcribe", "false")
+        body.append("--\(boundary)\r\n".data(using: .utf8)!)
+        body.append("Content-Disposition: form-data; name=\"file\"; filename=\"caption_test_audio.m4a\"\r\n".data(using: .utf8)!)
+        body.append("Content-Type: audio/m4a\r\n\r\n".data(using: .utf8)!)
+        body.append(fileData)
+        body.append("\r\n--\(boundary)--\r\n".data(using: .utf8)!)
+        request.httpBody = body
+
+        let (data, _) = try synchronousData(for: request)
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any], let stepAnnotationID = json["step_annotation_id"] as? Int else {
+            throw APISeedError.missingField("step_annotation_id")
+        }
+        return Int64(stepAnnotationID)
+    }
+
+    private func seedStepAudioAnnotationWithTranscriptionViaAPI(
+        protocolTitle: String,
+        sessionName: String
+    ) throws -> (deviceToken: String, sessionID: Int64, stepID: Int64, stepAnnotationID: Int64, sessionName: String) {
+        let deviceToken = try fetchDeviceTokenViaAPI()
+        let protocolJSON = try postJSON("protocols/", body: ["protocol_title": protocolTitle, "enabled": false], deviceToken: deviceToken)
+        guard let protocolID = protocolJSON["id"] as? Int else { throw APISeedError.missingField("id") }
+
+        let sectionJSON = try postJSON("sections/", body: ["protocol": protocolID, "section_description": "Caption Test Section", "section_duration": 0], deviceToken: deviceToken)
+        guard let sectionID = sectionJSON["id"] as? Int else { throw APISeedError.missingField("id") }
+
+        let stepJSON = try postJSON(
+            "steps/",
+            body: ["protocol": protocolID, "step_section": sectionID, "step_description": "Caption Test Step", "order": 0],
+            deviceToken: deviceToken
+        )
+        guard let stepID = stepJSON["id"] as? Int else { throw APISeedError.missingField("id") }
+
+        let sessionJSON = try postJSON("sessions/", body: ["name": sessionName, "enabled": false, "protocols": [protocolID]], deviceToken: deviceToken)
+        guard let sessionID = sessionJSON["id"] as? Int else { throw APISeedError.missingField("id") }
+
+        let audioData = Data(base64Encoded: Self.captionTestAudioFixtureBase64)!
+        let stepAnnotationID = try uploadStepAudioAnnotationViaAPI(sessionID: sessionID, stepID: stepID, fileData: audioData, deviceToken: deviceToken)
+
+        let seedVTT = "WEBVTT\n\n00:00:00.000 --> 00:00:02.000\nThis is a caption\n\n00:00:02.000 --> 00:00:04.000\neditor test recording."
+        try patchJSON("step-annotations/\(stepAnnotationID)/", body: ["transcription": seedVTT, "language": "en"], deviceToken: deviceToken)
+
+        return (deviceToken, Int64(sessionID), Int64(stepID), stepAnnotationID, sessionName)
+    }
+
     private func seedSessionWithTimedStepViaAPI(protocolTitle: String, sessionName: String) throws -> (deviceToken: String, sessionID: Int64, stepID: Int64, sessionName: String) {
         let deviceToken = try fetchDeviceTokenViaAPI()
         let protocolJSON = try postJSON("protocols/", body: ["protocol_title": protocolTitle, "enabled": false], deviceToken: deviceToken)
@@ -1496,7 +2150,10 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
 
     private func scrollDownUntilVisible(_ element: XCUIElement, in app: XCUIApplication, maxAttempts: Int = 15) {
         var attempts = 0
-        while !(element.exists && element.isHittable), attempts < maxAttempts {
+        while attempts < maxAttempts {
+            if element.exists, element.isHittable, app.frame.contains(element.frame) {
+                return
+            }
             app.swipeUp(velocity: .fast)
             attempts += 1
             Thread.sleep(forTimeInterval: 0.3)
@@ -1508,7 +2165,10 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
             firstExisting(app.collectionViews[containerIdentifier], app.tables[containerIdentifier], app.otherElements[containerIdentifier], app.scrollViews[containerIdentifier])
         }
         var attempts = 0
-        while !(element.exists && element.isHittable), attempts < maxAttempts {
+        while attempts < maxAttempts {
+            if element.exists, element.isHittable, app.frame.contains(element.frame) {
+                return
+            }
             container().swipeUp(velocity: .fast)
             attempts += 1
             Thread.sleep(forTimeInterval: 0.3)
@@ -1551,8 +2211,7 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
     private func findAndTapJobRow(named jobName: String, in app: XCUIApplication, timeout: TimeInterval = 30) {
         let searchField = app.textFields["jobSearchField"]
         XCTAssertTrue(searchField.waitForExistence(timeout: timeout))
-        searchField.tap()
-        replaceText(in: searchField, with: jobName)
+        replaceText(in: searchField, with: jobName, in: app)
 
         let jobRow = waitForMatchAcrossTypes(NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", jobName, jobName), in: app, timeout: timeout)
         XCTAssertTrue(jobRow.exists, "The job \"\(jobName)\" should appear once filtered by name")
@@ -1665,7 +2324,7 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         menuItem.tap()
     }
 
-    private func replaceText(in field: XCUIElement, with newText: String) {
+    private func replaceText(in field: XCUIElement, with newText: String, in app: XCUIApplication) {
         #if os(macOS)
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(newText, forType: .string)
@@ -1677,13 +2336,25 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         }
         XCTAssertEqual(field.value as? String, newText, "Failed to replace field text after multiple attempts")
         #else
-        field.tap()
-        for _ in 0..<3 {
-            if field.value as? String == newText { return }
-            field.typeKey("a", modifierFlags: .command)
+        let priorValue = field.value as? String
+        let placeholder = field.placeholderValue
+        let hasRealPriorContent = priorValue.map { !$0.isEmpty && $0 != newText && $0 != placeholder } ?? false
+        if !hasRealPriorContent {
+            field.tap()
             field.typeText(newText)
             if field.value as? String == newText { return }
+        }
+
+        for _ in 0..<5 {
+            if field.value as? String == newText { return }
             field.tap()
+            Thread.sleep(forTimeInterval: 0.3)
+            field.tap()
+            let selectAllItem = app.menuItems["Select All"]
+            XCTAssertTrue(selectAllItem.waitForExistence(timeout: 3), "The Select All context menu item should appear after two separate taps")
+            selectAllItem.tap()
+            field.typeText(newText)
+            if field.value as? String == newText { return }
         }
         XCTAssertEqual(field.value as? String, newText, "Failed to replace field text after multiple attempts")
         #endif
@@ -1746,4 +2417,219 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         }
         return false
     }
+
+    private func waitForTextDisappearing(_ substring: String, in app: XCUIApplication, timeout: TimeInterval) -> Bool {
+        let predicate = NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", substring, substring)
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            let stillPresent = app.staticTexts.matching(predicate).firstMatch.exists || app.buttons.matching(predicate).firstMatch.exists
+            if !stillPresent { return true }
+            Thread.sleep(forTimeInterval: 0.5)
+        }
+        return false
+    }
+
+    private static let captionTestAudioFixtureBase64: String = [
+        "AAAAHGZ0eXBNNEEgAAAAAE00QSBtcDQyaXNvbQAABBptb292AAAAbG12aGQAAAAA5op1z+aKdc8AAFYiAADMAAABAAABAAAA",
+        "AAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAC",
+        "AAACrHRyYWsAAABcdGtoZAAAAAfminXP5op1zwAAAAEAAAAAAADMAAAAAAAAAAAAAAAAAAEAAAAAAQAAAAAAAAAAAAAAAAAA",
+        "AAEAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAkhtZGlhAAAAIG1kaGQAAAAA5op1z+aKdc8AAFYiAADMAAAAAAAAAAAi",
+        "aGRscgAAAAAAAAAAc291bgAAAAAAAAAAAAAAAAAAAAAB/m1pbmYAAAAQc21oZAAAAAAAAAAAAAAAJGRpbmYAAAAcZHJlZgAA",
+        "AAAAAAABAAAADHVybCAAAAABAAABwnN0YmwAAAB2c3RzZAAAAAAAAAABAAAAZm1wNGEAAAAAAAAAAQAAAAAAAAAAAAIAEAAA",
+        "AABWIgAAAAAAM2VzZHMAAAAAA4CAgCIAAAAEgICAFEAUABgAAACVWAAAfQAFgICAAhOIBoCAgAECAAAAD3NidGQAAAAASTE2",
+        "AAAAGHN0dHMAAAAAAAAAAQAAADMAAAQAAAAAKHN0c2MAAAAAAAAAAgAAAAEAAAALAAAAAQAAAAUAAAAHAAAAAQAAAOBzdHN6",
+        "AAAAAAAAAAAAAAAzAAAABAAAAMoAAADqAAABCwAAAO4AAAEHAAAA0wAAAP4AAADBAAAA9QAAAPEAAAC5AAAAtgAAAIEAAAEZ",
+        "AAAAvwAAAM4AAAC6AAAAuQAAALAAAAFOAAAAyQAAAIUAAAFbAAABDwAAAU4AAAEmAAAAtAAAAIEAAAE7AAAAsAAAAJkAAADD",
+        "AAAA2AAAAPcAAAEqAAAAhQAAAK8AAAB9AAAA+AAAALoAAACbAAAAlgAAAKEAAAExAAAAkQAAAJwAAACTAAAAlwAAAJEAAAA6",
+        "AAAAJHN0Y28AAAAAAAAABQAAEAAAABkwAAAiAAAAK98AADQNAAAA+nVkdGEAAADybWV0YQAAAAAAAAAiaGRscgAAAAAAAAAA",
+        "bWRpcmFwcGwAAAAAAAAAAAAAAAAAxGlsc3QAAAC8LS0tLQAAABxtZWFuAAAAAGNvbS5hcHBsZS5pVHVuZXMAAAAUbmFtZQAA",
+        "AABpVHVuU01QQgAAAIRkYXRhAAAAAQAAAAAgMDAwMDAwMDAgMDAwMDA4NDAgMDAwMDAxQjcgMDAwMDAwMDAwMDAwQzIwOSAw",
+        "MDAwMDAwMCAwMDAwMDAwMCAwMDAwMDAwMCAwMDAwMDAwMCAwMDAwMDAwMCAwMDAwMDAwMCAwMDAwMDAwMCAwMDAwMDAwMAAA",
+        "C8JmcmVlAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAChobWRhdADQQAcA9J/M",
+        "Pzf4E2kjNE7Au/z4+jiWsf/XHBt7ZrW+EcP7/FsTgE23qCeIFy5DWTScaXbyWnqTix8YvANr8p50NKoNY6q6oT+mXq+n5xnG",
+        "zgMU1aE2Xckk6r1f+3svceHdUUu4sQkCJuNBC8Xh69m60S75giaJz68LMgVgpsNjp6PZ6IZwpXDcqdCtNxWaW5y72BiCAQDL",
+        "ppBHqJCz6Xqvbofi8gvhdFi3e0+7/8fQfK67429OvjvxIGjqa3JxnPkt9plaKgORcYCBNgA4ATKe+tNyZgsgNooxQmRiETbT",
+        "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",
+    ].joined()
 }

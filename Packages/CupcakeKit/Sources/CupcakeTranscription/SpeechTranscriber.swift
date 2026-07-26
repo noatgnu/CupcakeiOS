@@ -33,7 +33,7 @@ public enum SpeechTranscriber {
         return recognizer.supportsOnDeviceRecognition
     }
 
-    public static func transcribe(fileURL: URL, localeIdentifier: String = Locale.current.identifier) async throws -> TranscriptionResult {
+    public static func transcribe(fileURL: URL, localeIdentifier: String = Locale.current.identifier, vocabulary: [String] = []) async throws -> TranscriptionResult {
         guard await requestAuthorization() else {
             throw SpeechTranscriptionError.authorizationDenied
         }
@@ -43,6 +43,9 @@ public enum SpeechTranscriber {
 
         let request = SFSpeechURLRecognitionRequest(url: fileURL)
         request.requiresOnDeviceRecognition = recognizer.supportsOnDeviceRecognition
+        if !vocabulary.isEmpty {
+            request.contextualStrings = vocabulary
+        }
 
         return try await withCheckedThrowingContinuation { continuation in
             var hasResumed = false

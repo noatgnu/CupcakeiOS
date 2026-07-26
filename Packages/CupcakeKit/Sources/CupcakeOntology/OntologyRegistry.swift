@@ -42,6 +42,23 @@ public enum OntologyRegistry {
 
     public static let defaultDisabled: Set<String> = ["ncbi_taxonomy", "chebi"]
 
+    public static let termTypeKeys: [String] = [
+        CachedTissue.typeKey,
+        CachedSpecies.typeKey,
+        CachedHumanDisease.typeKey,
+        CachedSubcellularLocation.typeKey,
+        CachedUnimod.typeKey,
+        CachedMSUniqueVocabularies.typeKey,
+        CachedNCBITaxonomy.typeKey,
+        CachedChEBICompound.typeKey,
+        CachedMondoDisease.typeKey,
+        CachedUberonAnatomy.typeKey,
+        CachedCellOntology.typeKey,
+        CachedPSIMSOntology.typeKey,
+        CachedBTOTerm.typeKey,
+        CachedDiseaseOntologyTerm.typeKey,
+    ]
+
     public static func importTable(_ table: OntologyManifestTable, using service: OntologyImportService) async throws {
         switch table.name {
         case CachedTissue.typeKey: try await service.importTable(CachedTissue.self, table: table)

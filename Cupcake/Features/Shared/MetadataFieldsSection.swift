@@ -8,12 +8,12 @@ struct MetadataFieldsSection: View {
     let metadataTableServerID: Int64?
     let ontologyStore: ModelContainer
     let onColumnsChanged: () async -> Void
+    @Binding var editingColumn: CachedMetadataColumn?
+    @Binding var isShowingAddColumnSheet: Bool
 
     @Environment(AppSession.self) private var appSession
     @Environment(\.openWindow) private var openWindow
     @Query private var allColumns: [CachedMetadataColumn]
-    @State private var editingColumn: CachedMetadataColumn?
-    @State private var isShowingAddColumnSheet = false
     @State private var errorMessage: String?
     @State private var isShowingError = false
 
@@ -63,16 +63,6 @@ struct MetadataFieldsSection: View {
             } else {
                 Text("Metadata isn't available yet.")
                     .foregroundStyle(.secondary)
-            }
-        }
-        .sheet(item: $editingColumn) { column in
-            MetadataValueEditSheet(column: column, projectServerID: nil, ontologyStore: ontologyStore)
-        }
-        .sheet(isPresented: $isShowingAddColumnSheet) {
-            if let metadataTableServerID {
-                AddMetadataColumnSheet(tableServerID: metadataTableServerID, ontologyStore: ontologyStore) {
-                    await onColumnsChanged()
-                }
             }
         }
         .alert("Couldn't remove field", isPresented: $isShowingError) {

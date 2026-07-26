@@ -20,6 +20,7 @@ struct BreadcrumbBar: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("breadcrumbBackButton")
+                .help("Back")
             }
 
             ScrollView(.horizontal, showsIndicators: false) {

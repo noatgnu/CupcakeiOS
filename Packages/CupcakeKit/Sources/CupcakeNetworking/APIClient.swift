@@ -5,6 +5,13 @@ public actor APIClient {
     private let session: URLSession
     private let decoder: JSONDecoder
     private let encoder: JSONEncoder
+    private var forceOffline = false
+
+    public var isForceOffline: Bool { forceOffline }
+
+    public func setForceOffline(_ value: Bool) {
+        forceOffline = value
+    }
 
     public init(baseURL: URL, session: URLSession = .shared) {
         self.baseURL = baseURL
@@ -89,7 +96,12 @@ public actor APIClient {
     }
 
     public func downloadData(from url: URL, authorizationHeader: String? = nil) async throws -> (data: Data, suggestedFilename: String?) {
-        var request = URLRequest(url: url)
+        var secureURL = url
+        if secureURL.scheme == "http", var components = URLComponents(url: url, resolvingAgainstBaseURL: false) {
+            components.scheme = "https"
+            secureURL = components.url ?? url
+        }
+        var request = URLRequest(url: secureURL)
         request.httpMethod = HTTPMethod.get.rawValue
         if let authorizationHeader {
             request.setValue(authorizationHeader, forHTTPHeaderField: "Authorization")
@@ -141,6 +153,9 @@ public actor APIClient {
     }
 
     private func perform(_ request: URLRequest) async throws -> (Data, URLResponse) {
+        if forceOffline {
+            throw APIError.transport(underlying: URLError(.notConnectedToInternet))
+        }
         do {
             return try await session.data(for: request)
         } catch {

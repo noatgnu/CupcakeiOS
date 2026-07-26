@@ -72,10 +72,14 @@ struct MetadataValueEditSheet: View {
 
     @State private var value: String
     @State private var suggestions: [OntologySuggestionDTO] = []
+    @State private var matchType: OntologyMatchType = .contains
     @State private var searchTask: Task<Void, Never>?
     @State private var personalFavourites: [FavouriteMetadataOptionDTO] = []
     @State private var labGroupFavourites: [FavouriteMetadataOptionDTO] = []
     @State private var globalFavourites: [FavouriteMetadataOptionDTO] = []
+    @State private var selectedFavouriteScope: FavouriteScope = .personal
+    @State private var favouriteSearchText = ""
+    @State private var favouriteDisplayNameOverride = ""
     @State private var projectHistoryValues: [String] = []
     @State private var keyValueFields: [String: String] = [:]
     @State private var ageYears = ""
@@ -159,6 +163,18 @@ struct MetadataValueEditSheet: View {
                             .onChange(of: value) {
                                 scheduleSearch(text: value)
                             }
+                        if hasOntologyType {
+                            Picker("Match", selection: $matchType) {
+                                ForEach(OntologyMatchType.allCases) { option in
+                                    Text(option.label).tag(option)
+                                }
+                            }
+                            .pickerStyle(.segmented)
+                            .accessibilityIdentifier("metadataValueMatchTypePicker")
+                            .onChange(of: matchType) {
+                                scheduleSearch(text: value)
+                            }
+                        }
                         HStack {
                             Button("Not Applicable") { value = "not applicable" }
                                 .accessibilityIdentifier("metadataValueNotApplicableButton")
@@ -208,15 +224,21 @@ struct MetadataValueEditSheet: View {
                     }
                 }
                 if !column.readonly {
-                    favouritesSection("Personal", favourites: personalFavourites) {
-                        Task { await addToFavourites(scope: .personal) }
-                    }
-                    favouritesSection("Lab Group", favourites: labGroupFavourites) {
-                        Task { await addToFavourites(scope: .labGroup) }
-                    }
-                    .disabled(firstLabGroupServerID == nil)
-                    favouritesSection("Global", favourites: globalFavourites) {
-                        Task { await addToFavourites(scope: .global) }
+                    Section("Favourites") {
+                        Picker("Category", selection: $selectedFavouriteScope) {
+                            ForEach(FavouriteScope.allCases, id: \.self) { scope in
+                                Text(scope.label).tag(scope)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                        .accessibilityIdentifier("favouriteScopePicker")
+                        .onChange(of: selectedFavouriteScope) { favouriteSearchText = "" }
+                        if favourites(for: selectedFavouriteScope).count > 5 {
+                            TextField("Filter", text: $favouriteSearchText)
+                                .accessibilityIdentifier("favouriteSearchField")
+                        }
+                        favouritesList(for: selectedFavouriteScope)
                     }
                     Button("Manage My Favourites…") {
                         if PlatformWindowPreference.prefersSeparateWindow {
@@ -243,7 +265,7 @@ struct MetadataValueEditSheet: View {
                 }
             }
             .formStyle(.grouped)
-            .navigationTitle(sampleIndex.map { "Edit Value — Sample \($0)" } ?? "Edit Value")
+            .navigationTitle(sampleIndex.map { "Edit Value, Sample \($0)" } ?? "Edit Value")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { closeEditor() }
@@ -297,35 +319,63 @@ struct MetadataValueEditSheet: View {
         }
     }
 
-    @ViewBuilder
-    private func favouritesSection(_ title: String, favourites: [FavouriteMetadataOptionDTO], onAdd: @escaping () -> Void) -> some View {
-        Section(title) {
-            if favourites.isEmpty {
-                Text("None yet")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            } else {
-                ForEach(favourites) { favourite in
-                    Button {
-                        value = favourite.displayValue ?? favourite.value ?? ""
-                    } label: {
-                        Text(favourite.displayValue ?? favourite.value ?? "")
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            Button("Add Current Value to \(title)", action: onAdd)
-                .font(.caption)
-                .accessibilityIdentifier("addFavourite_\(title)")
+    private func favourites(for scope: FavouriteScope) -> [FavouriteMetadataOptionDTO] {
+        switch scope {
+        case .personal: personalFavourites
+        case .labGroup: labGroupFavourites
+        case .global: globalFavourites
         }
     }
 
-    private enum FavouriteScope {
+    @ViewBuilder
+    private func favouritesList(for scope: FavouriteScope) -> some View {
+        let allItems = favourites(for: scope)
+        let items = favouriteSearchText.isEmpty
+            ? allItems
+            : allItems.filter { ($0.displayValue ?? $0.value ?? "").localizedCaseInsensitiveContains(favouriteSearchText) }
+        if allItems.isEmpty {
+            Text("None yet")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        } else if items.isEmpty {
+            Text("No matches for \"\(favouriteSearchText)\"")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        } else {
+            ForEach(items) { favourite in
+                Button {
+                    value = favourite.displayValue ?? favourite.value ?? ""
+                } label: {
+                    Text(favourite.displayValue ?? favourite.value ?? "")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        TextField("Display Name (optional)", text: $favouriteDisplayNameOverride)
+            .font(.caption)
+            .accessibilityIdentifier("favouriteDisplayNameField")
+        Button("Add Current Value to \(scope.label)") {
+            Task { await addToFavourites(scope: scope) }
+        }
+        .font(.caption)
+        .disabled(scope == .labGroup && firstLabGroupServerID == nil)
+        .accessibilityIdentifier("addFavourite_\(scope.label)")
+    }
+
+    private enum FavouriteScope: CaseIterable, Hashable {
         case personal
         case labGroup
         case global
+
+        var label: String {
+            switch self {
+            case .personal: "Personal"
+            case .labGroup: "Lab Group"
+            case .global: "Global"
+            }
+        }
     }
 
     private func loadFavourites() async {
@@ -363,20 +413,23 @@ struct MetadataValueEditSheet: View {
 
     private func addToFavourites(scope: FavouriteScope) async {
         guard !value.isEmpty else { return }
+        let displayName = favouriteDisplayNameOverride.trimmingCharacters(in: .whitespacesAndNewlines)
+        let displayValue = displayName.isEmpty ? nil : displayName
         let request: CreateFavouriteMetadataOptionRequest
         switch scope {
         case .personal:
             guard let userID = appSession.currentUserID else { return }
-            request = CreateFavouriteMetadataOptionRequest(name: column.name, type: column.type, value: value, user: userID)
+            request = CreateFavouriteMetadataOptionRequest(name: column.name, type: column.type, value: value, displayValue: displayValue, user: userID)
         case .labGroup:
             guard let labGroupID = firstLabGroupServerID else { return }
-            request = CreateFavouriteMetadataOptionRequest(name: column.name, type: column.type, value: value, labGroup: labGroupID)
+            request = CreateFavouriteMetadataOptionRequest(name: column.name, type: column.type, value: value, displayValue: displayValue, labGroup: labGroupID)
         case .global:
-            request = CreateFavouriteMetadataOptionRequest(name: column.name, type: column.type, value: value, isGlobal: true)
+            request = CreateFavouriteMetadataOptionRequest(name: column.name, type: column.type, value: value, displayValue: displayValue, isGlobal: true)
         }
         do {
             let services = appSession.makeSyncServices()
             try await services.favouriteMetadataOptionSync.createFavourite(request)
+            favouriteDisplayNameOverride = ""
             await loadFavourites()
         } catch {
             errorMessage = error.userFacingMessage
@@ -438,12 +491,13 @@ struct MetadataValueEditSheet: View {
                 let services = appSession.makeSyncServices()
                 let results: [OntologySuggestionDTO]
                 if column.ontologyType != nil {
-                    results = try await services.metadataColumnSync.fetchOntologySuggestions(columnServerID: column.serverID, search: text)
+                    results = try await services.metadataColumnSync.fetchOntologySuggestions(columnServerID: column.serverID, search: text, matchType: matchType)
                 } else if let offlineOntologyType {
                     results = try await services.metadataColumnSync.fetchOntologySuggestions(
                         ontologyType: offlineOntologyType,
                         customFilters: offlineCustomFilters,
-                        search: text
+                        search: text,
+                        match: matchType.rawValue
                     )
                 } else {
                     results = []

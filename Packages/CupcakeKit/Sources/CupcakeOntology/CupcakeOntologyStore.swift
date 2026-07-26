@@ -71,16 +71,31 @@ public struct OntologyImportStateSnapshot: Sendable {
 
 @ModelActor
 actor OntologyStore {
+    private static let saveBatchSize = 2000
+
     @discardableResult
     func replace<T: OntologyRowDecodable>(_ type: T.Type, rows: [[String: String?]]) throws -> Int {
         try modelContext.delete(model: T.self)
+        try modelContext.save()
+
+        func freshBatchContext() -> ModelContext {
+            let context = ModelContext(modelContext.container)
+            context.autosaveEnabled = false
+            return context
+        }
+
         var count = 0
+        var batchContext = freshBatchContext()
         for row in rows {
             guard let model = T(row: row) else { continue }
-            modelContext.insert(model)
+            batchContext.insert(model)
             count += 1
+            if count % Self.saveBatchSize == 0 {
+                try batchContext.save()
+                batchContext = freshBatchContext()
+            }
         }
-        try modelContext.save()
+        try batchContext.save()
         return count
     }
 

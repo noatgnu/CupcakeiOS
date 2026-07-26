@@ -11,6 +11,8 @@ public final class CachedInstrument {
     public var allowOverlappingBookings: Bool
     public var maintenanceOverdue: Bool
     public var metadataTableServerID: Int64?
+    public var ownerServerID: Int64?
+    public var isVaulted: Bool
     public var createdAt: Date
     public var updatedAt: Date
 
@@ -23,6 +25,8 @@ public final class CachedInstrument {
         allowOverlappingBookings: Bool,
         maintenanceOverdue: Bool,
         metadataTableServerID: Int64? = nil,
+        ownerServerID: Int64? = nil,
+        isVaulted: Bool = false,
         createdAt: Date = Date(),
         updatedAt: Date = Date()
     ) {
@@ -34,6 +38,8 @@ public final class CachedInstrument {
         self.allowOverlappingBookings = allowOverlappingBookings
         self.maintenanceOverdue = maintenanceOverdue
         self.metadataTableServerID = metadataTableServerID
+        self.ownerServerID = ownerServerID
+        self.isVaulted = isVaulted
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }

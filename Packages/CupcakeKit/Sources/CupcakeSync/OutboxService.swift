@@ -135,9 +135,12 @@ public actor OutboxService {
         try await store.enqueue(OutboxEntry(operationType: OutboxOperationType.createSessionSketchAnnotation.rawValue, payloadJSON: data, relatedClientID: clientID))
     }
 
-    public func replayPending() async {
+    public func replayPending(onProgress: (@MainActor @Sendable (SyncProgress) -> Void)? = nil) async {
         let entries = (try? await store.fetchPending()) ?? []
         for entry in entries {
+            if let operationType = OutboxOperationType(rawValue: entry.operationType) {
+                await onProgress?(SyncProgress(direction: .push, label: "Pushing \(operationType.pushDisplayLabel)…"))
+            }
             do {
                 try await replay(entry)
                 try? await store.delete(entry.id)

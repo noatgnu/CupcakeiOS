@@ -176,6 +176,7 @@ struct ColumnTemplateManagementSheet: View {
                     Image(systemName: sortAscending ? "arrow.up" : "arrow.down")
                 }
                 .accessibilityIdentifier("columnTemplateSortDirectionButton")
+                .help(sortAscending ? "Ascending" : "Descending")
             }
         }
         if templates.isEmpty {
@@ -251,6 +252,20 @@ struct ColumnTemplateManagementSheet: View {
             }
             .tint(.blue)
             .accessibilityIdentifier("duplicateColumnTemplateButton_\(template.name)")
+        }
+        .contextMenu {
+            Button {
+                Task { await duplicate(template) }
+            } label: {
+                Label("Duplicate", systemImage: "plus.square.on.square")
+            }
+            .accessibilityIdentifier("duplicateColumnTemplateMenuButton_\(template.name)")
+            Button(role: .destructive) {
+                Task { await delete(template) }
+            } label: {
+                Label("Delete", systemImage: "trash")
+            }
+            .accessibilityIdentifier("deleteColumnTemplateMenuButton_\(template.name)")
         }
     }
 

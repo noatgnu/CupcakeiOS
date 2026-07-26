@@ -168,6 +168,14 @@ struct TableTemplateManagementView: View {
             .tint(.blue)
             .accessibilityIdentifier("duplicateTableTemplateButton_\(template.name)")
         }
+        .contextMenu {
+            Button {
+                Task { await duplicate(template) }
+            } label: {
+                Label("Duplicate", systemImage: "plus.square.on.square")
+            }
+            .accessibilityIdentifier("duplicateTableTemplateMenuButton_\(template.name)")
+        }
     }
 
     private func applyUpdate(_ dto: MetadataTableTemplateDTO, to cached: CachedMetadataTableTemplate) {

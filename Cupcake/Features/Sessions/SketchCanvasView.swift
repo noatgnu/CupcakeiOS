@@ -123,6 +123,7 @@ struct SketchCanvasView: View {
                     Image(systemName: model.isErasing ? "eraser.fill" : "eraser")
                 }
                 .accessibilityIdentifier("sketchEraserButton")
+                .help("Eraser")
             }
             HStack {
                 Picker("Width", selection: $model.selectedWidth) {

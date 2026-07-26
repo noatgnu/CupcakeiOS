@@ -2,6 +2,7 @@ import Foundation
 import SwiftData
 import Testing
 
+@testable import CupcakeAuth
 @testable import CupcakeModels
 @testable import CupcakeNetworking
 @testable import CupcakeSync
@@ -1228,6 +1229,47 @@ struct SyncServiceTests {
         #expect(protocols.first?.serverID == 77)
 
         #expect(try context.fetch(FetchDescriptor<OutboxEntry>()).isEmpty, "a successfully-replayed entry should be removed from the outbox")
+    }
+
+    @Test("OutboxService.replayPending reports push progress with a generic per-operation-type label before replaying each entry")
+    func outboxReplayReportsPushProgress() async throws {
+        StubURLProtocol.handler = { request in
+            let json = Data("""
+            {"id": 77, "protocol_title": "Sample Prep", "protocol_description": null, "enabled": false, "sections": []}
+            """.utf8)
+            let response = HTTPURLResponse(url: request.url!, statusCode: 201, httpVersion: nil, headerFields: nil)!
+            return (response, json)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedProtocol.self, CachedProtocolSection.self, CachedProtocolStep.self, OutboxEntry.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let protocolSync = ProtocolSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let sessionSync = SessionSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let stepReagentSync = StepReagentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let stepAnnotationSync = StepAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let inventorySync = InventorySyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let instrumentSync = InstrumentSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let projectSync = ProjectSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let instrumentJobSync = InstrumentJobSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let sessionAnnotationSync = SessionAnnotationSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let outbox = OutboxService(modelContainer: container, protocolSync: protocolSync, sessionSync: sessionSync, stepReagentSync: stepReagentSync, stepAnnotationSync: stepAnnotationSync, sessionAnnotationSync: sessionAnnotationSync, inventorySync: inventorySync, instrumentSync: instrumentSync, projectSync: projectSync, instrumentJobSync: instrumentJobSync)
+
+        let context = ModelContext(container)
+        let localProtocol = CachedProtocol(protocolTitle: "Sample Prep", protocolDescription: nil, enabled: false, isLocallyAuthored: true)
+        context.insert(localProtocol)
+        try context.save()
+        let clientID = localProtocol.clientID
+
+        try await outbox.enqueueCreateProtocol(clientID: clientID, title: "Sample Prep", description: nil, enabled: false)
+
+        nonisolated(unsafe) var reportedProgress: [SyncProgress] = []
+        await outbox.replayPending(onProgress: { progress in
+            reportedProgress.append(progress)
+        })
+
+        #expect(reportedProgress.count == 1, "one progress update should be reported for the one queued entry")
+        #expect(reportedProgress.first?.direction == .push)
+        #expect(reportedProgress.first?.label == "Pushing protocol…")
     }
 
     @Test("OutboxService replays a protocol then its section in FIFO order, resolving the section's parent dependency")
@@ -2805,6 +2847,260 @@ struct SyncServiceTests {
         #expect(!sawPost, "must never POST a duplicate permission grant once one is known to exist")
     }
 
+    private static let sampleLabGroupJSON = #"""
+        {
+            "id": 71, "name": "Research Group", "description": null, "parent_group": null,
+            "full_path": [{"id": 71, "name": "Research Group"}],
+            "creator": 1, "creator_name": "testuser", "is_active": true,
+            "allow_member_invites": true, "allow_process_jobs": false,
+            "member_count": 1, "sub_groups_count": 0,
+            "is_creator": true, "is_member": true, "can_invite": true, "can_manage": true, "can_process_jobs": true,
+            "created_at": "2026-07-25T14:00:00Z", "updated_at": "2026-07-25T14:00:00Z"
+        }
+        """#
+
+    @Test("LabGroupSyncService.create POSTs the new group and caches the result")
+    func createLabGroupPostsAndCaches() async throws {
+        StubURLProtocol.handler = { request in
+            #expect(request.httpMethod == "POST")
+            #expect(request.url!.path.hasSuffix("/lab-groups"))
+            return (HTTPURLResponse(url: request.url!, statusCode: 201, httpVersion: nil, headerFields: nil)!, Data(Self.sampleLabGroupJSON.utf8))
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedLabGroup.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let labGroupSync = LabGroupSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        let dto = try await labGroupSync.create(name: "Research Group", description: nil, parentGroupServerID: nil, allowMemberInvites: true, allowProcessJobs: false)
+        #expect(dto.id == 71)
+        #expect(dto.fullPath.first?.name == "Research Group")
+
+        let context = ModelContext(container)
+        let cached = try context.fetch(FetchDescriptor<CachedLabGroup>())
+        #expect(cached.count == 1)
+        #expect(cached.first?.isCreator == true)
+        #expect(cached.first?.canManage == true)
+    }
+
+    @Test("LabGroupSyncService.update PATCHes the group and refreshes the cache")
+    func updateLabGroupPatchesAndCaches() async throws {
+        StubURLProtocol.handler = { request in
+            #expect(request.httpMethod == "PATCH")
+            #expect(request.url!.path.hasSuffix("/lab-groups/71"))
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(Self.sampleLabGroupJSON.utf8))
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedLabGroup.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let labGroupSync = LabGroupSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        let dto = try await labGroupSync.update(labGroupServerID: 71, request: UpdateLabGroupRequest(name: "Research Group"))
+        #expect(dto.name == "Research Group")
+    }
+
+    @Test("LabGroupSyncService.deleteGroup DELETEs and removes the cached row")
+    func deleteLabGroupRemovesCachedRow() async throws {
+        StubURLProtocol.handler = { request in
+            #expect(request.httpMethod == "DELETE")
+            return (HTTPURLResponse(url: request.url!, statusCode: 204, httpVersion: nil, headerFields: nil)!, Data())
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedLabGroup.self])
+        let context = ModelContext(container)
+        context.insert(CachedLabGroup(serverID: 71, name: "Research Group"))
+        try context.save()
+
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let labGroupSync = LabGroupSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        try await labGroupSync.deleteGroup(labGroupServerID: 71)
+
+        let remaining = try context.fetch(FetchDescriptor<CachedLabGroup>())
+        #expect(remaining.isEmpty)
+    }
+
+    @Test("LabGroupSyncService.inviteUser POSTs the invite and returns the real response shape")
+    func inviteUserPostsRequest() async throws {
+        StubURLProtocol.handler = { request in
+            #expect(request.httpMethod == "POST")
+            #expect(request.url!.path.hasSuffix("/lab-groups/71/invite_user"))
+            let json = Data(#"""
+                {
+                "id": 1, "lab_group": 71, "lab_group_name": "Research Group", "inviter": 1, "inviter_name": "testuser",
+                "invited_user": null, "invited_email": "invitee@example.com", "status": "pending", "message": "join please",
+                "expires_at": "2026-08-01T00:00:00Z", "responded_at": null, "can_accept": true,
+                "created_at": "2026-07-25T14:00:00Z", "updated_at": "2026-07-25T14:00:00Z"
+                }
+                """#.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 201, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedLabGroup.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let labGroupSync = LabGroupSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        let dto = try await labGroupSync.inviteUser(labGroupServerID: 71, email: "invitee@example.com", message: "join please")
+        #expect(dto.invitedEmail == "invitee@example.com")
+        #expect(dto.status == "pending")
+    }
+
+    @Test("LabGroupSyncService.fetchMyPendingInvitations decodes the real plain-array (non-paginated) response shape")
+    func fetchMyPendingInvitationsDecodesPlainArray() async throws {
+        StubURLProtocol.handler = { request in
+            #expect(request.url!.path.hasSuffix("/lab-group-invitations/my_pending_invitations"))
+            let json = Data(#"""
+                [{
+                "id": 2, "lab_group": 71, "lab_group_name": "Research Group", "inviter": 1, "inviter_name": "testuser",
+                "invited_user": null, "invited_email": "me@example.com", "status": "pending", "message": null,
+                "expires_at": null, "responded_at": null, "can_accept": true,
+                "created_at": "2026-07-25T14:00:00Z", "updated_at": "2026-07-25T14:00:00Z"
+                }]
+                """#.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedLabGroup.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let labGroupSync = LabGroupSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        let invitations = try await labGroupSync.fetchMyPendingInvitations()
+        #expect(invitations.count == 1)
+        #expect(invitations.first?.invitedEmail == "me@example.com")
+    }
+
+    private static let sampleUserProfileJSON = #"""
+        {
+            "id": 1, "username": "testuser", "email": "testuser@example.com",
+            "first_name": "Test", "last_name": "User", "is_staff": true, "is_superuser": false,
+            "is_active": true, "date_joined": "2026-07-05T21:43:37Z", "last_login": "2026-07-25T17:06:34Z",
+            "has_orcid": false, "orcid_id": null, "orcid_name": null
+        }
+        """#
+
+    @Test("UserProfileSyncService.fetchProfile GETs the real users/{id}/ endpoint")
+    func fetchProfileGetsRealEndpoint() async throws {
+        StubURLProtocol.handler = { request in
+            #expect(request.httpMethod == "GET")
+            #expect(request.url!.path.hasSuffix("/users/1"))
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data(Self.sampleUserProfileJSON.utf8))
+        }
+
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let userProfileSync = UserProfileSyncService(apiClient: apiClient, deviceToken: { "test-token" })
+
+        let profile = try await userProfileSync.fetchProfile(userID: 1)
+        #expect(profile.username == "testuser")
+        #expect(profile.firstName == "Test")
+        #expect(profile.isStaff)
+    }
+
+    @Test("UserProfileSyncService.updateProfile POSTs the real update_profile endpoint and returns the nested user")
+    func updateProfilePostsRealEndpoint() async throws {
+        StubURLProtocol.handler = { request in
+            #expect(request.httpMethod == "POST")
+            #expect(request.url!.path.hasSuffix("/users/update_profile"))
+            let json = Data(#"""
+                {"message": "Profile updated successfully", "user": \#(Self.sampleUserProfileJSON)}
+                """#.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let userProfileSync = UserProfileSyncService(apiClient: apiClient, deviceToken: { "test-token" })
+
+        let profile = try await userProfileSync.updateProfile(firstName: "Test", lastName: "User", email: nil, currentPassword: nil)
+        #expect(profile.email == "testuser@example.com")
+    }
+
+    @Test("UserProfileSyncService.changePassword POSTs the real change_password endpoint")
+    func changePasswordPostsRealEndpoint() async throws {
+        StubURLProtocol.handler = { request in
+            #expect(request.httpMethod == "POST")
+            #expect(request.url!.path.hasSuffix("/users/change_password"))
+            let json = Data(#"{"message": "Password changed successfully"}"#.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let userProfileSync = UserProfileSyncService(apiClient: apiClient, deviceToken: { "test-token" })
+
+        try await userProfileSync.changePassword(currentPassword: "old", newPassword: "new12345", confirmPassword: "new12345")
+    }
+
+    private static let sampleDeviceTokenJSON = #"""
+        {
+            "id": 967, "token": "abc123", "label": "Test Device", "description": "",
+            "permission": "write", "enabled": true, "user": 1, "username": "testuser",
+            "created_at": "2026-07-25T18:32:38Z", "last_used_at": null, "expires_at": null, "is_expired": false
+        }
+        """#
+
+    @Test("DeviceTokenSyncService.fetchPage GETs the real paginated device-tokens endpoint")
+    func fetchPageGetsRealEndpoint() async throws {
+        StubURLProtocol.handler = { request in
+            #expect(request.httpMethod == "GET")
+            #expect(request.url!.path.hasSuffix("/device-tokens"))
+            let json = Data(#"""
+                {"count": 1, "next": null, "previous": null, "results": [\#(Self.sampleDeviceTokenJSON)]}
+                """#.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let deviceTokenSync = DeviceTokenSyncService(apiClient: apiClient, deviceToken: { "test-token" })
+
+        let page = try await deviceTokenSync.fetchPage(offset: 0, limit: 25)
+        #expect(page.count == 1)
+        #expect(page.results.first?.label == "Test Device")
+        #expect(page.results.first?.token == "abc123")
+    }
+
+    @Test("DeviceTokenSyncService.rotate POSTs the real rotate endpoint and returns the new token")
+    func rotatePostsRealEndpoint() async throws {
+        StubURLProtocol.handler = { request in
+            #expect(request.httpMethod == "POST")
+            #expect(request.url!.path.hasSuffix("/device-tokens/967/rotate"))
+            let json = Data(#"{"token": "newtoken456"}"#.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let deviceTokenSync = DeviceTokenSyncService(apiClient: apiClient, deviceToken: { "test-token" })
+
+        let newToken = try await deviceTokenSync.rotate(id: 967)
+        #expect(newToken == "newtoken456")
+    }
+
+    @Test("DeviceTokenSyncService.toggle POSTs the real toggle endpoint and returns the new enabled state")
+    func togglePostsRealEndpoint() async throws {
+        StubURLProtocol.handler = { request in
+            #expect(request.httpMethod == "POST")
+            #expect(request.url!.path.hasSuffix("/device-tokens/967/toggle"))
+            let json = Data(#"{"enabled": false}"#.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let deviceTokenSync = DeviceTokenSyncService(apiClient: apiClient, deviceToken: { "test-token" })
+
+        let enabled = try await deviceTokenSync.toggle(id: 967)
+        #expect(enabled == false)
+    }
+
+    @Test("DeviceTokenSyncService.delete DELETEs the real device-tokens endpoint")
+    func deleteDeletesRealEndpoint() async throws {
+        StubURLProtocol.handler = { request in
+            #expect(request.httpMethod == "DELETE")
+            #expect(request.url!.path.hasSuffix("/device-tokens/967"))
+            return (HTTPURLResponse(url: request.url!, statusCode: 204, httpVersion: nil, headerFields: nil)!, Data())
+        }
+
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let deviceTokenSync = DeviceTokenSyncService(apiClient: apiClient, deviceToken: { "test-token" })
+
+        try await deviceTokenSync.delete(id: 967)
+    }
+
     @Test("InstrumentJobSyncService.updateStaff PATCHes the job's staff list and updates the cache")
     func updateStaffPatchesJob() async throws {
         StubURLProtocol.handler = { request in
@@ -3095,6 +3391,87 @@ struct SyncServiceTests {
         #expect(fullData.deltaComposition == "O")
         #expect(fullData.specifications["1"]?["site"] == "M")
         #expect(fullData.specifications["2"]?["hidden"] == "1")
+    }
+
+    @Test("OnlineOntologySearchService.search issues one request per enabled type and buckets results per database")
+    func onlineOntologySearchBucketsPerType() async throws {
+        StubURLProtocol.handler = { request in
+            let query = request.url!.query ?? ""
+            #expect(query.contains("q=test"))
+            if query.contains("type=species") {
+                let json = Data("""
+                {"ontology_type": "species", "suggestions": [
+                    {"id": "9606", "value": "HUMAN", "display_name": "Homo sapiens", "description": "Human", "ontology_type": "species"}
+                ]}
+                """.utf8)
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+            } else if query.contains("type=unimod") {
+                let json = Data("""
+                {"ontology_type": "unimod", "suggestions": [
+                    {"id": "UNIMOD:21", "value": "UNIMOD:21", "display_name": "Phospho", "description": "Phosphorylation", "ontology_type": "unimod",
+                     "full_data": {"accession": "UNIMOD:21", "name": "Phospho", "definition": "Phosphorylation",
+                         "delta_mono_mass": "79.966331", "delta_composition": "H O(3) P", "specifications": {}}}
+                ]}
+                """.utf8)
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+            }
+            let empty = Data("""
+            {"ontology_type": "", "suggestions": []}
+            """.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, empty)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedMetadataColumn.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let metadataColumnSync = MetadataColumnSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let ontologySearchSync = OnlineOntologySearchService(metadataColumnSync: metadataColumnSync)
+
+        let buckets = await ontologySearchSync.search(text: "test", enabledTypeKeys: ["species", "unimod"])
+
+        #expect(buckets["species"]?.count == 1)
+        #expect(buckets["unimod"]?.count == 1)
+        if case .simpleTerm(let term) = buckets["species"]?.first {
+            #expect(term.title == "Homo sapiens")
+        } else {
+            Issue.record("expected .simpleTerm for species")
+        }
+        if case .unimod(let term) = buckets["unimod"]?.first {
+            #expect(term.deltaMonoMass == "79.966331")
+        } else {
+            Issue.record("expected .unimod for unimod")
+        }
+    }
+
+    @Test("OnlineOntologySearchService.search returns no results for a query under 2 characters, without any network call")
+    func onlineOntologySearchSkipsShortQuery() async throws {
+        StubURLProtocol.handler = { _ in
+            Issue.record("should not make a network call for a search under 2 characters")
+            throw URLError(.badServerResponse)
+        }
+        let container = try makeInMemoryContainer(for: [CachedMetadataColumn.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let metadataColumnSync = MetadataColumnSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let ontologySearchSync = OnlineOntologySearchService(metadataColumnSync: metadataColumnSync)
+
+        let buckets = await ontologySearchSync.search(text: "h", enabledTypeKeys: ["species"])
+        #expect(buckets.isEmpty)
+    }
+
+    @Test("OnlineOntologySearchService.search passes the chosen matchType through as the raw match= query param")
+    func onlineOntologySearchPassesMatchType() async throws {
+        StubURLProtocol.handler = { request in
+            #expect(request.url!.query?.contains("match=startswith") == true)
+            let empty = Data("""
+            {"ontology_type": "", "suggestions": []}
+            """.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, empty)
+        }
+        let container = try makeInMemoryContainer(for: [CachedMetadataColumn.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let metadataColumnSync = MetadataColumnSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let ontologySearchSync = OnlineOntologySearchService(metadataColumnSync: metadataColumnSync)
+
+        _ = await ontologySearchSync.search(text: "test", enabledTypeKeys: ["species"], matchType: .startsWith)
     }
 
     @Test("MetadataColumnSyncService.addColumn posts column_data to add_column_with_auto_reorder")
@@ -3653,7 +4030,7 @@ struct SyncServiceTests {
         #expect(dtos.first?.currentDuration == 250)
 
         let cached = try ModelContext(container).fetch(FetchDescriptor<CachedTimeKeeper>())
-        #expect(cached.isEmpty, "fetchTimeKeepers is a pure network call — the caller applies results to its own context")
+        #expect(cached.isEmpty, "fetchTimeKeepers is a pure network call, the caller applies results to its own context")
     }
 
     @Test("TimeKeeperSyncService.create POSTs session/step/durations and caches the result")
@@ -4011,7 +4388,7 @@ struct SyncServiceTests {
             #expect(request.httpMethod == "POST")
             let body = try #require(request.httpBodyStream).readAllData()
             let sentJSON = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
-            #expect(sentJSON["user"] as? Int64 == 1, "must always send user explicitly — perform_create's auto-assign runs after required-field validation")
+            #expect(sentJSON["user"] as? Int64 == 1, "must always send user explicitly, perform_create's auto-assign runs after required-field validation")
             let json = Data(#"{"id": 3, "user": 1, "stored_reagent": 1, "notify_on_low_stock": true, "notify_on_expiry": false}"#.utf8)
             return (HTTPURLResponse(url: request.url!, statusCode: 201, httpVersion: nil, headerFields: nil)!, json)
         }
@@ -4114,6 +4491,233 @@ struct SyncServiceTests {
         let cached = try context.fetch(FetchDescriptor<CachedSamplePool>()).first
         #expect(cached?.poolName == "Pool A Renamed")
         #expect(cached?.isReference == true)
+    }
+
+    @Test("AsyncTaskDTO decodes the real hand-rolled retrieve response shape")
+    func asyncTaskDTODecodesRetrieveShape() throws {
+        let json = Data(#"""
+            {"id": "cc51e477-2206-4750-b629-315a04d49ba7", "task_type": "EXPORT_SDRF", "status": "SUCCESS",
+             "metadata_table_id": 277, "metadata_table_name": "Browser Flow Table", "parameters": {}, "result": {},
+             "progress_percentage": 100, "progress_description": "", "created_at": "2026-07-26T13:01:06Z",
+             "started_at": "2026-07-26T13:03:26Z", "completed_at": "2026-07-26T13:03:26Z", "duration": 0.03,
+             "error_message": "", "traceback": null}
+            """#.utf8)
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let dto = try decoder.decode(AsyncTaskDTO.self, from: json)
+        #expect(dto.id == "cc51e477-2206-4750-b629-315a04d49ba7")
+        #expect(dto.metadataTableID == 277)
+        #expect(dto.status == "SUCCESS")
+        #expect(dto.isTerminal == true)
+    }
+
+    @Test("AsyncTaskDTO decodes the lightweight list response shape (metadata_table, not metadata_table_id)")
+    func asyncTaskDTODecodesListShape() throws {
+        let json = Data(#"""
+            {"id": "cc51e477-2206-4750-b629-315a04d49ba7", "task_type": "EXPORT_SDRF", "task_type_display": "Export SDRF File",
+             "status": "QUEUED", "status_display": "Queued", "user": 1, "user_username": "testuser",
+             "metadata_table": 277, "metadata_table_name": "Browser Flow Table", "progress_percentage": 0,
+             "progress_description": "", "created_at": "2026-07-26T13:01:06Z", "started_at": null,
+             "completed_at": null, "duration": null, "error_message": ""}
+            """#.utf8)
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let dto = try decoder.decode(AsyncTaskDTO.self, from: json)
+        #expect(dto.metadataTableID == 277)
+        #expect(dto.status == "QUEUED")
+        #expect(dto.isTerminal == false)
+    }
+
+    @Test("AsyncTaskSyncService.fetchAll GETs the real paginated endpoint")
+    func asyncTaskFetchAllGetsRealEndpoint() async throws {
+        StubURLProtocol.handler = { request in
+            #expect(request.httpMethod == "GET")
+            #expect(request.url!.path.hasSuffix("/async-tasks"))
+            let json = Data(#"""
+                {"count": 1, "next": null, "previous": null, "results": [
+                  {"id": "abc", "task_type": "EXPORT_SDRF", "status": "SUCCESS", "metadata_table": 1,
+                   "metadata_table_name": "T", "progress_percentage": 100, "progress_description": "",
+                   "created_at": "2026-01-01T00:00:00Z", "started_at": null, "completed_at": null,
+                   "duration": null, "error_message": ""}
+                ]}
+                """#.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+        }
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let service = AsyncTaskSyncService(apiClient: apiClient, deviceToken: { "test-token" })
+        let page = try await service.fetchAll()
+        #expect(page.count == 1)
+        #expect(page.results.first?.id == "abc")
+    }
+
+    @Test("AsyncTaskSyncService.exportSDRFFile POSTs the real request shape and returns the task id")
+    func asyncTaskExportSDRFPostsRealShape() async throws {
+        StubURLProtocol.handler = { request in
+            #expect(request.httpMethod == "POST")
+            #expect(request.url!.path.hasSuffix("/async-export/sdrf_file"))
+            let body = request.httpBodyStream?.readAllData() ?? request.httpBody ?? Data()
+            let decoded = try JSONSerialization.jsonObject(with: body) as? [String: Any]
+            #expect(decoded?["metadata_table_id"] as? Int64 == 277)
+            #expect(decoded?["sample_number"] as? Int == 5)
+            let columnIds = (decoded?["metadata_column_ids"] as? [Int]) ?? []
+            #expect(columnIds == [1, 2], "the real DRF field is metadata_column_ids (lowercase ids), not metadata_column_i_ds")
+            let json = Data(#"{"task_id": "cc51e477-2206-4750-b629-315a04d49ba7", "message": "queued"}"#.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 202, httpVersion: nil, headerFields: nil)!, json)
+        }
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let service = AsyncTaskSyncService(apiClient: apiClient, deviceToken: { "test-token" })
+        let taskID = try await service.exportSDRFFile(metadataTableServerID: 277, metadataColumnIDs: [1, 2], sampleNumber: 5, includePools: false)
+        #expect(taskID == "cc51e477-2206-4750-b629-315a04d49ba7")
+    }
+
+    @Test("AsyncTaskSyncService.cancel DELETEs the real cancel endpoint")
+    func asyncTaskCancelDeletesRealEndpoint() async throws {
+        StubURLProtocol.handler = { request in
+            #expect(request.httpMethod == "DELETE")
+            #expect(request.url!.path.hasSuffix("/async-tasks/abc/cancel"))
+            let json = Data(#"{"message": "Task deleted successfully"}"#.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+        }
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let service = AsyncTaskSyncService(apiClient: apiClient, deviceToken: { "test-token" })
+        try await service.cancel(id: "abc")
+    }
+
+    @Test("AsyncTaskSyncService.fetchDownloadURL GETs the real download_url action")
+    func asyncTaskFetchDownloadURLGetsRealEndpoint() async throws {
+        StubURLProtocol.handler = { request in
+            #expect(request.httpMethod == "GET")
+            #expect(request.url!.path.hasSuffix("/async-tasks/abc/download_url"))
+            let json = Data(#"""
+                {"download_url": "https://example.test/api/v1/async-tasks/abc/download/?token=xyz",
+                 "filename": "export.sdrf.tsv", "content_type": "text/tab-separated-values", "file_size": 42}
+                """#.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+        }
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let service = AsyncTaskSyncService(apiClient: apiClient, deviceToken: { "test-token" })
+        let info = try await service.fetchDownloadURL(id: "abc")
+        #expect(info.filename == "export.sdrf.tsv")
+    }
+
+    @Test("AsyncTaskNotificationService.webSocketURL derives ws:// from an http:// API base and preserves the port")
+    func asyncTaskWebSocketURLDerivesFromHTTPBase() {
+        let apiBaseURL = URL(string: "http://127.0.0.1:8002/api/v1/")!
+        let wsURL = AsyncTaskNotificationService.webSocketURL(from: apiBaseURL, token: "abc123")
+        #expect(wsURL?.absoluteString == "ws://127.0.0.1:8002/ws/ccc/notifications/?token=abc123")
+    }
+
+    @Test("AsyncTaskNotificationService.originHeader matches the API base's scheme, host, and port")
+    func asyncTaskOriginHeaderMatchesAPIBase() {
+        #expect(AsyncTaskNotificationService.originHeader(for: URL(string: "http://127.0.0.1:8002/api/v1/")!) == "http://127.0.0.1:8002")
+    }
+
+    @Test("AsyncTaskNotificationService.parseEvent decodes a real async_task.update push message")
+    func asyncTaskParseEventDecodesRealPush() {
+        let event = AsyncTaskNotificationService.parseEvent(from: #"""
+            {"type": "async_task.update", "task_id": "cc51e477-2206-4750-b629-315a04d49ba7", "task_type": "EXPORT_SDRF",
+             "status": "SUCCESS", "progress_percentage": 100, "progress_description": "", "error_message": "",
+             "result": {"file_url": "https://example.test/download"}, "download_url": null, "timestamp": "2026-07-26T13:03:26Z"}
+            """#)
+        #expect(event?.taskID == "cc51e477-2206-4750-b629-315a04d49ba7")
+        #expect(event?.status == "SUCCESS")
+        #expect(event?.progressPercentage == 100)
+    }
+
+    @Test("AsyncTaskNotificationService.parseEvent ignores unrelated message types")
+    func asyncTaskParseEventIgnoresUnrelatedMessages() {
+        let subscriptionConfirmed = AsyncTaskNotificationService.parseEvent(from: #"{"type":"subscription.confirmed","subscription_type":"async_task_updates"}"#)
+        #expect(subscriptionConfirmed == nil)
+
+        let malformed = AsyncTaskNotificationService.parseEvent(from: "not json")
+        #expect(malformed == nil)
+    }
+
+    @Test("AsyncTaskSyncService.importSDRFFile POSTs a real multipart request with the right fields and returns the task id")
+    func asyncTaskImportSDRFPostsRealMultipartShape() async throws {
+        StubURLProtocol.handler = { request in
+            #expect(request.httpMethod == "POST")
+            #expect(request.url!.path.hasSuffix("/async-import/sdrf_file"))
+            #expect(request.value(forHTTPHeaderField: "Content-Type")?.hasPrefix("multipart/form-data") == true)
+            let body = request.httpBodyStream?.readAllData() ?? request.httpBody ?? Data()
+            let bodyString = String(data: body, encoding: .utf8) ?? ""
+            #expect(bodyString.contains("name=\"metadata_table_id\""))
+            #expect(bodyString.contains("name=\"replace_existing\""))
+            #expect(bodyString.contains("true"))
+            #expect(bodyString.contains("name=\"import_type\""))
+            #expect(bodyString.contains("user_metadata"))
+            #expect(bodyString.contains("name=\"file\"; filename=\""))
+            let json = Data(#"{"task_id": "f124ab05-c988-465d-ac16-e5c86d3fdc26", "message": "queued"}"#.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 202, httpVersion: nil, headerFields: nil)!, json)
+        }
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let service = AsyncTaskSyncService(apiClient: apiClient, deviceToken: { "test-token" })
+
+        let tempFile = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).sdrf.tsv")
+        try Data("source name\tcharacteristics[organism]\nHCC-001\thomo sapiens\n".utf8).write(to: tempFile)
+        defer { try? FileManager.default.removeItem(at: tempFile) }
+
+        let taskID = try await service.importSDRFFile(metadataTableServerID: 290, fileURL: tempFile, replaceExisting: true)
+        #expect(taskID == "f124ab05-c988-465d-ac16-e5c86d3fdc26")
+    }
+
+    @Test("AsyncTaskSyncService.importSDRFFile sends the real import_type value when a non-default scope is chosen, e.g. a staff user explicitly opting into touching staff-only columns")
+    func asyncTaskImportSendsBothScopeWhenExplicitlyRequested() async throws {
+        StubURLProtocol.handler = { request in
+            let body = request.httpBodyStream?.readAllData() ?? request.httpBody ?? Data()
+            let bodyString = String(data: body, encoding: .utf8) ?? ""
+            #expect(bodyString.contains("name=\"import_type\""))
+            #expect(bodyString.contains("\r\n\r\nboth\r\n"))
+            #expect(!bodyString.contains("\r\n\r\nuser_metadata\r\n"), "the request should carry the real chosen scope, not the default")
+            let json = Data(#"{"task_id": "f124ab05-c988-465d-ac16-e5c86d3fdc26", "message": "queued"}"#.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 202, httpVersion: nil, headerFields: nil)!, json)
+        }
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let service = AsyncTaskSyncService(apiClient: apiClient, deviceToken: { "test-token" })
+
+        let tempFile = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).sdrf.tsv")
+        try Data("source name\n".utf8).write(to: tempFile)
+        defer { try? FileManager.default.removeItem(at: tempFile) }
+
+        try await service.importSDRFFile(metadataTableServerID: 290, fileURL: tempFile, replaceExisting: false, importScope: .both)
+    }
+
+    @Test("AsyncTaskSyncService.importSDRFFile surfaces the real permission-denied message for a non-owner, non-staff user")
+    func asyncTaskImportSurfacesRealPermissionDeniedMessage() async throws {
+        StubURLProtocol.handler = { request in
+            let json = Data(#"{"error": "Permission denied: cannot edit this metadata table"}"#.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 403, httpVersion: nil, headerFields: nil)!, json)
+        }
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let service = AsyncTaskSyncService(apiClient: apiClient, deviceToken: { "test-token" })
+
+        let tempFile = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).sdrf.tsv")
+        try Data("source name\n".utf8).write(to: tempFile)
+        defer { try? FileManager.default.removeItem(at: tempFile) }
+
+        do {
+            _ = try await service.importSDRFFile(metadataTableServerID: 290, fileURL: tempFile, replaceExisting: false)
+            Issue.record("Expected the import to throw for a permission-denied response")
+        } catch {
+            #expect(error.userFacingMessage == "Permission denied: cannot edit this metadata table")
+        }
+    }
+
+    @Test("AsyncTaskSyncService.exportSDRFFile also surfaces a real 403 error message the same way")
+    func asyncTaskExportSurfacesRealPermissionDeniedMessage() async throws {
+        StubURLProtocol.handler = { request in
+            let json = Data(#"{"error": "Permission denied: cannot view this metadata table"}"#.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 403, httpVersion: nil, headerFields: nil)!, json)
+        }
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let service = AsyncTaskSyncService(apiClient: apiClient, deviceToken: { "test-token" })
+
+        do {
+            _ = try await service.exportSDRFFile(metadataTableServerID: 290, metadataColumnIDs: [], sampleNumber: 1, includePools: false)
+            Issue.record("Expected the export to throw for a permission-denied response")
+        } catch {
+            #expect(error.userFacingMessage == "Permission denied: cannot view this metadata table")
+        }
     }
 
 }

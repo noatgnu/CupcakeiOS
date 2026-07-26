@@ -8,8 +8,32 @@ public struct InstrumentDTO: Decodable, Sendable {
     public let maintenanceOverdue: Bool
     public let metadataTableId: Int64?
     public let metadataTableName: String?
+    public let user: Int64?
+    public let isVaulted: Bool
     public let createdAt: String?
     public let updatedAt: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case id, instrumentName, instrumentDescription, enabled, acceptsBookings, allowOverlappingBookings
+        case maintenanceOverdue, metadataTableId, metadataTableName, user, isVaulted, createdAt, updatedAt
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(Int64.self, forKey: .id)
+        instrumentName = try container.decode(String.self, forKey: .instrumentName)
+        instrumentDescription = try container.decodeIfPresent(String.self, forKey: .instrumentDescription)
+        enabled = try container.decode(Bool.self, forKey: .enabled)
+        acceptsBookings = try container.decode(Bool.self, forKey: .acceptsBookings)
+        allowOverlappingBookings = try container.decode(Bool.self, forKey: .allowOverlappingBookings)
+        maintenanceOverdue = try container.decode(Bool.self, forKey: .maintenanceOverdue)
+        metadataTableId = try container.decodeIfPresent(Int64.self, forKey: .metadataTableId)
+        metadataTableName = try container.decodeIfPresent(String.self, forKey: .metadataTableName)
+        user = try container.decodeIfPresent(Int64.self, forKey: .user)
+        isVaulted = try container.decodeIfPresent(Bool.self, forKey: .isVaulted) ?? false
+        createdAt = try container.decodeIfPresent(String.self, forKey: .createdAt)
+        updatedAt = try container.decodeIfPresent(String.self, forKey: .updatedAt)
+    }
 }
 
 public struct CreateInstrumentRequest: Encodable, Sendable {

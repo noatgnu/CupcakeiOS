@@ -249,6 +249,7 @@ struct CreateMetadataFromTemplateSheet: View {
             }
             .buttonStyle(.borderless)
             .accessibilityIdentifier("previewTemplateButton_\(template.name)")
+            .help("Preview Template")
         }
     }
 

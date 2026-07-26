@@ -14,10 +14,10 @@ final class CupcakeOfflineFlowUITests: XCTestCase {
     func testReenteringSameProtocolAfterBackNavigatesCorrectly() throws {
         #if os(iOS)
         guard UIDevice.current.userInterfaceIdiom == .phone else {
-            throw XCTSkip("This regression is specific to compact width's push navigation — regular width (iPad/Mac) shows detail inline with nothing to pop.")
+            throw XCTSkip("This regression is specific to compact width's push navigation. Regular width (iPad/Mac) shows detail inline with nothing to pop.")
         }
         #else
-        throw XCTSkip("This regression is specific to compact width's push navigation — regular width (iPad/Mac) shows detail inline with nothing to pop.")
+        throw XCTSkip("This regression is specific to compact width's push navigation. Regular width (iPad/Mac) shows detail inline with nothing to pop.")
         #endif
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing-reset-state"]
@@ -79,7 +79,6 @@ final class CupcakeOfflineFlowUITests: XCTestCase {
 
         let renameField = firstExisting(app.textViews["addTextSheetField"], app.textFields["addTextSheetField"])
         XCTAssertTrue(renameField.waitForExistence(timeout: 5))
-        renameField.tap()
         selectAllAndReplace(renameField, with: "Analysis")
         app.buttons["addTextSheetSaveButton"].tap()
 
@@ -186,6 +185,29 @@ final class CupcakeOfflineFlowUITests: XCTestCase {
         tissueImportButton.tap()
 
         XCTAssertTrue(elementContaining("Imported", in: app).waitForExistence(timeout: 20), "Tissue import should complete and show an 'Imported' timestamp")
+    }
+
+    @MainActor
+    func testSettingsWindowShowsATitle() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing-reset-state"]
+        app.launch()
+
+        let continueOfflineButton = app.buttons["continueOfflineButton"]
+        XCTAssertTrue(continueOfflineButton.waitForExistence(timeout: 5))
+        continueOfflineButton.tap()
+
+        tapTab("Protocols", in: app)
+        #if os(macOS)
+        app.typeKey(",", modifierFlags: .command)
+        #else
+        tapToolbarButton("settingsButton", label: "Settings", in: app)
+        #endif
+
+        XCTAssertTrue(elementContaining("Appearance", in: app).waitForExistence(timeout: 10))
+        let titlePredicate = NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", "Settings", "Settings")
+        let titleText = app.staticTexts.matching(titlePredicate).firstMatch
+        XCTAssertTrue(titleText.waitForExistence(timeout: 5), "The Settings window/sheet should show a visible \"Settings\" title text, not just a bare Done button")
     }
 
     @MainActor
@@ -355,7 +377,6 @@ final class CupcakeOfflineFlowUITests: XCTestCase {
         app.buttons["renameSectionButton"].firstMatch.tap()
         let renameField = firstExisting(app.textViews["addTextSheetField"], app.textFields["addTextSheetField"])
         XCTAssertTrue(renameField.waitForExistence(timeout: 5))
-        renameField.tap()
         selectAllAndReplace(renameField, with: "Analysis")
         app.buttons["addTextSheetSaveButton"].tap()
         XCTAssertTrue(app.staticTexts["Analysis"].waitForExistence(timeout: 5))

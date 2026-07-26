@@ -8,10 +8,9 @@ struct ProtocolListView: View {
     @Environment(AppSession.self) private var appSession
     @Environment(\.modelContext) private var modelContext
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Query(sort: \CachedProtocol.createdAt, order: .reverse) private var protocols: [CachedProtocol]
     @Query private var outboxEntries: [OutboxEntry]
-
-    let ontologyStore: ModelContainer
 
     @State private var selectedProtocolID: UUID?
     @State private var isSyncing = false
@@ -19,7 +18,6 @@ struct ProtocolListView: View {
     @State private var isShowingError = false
     @State private var isShowingNewProtocolSheet = false
     @State private var isShowingSyncIssues = false
-    @State private var isShowingSettings = false
     @State private var isShowingImportSheet = false
     @State private var pathStack: [BreadcrumbSegment] = [BreadcrumbSegment(id: nil, name: "All Protocols")]
     @State private var listFilter: ProtocolListFilter?
@@ -121,11 +119,23 @@ struct ProtocolListView: View {
                         .disabled(isSyncing)
                         .accessibilityIdentifier("syncNowButton")
                     }
+                    #if os(macOS)
                     ToolbarItem {
-                        Button("Sign Out") {
-                            Task { await appSession.signOut() }
+                        Menu {
+                            Button("Switch Instance…") {
+                                appSession.leaveActiveInstance()
+                            }
+                            .accessibilityIdentifier("switchInstanceButton")
+                            Button("Sign Out", role: .destructive) {
+                                Task { await appSession.signOut() }
+                            }
+                            .accessibilityIdentifier("signOutButton")
+                        } label: {
+                            Label("Account", systemImage: "person.crop.circle")
                         }
+                        .accessibilityIdentifier("accountMenu")
                     }
+                    #endif
                 } else if appSession.isStandalone {
                     ToolbarItem {
                         Button("Exit Offline Mode") {
@@ -134,20 +144,6 @@ struct ProtocolListView: View {
                         .accessibilityIdentifier("exitOfflineModeButton")
                     }
                 }
-                #if !os(macOS)
-                ToolbarItem {
-                    Button {
-                        if PlatformWindowPreference.prefersSeparateWindow {
-                            PlatformWindowPreference.openOrFocusWindow(id: "settings", using: openWindow)
-                        } else {
-                            isShowingSettings = true
-                        }
-                    } label: {
-                        Label("Settings", systemImage: "gearshape")
-                    }
-                    .accessibilityIdentifier("settingsButton")
-                }
-                #endif
             }
             .sheet(isPresented: $isShowingNewProtocolSheet) {
                 NewProtocolView()
@@ -165,11 +161,6 @@ struct ProtocolListView: View {
                         }
                 }
                 .frame(minWidth: 360, minHeight: 400)
-            }
-            .sheet(isPresented: $isShowingSettings) {
-                SettingsView()
-                    .modelContainer(ontologyStore)
-                    .frame(minWidth: 400, minHeight: 500)
             }
             .alert("Sync failed", isPresented: $isShowingError) {
                 Button("OK") {}
@@ -202,6 +193,10 @@ struct ProtocolListView: View {
             if newValue.count == 1 {
                 selectedProtocolID = nil
             }
+            appSession.isShowingPushedDetail = newValue.count > 1 && horizontalSizeClass == .compact
+        }
+        .onAppear {
+            appSession.isShowingPushedDetail = pathStack.count > 1 && horizontalSizeClass == .compact
         }
     }
 

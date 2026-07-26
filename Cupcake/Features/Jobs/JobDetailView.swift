@@ -299,6 +299,8 @@ struct JobDetailView: View {
                                             .foregroundStyle(.secondary)
                                     }
                                 }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
                             .disabled(!canEditCell(column))
@@ -311,6 +313,14 @@ struct JobDetailView: View {
                                 }
                                 .tint(.gray)
                                 .accessibilityIdentifier("columnSettingsButton_\(column.name)")
+                            }
+                            .contextMenu {
+                                Button {
+                                    columnSettingsTarget = column
+                                } label: {
+                                    Label("Settings", systemImage: "gearshape")
+                                }
+                                .accessibilityIdentifier("columnSettingsMenuButton_\(column.name)")
                             }
                         }
                         .onDelete { offsets in
@@ -483,6 +493,9 @@ struct JobDetailView: View {
         }
         .task(id: job?.serverID) {
             await loadBookings()
+            if job?.serverID != nil, metadataTable == nil {
+                await refreshMetadataTable()
+            }
         }
         .task(id: metadataTable?.serverID) {
             await refreshSamplePools()
@@ -568,7 +581,7 @@ struct JobDetailView: View {
                             Button {
                                 openCellEditor(column: column, sampleIndex: sampleIndex)
                             } label: {
-                                Text(cellValue.isEmpty ? "—" : cellValue)
+                                Text(cellValue.isEmpty ? "-" : cellValue)
                                     .font(.caption)
                                     .lineLimit(1)
                                     .frame(minWidth: 80, alignment: .leading)

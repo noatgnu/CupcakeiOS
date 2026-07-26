@@ -8,6 +8,7 @@ public struct SessionDTO: Decodable, Sendable {
     public let isRunning: Bool?
     public let status: String?
     public let protocols: [Int64]
+    public let createdAt: String?
 }
 
 public struct CreateSessionRequest: Encodable, Sendable {

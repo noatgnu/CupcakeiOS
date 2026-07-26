@@ -7,6 +7,7 @@ struct JobListView: View {
 
     @Environment(AppSession.self) private var appSession
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Query(sort: \CachedInstrumentJob.createdAt, order: .reverse) private var jobs: [CachedInstrumentJob]
     @Query private var projects: [CachedProject]
     @Query private var labGroups: [CachedLabGroup]
@@ -16,6 +17,7 @@ struct JobListView: View {
     @State private var isShowingTableTemplateManagement = false
     @State private var isShowingColumnTemplateManagement = false
     @State private var isShowingMetadataTablesBrowser = false
+    @State private var isShowingLabGroups = false
     @State private var selectedJobID: UUID?
     @State private var pathStack: [BreadcrumbSegment] = [BreadcrumbSegment(id: nil, name: "All Jobs")]
     @State private var searchText = ""
@@ -147,6 +149,18 @@ struct JobListView: View {
                 }
                 ToolbarItem {
                     Button {
+                        if PlatformWindowPreference.prefersSeparateWindow {
+                            PlatformWindowPreference.openOrFocusWindow(id: "lab-group-manager", using: openWindow)
+                        } else {
+                            isShowingLabGroups = true
+                        }
+                    } label: {
+                        Label("Lab Groups", systemImage: "person.3")
+                    }
+                    .accessibilityIdentifier("labGroupsButton")
+                }
+                ToolbarItem {
+                    Button {
                         isShowingNewJobSheet = true
                     } label: {
                         Label("New Job", systemImage: "plus")
@@ -195,6 +209,16 @@ struct JobListView: View {
                         .toolbar {
                             ToolbarItem(placement: .cancellationAction) {
                                 Button("Done") { isShowingMetadataTablesBrowser = false }
+                            }
+                        }
+                }
+            }
+            .sheet(isPresented: $isShowingLabGroups) {
+                NavigationStack {
+                    LabGroupListView()
+                        .toolbar {
+                            ToolbarItem(placement: .cancellationAction) {
+                                Button("Done") { isShowingLabGroups = false }
                             }
                         }
                 }
@@ -255,6 +279,10 @@ struct JobListView: View {
             if newValue.count == 1 {
                 selectedJobID = nil
             }
+            appSession.isShowingPushedDetail = newValue.count > 1 && horizontalSizeClass == .compact
+        }
+        .onAppear {
+            appSession.isShowingPushedDetail = pathStack.count > 1 && horizontalSizeClass == .compact
         }
     }
 }

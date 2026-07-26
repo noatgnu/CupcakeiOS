@@ -40,53 +40,149 @@ struct SyncServices {
     let reagentSubscriptionSync: ReagentSubscriptionSyncService
     let samplePoolSync: SamplePoolSyncService
     let metadataTableSync: MetadataTableSyncService
+    let ontologySearchSync: OnlineOntologySearchService
+    let userProfileSync: UserProfileSyncService
+    let deviceTokenSync: DeviceTokenSyncService
+    let asyncTaskSync: AsyncTaskSyncService
 }
 
 @Observable
 @MainActor
 final class AppSession {
+    enum ActiveContext: Equatable {
+        case none
+        case standalone
+        case instance(KnownInstance)
+
+        var knownInstance: KnownInstance? {
+            if case .instance(let instance) = self { return instance }
+            return nil
+        }
+    }
+
+    private(set) var activeContext: ActiveContext
+    private(set) var knownInstances: [KnownInstance]
     private(set) var baseURL: URL?
     private(set) var deviceToken: String?
-    private(set) var isStandalone: Bool
     private(set) var currentUserID: Int64?
     private(set) var isStaff: Bool = false
+    private(set) var currentUsername: String?
+    private(set) var currentEmail: String?
+    private(set) var currentFirstName: String?
+    private(set) var currentLastName: String?
     private(set) var pendingLocalImportCount: Int?
     private(set) var isImportingLocalNotebook = false
     private(set) var pendingDeepLink: DeepLinkTarget?
+    var isShowingPushedDetail = false
+    private(set) var syncProgress: SyncProgress?
+    private(set) var isForceOffline = false
 
     var isAuthenticated: Bool { deviceToken != nil }
-    var canUseApp: Bool { isAuthenticated || isStandalone }
+    var canUseApp: Bool { activeContext != .none }
+    var isStandalone: Bool { activeContext == .standalone }
+    var activeInstance: KnownInstance? { activeContext.knownInstance }
 
-    private let modelContainer: ModelContainer
-    private let keychain = KeychainStore()
+    private(set) var modelContainer: ModelContainer
+    @ObservationIgnored var onRequestContainerSwap: ((ModelContainer) -> Void)?
+    private var keychain: KeychainStore
     private var apiClient: APIClient?
     private var authManager: AuthManager?
     private var pathMonitor: NWPathMonitor?
     private var lastPathStatus: NWPath.Status?
     private var transcriptionNotificationService: TranscriptionNotificationService?
     private var timeKeeperNotificationService: TimeKeeperNotificationService?
+    private var asyncTaskNotificationService: AsyncTaskNotificationService?
+    private let isUITesting: Bool
 
     private static let baseURLDefaultsKey = "cupcake.baseURL"
     private static let standaloneDefaultsKey = "cupcake.isStandalone"
     private static let currentUserIDDefaultsKey = "cupcake.currentUserID"
     private static let isStaffDefaultsKey = "cupcake.isStaff"
+    private static let activeContextDefaultsKey = "cupcake.activeContextIdentifier"
 
-    init(modelContainer: ModelContainer) {
+    static func resolveInitialContext(defaults: UserDefaults = .standard) -> ActiveContext {
+        guard let identifier = defaults.string(forKey: activeContextDefaultsKey) else { return .none }
+        if identifier == "standalone" { return .standalone }
+        guard let uuid = UUID(uuidString: identifier),
+              let instance = KnownInstanceRegistry.allInstances(defaults: defaults).first(where: { $0.id == uuid }) else {
+            return .none
+        }
+        return .instance(instance)
+    }
+
+    static func storeFileName(for context: ActiveContext) -> String {
+        switch context {
+        case .none, .standalone:
+            return "CupcakeStore.store"
+        case .instance(let instance):
+            return instance.storeFileName
+        }
+    }
+
+    private static func keychain(for context: ActiveContext) -> KeychainStore {
+        switch context {
+        case .none, .standalone:
+            return KeychainStore()
+        case .instance(let instance):
+            return KeychainStore(account: instance.keychainAccount)
+        }
+    }
+
+    init(modelContainer: ModelContainer, activeContext: ActiveContext, isUITesting: Bool) {
         self.modelContainer = modelContainer
+        self.activeContext = activeContext
+        self.isUITesting = isUITesting
+        self.knownInstances = KnownInstanceRegistry.allInstances()
+        self.keychain = Self.keychain(for: activeContext)
         CachedSession.backfillProtocolClientIDsIfNeeded(in: modelContainer)
-        isStandalone = UserDefaults.standard.bool(forKey: Self.standaloneDefaultsKey)
-        if let savedURLString = UserDefaults.standard.string(forKey: Self.baseURLDefaultsKey),
-           let url = URL(string: savedURLString) {
-            configureClient(baseURL: url)
+        loadActiveInstanceState()
+        startMonitoringConnectivity()
+    }
+
+    private func loadActiveInstanceState() {
+        switch activeContext {
+        case .none, .standalone:
+            currentUserID = nil
+            isStaff = false
+            currentUsername = nil
+            currentEmail = nil
+            currentFirstName = nil
+            currentLastName = nil
+            baseURL = nil
+            deviceToken = nil
+            apiClient = nil
+            authManager = nil
+        case .instance(let instance):
             deviceToken = keychain.load()
-            if deviceToken != nil, UserDefaults.standard.object(forKey: Self.currentUserIDDefaultsKey) != nil {
-                currentUserID = Int64(UserDefaults.standard.integer(forKey: Self.currentUserIDDefaultsKey))
-            }
-            if deviceToken != nil {
-                isStaff = UserDefaults.standard.bool(forKey: Self.isStaffDefaultsKey)
+            let context = ModelContext(modelContainer)
+            let metadata = (try? context.fetch(FetchDescriptor<InstanceMetadata>()))?.first
+            currentUserID = metadata?.currentUserID
+            isStaff = metadata?.isStaff ?? false
+            currentUsername = metadata?.username
+            currentEmail = metadata?.email
+            currentFirstName = metadata?.firstName
+            currentLastName = metadata?.lastName
+            let urlString = metadata?.baseURLString ?? instance.baseURLString
+            if let url = URL(string: urlString) {
+                configureClient(baseURL: url)
             }
         }
-        startMonitoringConnectivity()
+    }
+
+    private func saveActiveInstanceMetadata() {
+        guard case .instance = activeContext else { return }
+        let context = ModelContext(modelContainer)
+        let existing = (try? context.fetch(FetchDescriptor<InstanceMetadata>()))?.first
+        let metadata = existing ?? InstanceMetadata()
+        if existing == nil { context.insert(metadata) }
+        metadata.currentUserID = currentUserID
+        metadata.isStaff = isStaff
+        metadata.username = currentUsername
+        metadata.email = currentEmail
+        metadata.firstName = currentFirstName
+        metadata.lastName = currentLastName
+        metadata.baseURLString = baseURL?.absoluteString
+        try? context.save()
     }
 
     private func startMonitoringConnectivity() {
@@ -105,27 +201,56 @@ final class AppSession {
         pathMonitor = monitor
     }
 
+    func setForceOffline(_ value: Bool) async {
+        isForceOffline = value
+        await apiClient?.setForceOffline(value)
+        if !value {
+            await replayOutbox()
+        }
+    }
+
     func replayOutbox() async {
         guard isAuthenticated else { return }
-        await makeSyncServices().outboxSync.replayPending()
+        await makeSyncServices().outboxSync.replayPending(onProgress: { [weak self] progress in
+            self?.syncProgress = progress
+        })
+        syncProgress = nil
     }
 
     func syncAll() async throws {
         guard isAuthenticated else { return }
+        defer { syncProgress = nil }
         let services = makeSyncServices()
         await replayOutbox()
+        syncProgress = SyncProgress(direction: .pull, label: "Pulling protocols…")
         try await services.protocolSync.refetchAll()
+        syncProgress = SyncProgress(direction: .pull, label: "Pulling sessions…")
         try await services.sessionSync.refetchAll()
+        syncProgress = SyncProgress(direction: .pull, label: "Pulling step annotations…")
+        try await services.stepAnnotationSync.refetchAll()
+        syncProgress = SyncProgress(direction: .pull, label: "Pulling session annotations…")
+        try await services.sessionAnnotationSync.refetchAll()
+        syncProgress = SyncProgress(direction: .pull, label: "Pulling step reagents…")
         try await services.stepReagentSync.refetchAll()
+        syncProgress = SyncProgress(direction: .pull, label: "Pulling storage locations…")
         try await services.inventorySync.refetchStorageObjects()
+        syncProgress = SyncProgress(direction: .pull, label: "Pulling reagents…")
         try await services.inventorySync.refetchReagents()
+        syncProgress = SyncProgress(direction: .pull, label: "Pulling stored reagents…")
         try await services.inventorySync.refetchStoredReagents()
+        syncProgress = SyncProgress(direction: .pull, label: "Pulling reagent actions…")
         try await services.inventorySync.refetchReagentActions()
+        syncProgress = SyncProgress(direction: .pull, label: "Pulling instruments…")
         try await services.instrumentSync.refetchInstruments()
+        syncProgress = SyncProgress(direction: .pull, label: "Pulling instrument bookings…")
         try await services.instrumentSync.refetchInstrumentUsage()
+        syncProgress = SyncProgress(direction: .pull, label: "Pulling projects…")
         try await services.projectSync.refetchAll()
+        syncProgress = SyncProgress(direction: .pull, label: "Pulling jobs…")
         try await services.instrumentJobSync.refetchAll()
+        syncProgress = SyncProgress(direction: .pull, label: "Pulling lab groups…")
         try await services.labGroupSync.refetchAll()
+        syncProgress = SyncProgress(direction: .pull, label: "Pulling table templates…")
         try await services.metadataTableTemplateSync.refetchAll()
     }
 
@@ -136,6 +261,10 @@ final class AppSession {
         authManager = AuthManager(authService: AuthService(apiClient: client), keychain: keychain)
         transcriptionNotificationService = nil
         timeKeeperNotificationService = nil
+        asyncTaskNotificationService = nil
+        if isForceOffline {
+            Task { await client.setForceOffline(true) }
+        }
     }
 
     func transcriptionEvents() async -> AsyncStream<TranscriptionNotificationService.Event> {
@@ -158,22 +287,171 @@ final class AppSession {
         return await service.subscribe()
     }
 
+    func asyncTaskEvents() async -> AsyncStream<AsyncTaskNotificationService.Event> {
+        guard let client = apiClient else {
+            return AsyncStream { $0.finish() }
+        }
+        let tokenSnapshot = deviceToken
+        let service = asyncTaskNotificationService ?? AsyncTaskNotificationService(apiClient: client, deviceToken: { tokenSnapshot })
+        asyncTaskNotificationService = service
+        return await service.subscribe()
+    }
+
+    private func persistActiveContext() {
+        switch activeContext {
+        case .none:
+            UserDefaults.standard.removeObject(forKey: Self.activeContextDefaultsKey)
+        case .standalone:
+            UserDefaults.standard.set("standalone", forKey: Self.activeContextDefaultsKey)
+        case .instance(let instance):
+            UserDefaults.standard.set(instance.id.uuidString, forKey: Self.activeContextDefaultsKey)
+        }
+    }
+
+    private func resolveOrCreateInstance(baseURLString: String) -> KnownInstance {
+        if let existing = knownInstances.first(where: { $0.baseURLString == baseURLString }) {
+            return existing
+        }
+        let label = URL(string: baseURLString)?.host ?? baseURLString
+        return KnownInstance(label: label, baseURLString: baseURLString)
+    }
+
+    private func recordSuccessfulSignIn(for instance: KnownInstance, username: String?) {
+        var updated = instance
+        if let username {
+            updated.lastUsername = username
+        }
+        updated.lastSignedInAt = Date()
+        if let index = knownInstances.firstIndex(where: { $0.id == instance.id }) {
+            knownInstances[index] = updated
+        }
+        if activeContext.knownInstance?.id == instance.id {
+            activeContext = .instance(updated)
+        }
+        KnownInstanceRegistry.update(updated)
+    }
+
+    func switchToInstance(_ instance: KnownInstance) {
+        keychain = Self.keychain(for: .instance(instance))
+        if let url = URL(string: instance.baseURLString) {
+            configureClient(baseURL: url)
+        }
+        commitActiveInstance(instance)
+    }
+
+    private func commitActiveInstance(_ instance: KnownInstance) {
+        if !knownInstances.contains(where: { $0.id == instance.id }) {
+            knownInstances.append(instance)
+            KnownInstanceRegistry.add(instance)
+        }
+        let container = CupcakeApp.makeCupcakeStore(storeFileName: instance.storeFileName, inMemoryOnly: isUITesting)
+        activeContext = .instance(instance)
+        modelContainer = container
+        persistActiveContext()
+        loadActiveInstanceState()
+        Task { @MainActor [onRequestContainerSwap] in
+            onRequestContainerSwap?(container)
+        }
+    }
+
+    func leaveActiveInstance() {
+        activeContext = .none
+        keychain = Self.keychain(for: .none)
+        let container = isUITesting ? modelContainer : CupcakeApp.makeCupcakeStore(storeFileName: "CupcakeStore.store", inMemoryOnly: isUITesting)
+        modelContainer = container
+        persistActiveContext()
+        loadActiveInstanceState()
+        onRequestContainerSwap?(container)
+    }
+
+    func signOutActiveInstance() async {
+        guard case .instance = activeContext else { return }
+        await authManager?.signOut()
+        deviceToken = nil
+        currentUserID = nil
+        isStaff = false
+        currentUsername = nil
+        currentEmail = nil
+        currentFirstName = nil
+        currentLastName = nil
+        saveActiveInstanceMetadata()
+    }
+
+    func removeInstance(_ instance: KnownInstance) {
+        if activeContext.knownInstance?.id == instance.id {
+            leaveActiveInstance()
+        }
+        knownInstances.removeAll { $0.id == instance.id }
+        KnownInstanceRegistry.remove(id: instance.id)
+        KeychainStore(account: instance.keychainAccount).delete()
+        let storeURL = CupcakeApp.applicationSupportDirectory.appendingPathComponent(instance.storeFileName)
+        try? FileManager.default.removeItem(at: storeURL)
+    }
+
+    func hasUnsyncedOutboxEntries(for instance: KnownInstance) -> Bool {
+        let container: ModelContainer
+        if activeContext.knownInstance?.id == instance.id {
+            container = modelContainer
+        } else {
+            container = CupcakeApp.makeCupcakeStore(storeFileName: instance.storeFileName, inMemoryOnly: isUITesting)
+        }
+        let context = ModelContext(container)
+        let count = (try? context.fetchCount(FetchDescriptor<OutboxEntry>())) ?? 0
+        return count > 0
+    }
+
     func signIn(serverURLString: String, username: String, password: String) async throws {
         guard let url = URL(string: serverURLString) else {
             throw AppSessionError.invalidServerURL
         }
+        let instance = resolveOrCreateInstance(baseURLString: serverURLString)
+        keychain = Self.keychain(for: .instance(instance))
         configureClient(baseURL: url)
         let result = try await authManager?.signIn(username: username, password: password, deviceLabel: Self.deviceLabel)
-        UserDefaults.standard.set(serverURLString, forKey: Self.baseURLDefaultsKey)
-        deviceToken = keychain.load()
-        isStandalone = false
-        UserDefaults.standard.set(false, forKey: Self.standaloneDefaultsKey)
+        commitActiveInstance(instance)
         if let userID = result?.deviceToken.user {
             currentUserID = Int64(userID)
-            UserDefaults.standard.set(userID, forKey: Self.currentUserIDDefaultsKey)
         }
-        isStaff = result?.isStaff ?? false
-        UserDefaults.standard.set(isStaff, forKey: Self.isStaffDefaultsKey)
+        isStaff = result?.user.isStaff ?? false
+        currentUsername = result?.user.username
+        currentEmail = result?.user.email
+        currentFirstName = result?.user.firstName
+        currentLastName = result?.user.lastName
+        saveActiveInstanceMetadata()
+        recordSuccessfulSignIn(for: instance, username: username)
+    }
+
+    func refreshProfile() async {
+        guard let currentUserID else { return }
+        guard let profile = try? await makeSyncServices().userProfileSync.fetchProfile(userID: currentUserID) else { return }
+        currentUsername = profile.username
+        currentEmail = profile.email
+        currentFirstName = profile.firstName
+        currentLastName = profile.lastName
+        isStaff = profile.isStaff
+        saveActiveInstanceMetadata()
+    }
+
+    func updateProfile(firstName: String?, lastName: String?, email: String?, currentPassword: String?) async throws {
+        let profile = try await makeSyncServices().userProfileSync.updateProfile(
+            firstName: firstName,
+            lastName: lastName,
+            email: email,
+            currentPassword: currentPassword
+        )
+        currentUsername = profile.username
+        currentEmail = profile.email
+        currentFirstName = profile.firstName
+        currentLastName = profile.lastName
+        saveActiveInstanceMetadata()
+    }
+
+    func changePassword(currentPassword: String, newPassword: String, confirmPassword: String) async throws {
+        try await makeSyncServices().userProfileSync.changePassword(
+            currentPassword: currentPassword,
+            newPassword: newPassword,
+            confirmPassword: confirmPassword
+        )
     }
 
     func checkForLocalRecordsToImport() async {
@@ -220,6 +498,8 @@ final class AppSession {
         guard let url = URL(string: serverURLString) else {
             throw AppSessionError.invalidServerURL
         }
+        let instance = resolveOrCreateInstance(baseURLString: serverURLString)
+        keychain = Self.keychain(for: .instance(instance))
         configureClient(baseURL: url)
         guard let authManager else {
             throw AppSessionError.invalidServerURL
@@ -238,14 +518,15 @@ final class AppSession {
         }
 
         let result = try await authManager.completeORCIDSignIn(authCode: authCode, deviceLabel: Self.deviceLabel)
-        UserDefaults.standard.set(serverURLString, forKey: Self.baseURLDefaultsKey)
-        deviceToken = keychain.load()
-        isStandalone = false
-        UserDefaults.standard.set(false, forKey: Self.standaloneDefaultsKey)
+        commitActiveInstance(instance)
         currentUserID = Int64(result.deviceToken.user)
-        UserDefaults.standard.set(result.deviceToken.user, forKey: Self.currentUserIDDefaultsKey)
-        isStaff = result.isStaff
-        UserDefaults.standard.set(isStaff, forKey: Self.isStaffDefaultsKey)
+        isStaff = result.user.isStaff
+        currentUsername = result.user.username
+        currentEmail = result.user.email
+        currentFirstName = result.user.firstName
+        currentLastName = result.user.lastName
+        saveActiveInstanceMetadata()
+        recordSuccessfulSignIn(for: instance, username: result.user.username)
     }
 
     private var activeORCIDSession: ASWebAuthenticationSession?
@@ -276,22 +557,22 @@ final class AppSession {
     }
 
     func signOut() async {
-        await authManager?.signOut()
-        deviceToken = nil
-        currentUserID = nil
-        UserDefaults.standard.removeObject(forKey: Self.currentUserIDDefaultsKey)
-        isStaff = false
-        UserDefaults.standard.removeObject(forKey: Self.isStaffDefaultsKey)
+        await signOutActiveInstance()
+        leaveActiveInstance()
     }
 
     func continueOffline() {
-        isStandalone = true
-        UserDefaults.standard.set(true, forKey: Self.standaloneDefaultsKey)
+        let container = isUITesting ? modelContainer : CupcakeApp.makeCupcakeStore(storeFileName: "CupcakeStore.store", inMemoryOnly: isUITesting)
+        activeContext = .standalone
+        modelContainer = container
+        keychain = Self.keychain(for: .standalone)
+        persistActiveContext()
+        loadActiveInstanceState()
+        onRequestContainerSwap?(container)
     }
 
     func exitStandalone() {
-        isStandalone = false
-        UserDefaults.standard.set(false, forKey: Self.standaloneDefaultsKey)
+        leaveActiveInstance()
     }
 
     func makeSyncServices() -> SyncServices {
@@ -334,6 +615,10 @@ final class AppSession {
         let reagentSubscriptionSync = ReagentSubscriptionSyncService(modelContainer: modelContainer, apiClient: client, deviceToken: { tokenSnapshot })
         let samplePoolSync = SamplePoolSyncService(modelContainer: modelContainer, apiClient: client, deviceToken: { tokenSnapshot })
         let metadataTableSync = MetadataTableSyncService(apiClient: client, deviceToken: { tokenSnapshot })
+        let ontologySearchSync = OnlineOntologySearchService(metadataColumnSync: metadataColumnSync)
+        let userProfileSync = UserProfileSyncService(apiClient: client, deviceToken: { tokenSnapshot })
+        let deviceTokenSync = DeviceTokenSyncService(apiClient: client, deviceToken: { tokenSnapshot })
+        let asyncTaskSync = AsyncTaskSyncService(apiClient: client, deviceToken: { tokenSnapshot })
         return SyncServices(
             protocolSync: protocolSync,
             sessionSync: sessionSync,
@@ -360,7 +645,11 @@ final class AppSession {
             storedReagentAnnotationSync: storedReagentAnnotationSync,
             reagentSubscriptionSync: reagentSubscriptionSync,
             samplePoolSync: samplePoolSync,
-            metadataTableSync: metadataTableSync
+            metadataTableSync: metadataTableSync,
+            ontologySearchSync: ontologySearchSync,
+            userProfileSync: userProfileSync,
+            deviceTokenSync: deviceTokenSync,
+            asyncTaskSync: asyncTaskSync
         )
     }
 
@@ -369,6 +658,10 @@ final class AppSession {
     static func resetPersistedStateForUITesting() {
         UserDefaults.standard.removeObject(forKey: baseURLDefaultsKey)
         UserDefaults.standard.removeObject(forKey: standaloneDefaultsKey)
+        UserDefaults.standard.removeObject(forKey: currentUserIDDefaultsKey)
+        UserDefaults.standard.removeObject(forKey: isStaffDefaultsKey)
+        UserDefaults.standard.removeObject(forKey: activeContextDefaultsKey)
+        KnownInstanceRegistry.removeAll()
         KeychainStore().delete()
     }
 

@@ -74,6 +74,7 @@ struct AddStoredReagentSheet: View {
                                 Image(systemName: "barcode.viewfinder")
                             }
                             .accessibilityIdentifier("scanBarcodeButton")
+                            .help("Scan Barcode")
                         }
                         #endif
                     }

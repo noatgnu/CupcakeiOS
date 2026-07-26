@@ -18,6 +18,21 @@ public actor StepAnnotationSyncService {
         self.store = StepAnnotationStore(modelContainer: modelContainer)
     }
 
+    public func refetchAll() async throws {
+        guard let token = deviceToken() else { return }
+        let authorization = "DeviceToken \(token)"
+
+        var page: PaginatedResponse<StepAnnotationDTO> = try await apiClient.get(
+            "step-annotations/",
+            authorizationHeader: authorization
+        )
+        while true {
+            try await store.upsert(page.results)
+            guard let nextURLString = page.next, let nextURL = URL(string: nextURLString) else { break }
+            page = try await apiClient.get(absoluteURL: nextURL, authorizationHeader: authorization)
+        }
+    }
+
     @discardableResult
     public func createTextAnnotation(sessionClientID: UUID, stepClientID: UUID, text: String) async throws -> UUID {
         try await store.insertLocalOnly(sessionClientID: sessionClientID, stepClientID: stepClientID, text: text, annotationType: "text")
@@ -307,6 +322,19 @@ public actor StepAnnotationSyncService {
         return true
     }
 
+    public func updateTranscription(serverID: Int64, transcription: String?, language: String?, translation: String?) async throws {
+        guard let token = deviceToken() else {
+            throw StepAnnotationSyncError.noDeviceToken
+        }
+        let _: StepAnnotationDTO = try await apiClient.send(
+            "step-annotations/\(serverID)/",
+            method: .patch,
+            body: UpdateStepAnnotationTranscriptionRequest(transcription: transcription, language: language, translation: translation),
+            authorizationHeader: "DeviceToken \(token)"
+        )
+        try await store.updateTranscriptionLocally(serverID: serverID, transcription: transcription, language: language, translation: translation)
+    }
+
     public func downloadFile(clientID: UUID) async throws -> (data: Data, suggestedFilename: String?) {
         guard let token = deviceToken() else {
             throw StepAnnotationSyncError.noDeviceToken
@@ -359,6 +387,56 @@ public enum StepAnnotationSyncError: Error {
 
 @ModelActor
 actor StepAnnotationStore {
+    func upsert(_ dtos: [StepAnnotationDTO]) throws {
+        for dto in dtos {
+            guard let sessionClientID = sessionClientID(forServerID: dto.session),
+                  let stepClientID = stepClientID(forServerID: dto.step) else { continue }
+
+            let annotationID = dto.id
+            let existing = try? modelContext.fetch(
+                FetchDescriptor<CachedStepAnnotation>(predicate: #Predicate { $0.serverID == annotationID })
+            )
+            let annotation = existing?.first ?? {
+                let created = CachedStepAnnotation(
+                    serverID: dto.id,
+                    sessionClientID: sessionClientID,
+                    stepClientID: stepClientID,
+                    annotationText: dto.annotationText,
+                    annotationType: dto.annotationType,
+                    order: dto.order,
+                    createdAt: dto.createdAt
+                )
+                modelContext.insert(created)
+                return created
+            }()
+            annotation.sessionClientID = sessionClientID
+            annotation.stepClientID = stepClientID
+            annotation.annotationText = dto.annotationText
+            annotation.annotationType = dto.annotationType
+            annotation.order = dto.order
+            annotation.scratched = dto.scratched
+            annotation.transcription = dto.transcription
+            annotation.language = dto.language
+            annotation.translation = dto.translation
+            annotation.createdAt = dto.createdAt
+        }
+        try modelContext.save()
+    }
+
+    private func sessionClientID(forServerID sessionServerID: Int64) -> UUID? {
+        let match = try? modelContext.fetch(
+            FetchDescriptor<CachedSession>(predicate: #Predicate { $0.serverID == sessionServerID })
+        )
+        return match?.first?.clientID
+    }
+
+    private func stepClientID(forServerID stepServerID: Int64) -> UUID? {
+        let match = try? modelContext.fetch(
+            FetchDescriptor<CachedProtocolStep>(predicate: #Predicate { $0.serverID == stepServerID })
+        )
+        return match?.first?.clientID
+    }
+
     func insertLocalOnly(sessionClientID: UUID, stepClientID: UUID, text: String, annotationType: String) throws -> UUID {
         let cached = CachedStepAnnotation(
             sessionClientID: sessionClientID,

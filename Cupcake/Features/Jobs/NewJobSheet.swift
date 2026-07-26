@@ -38,7 +38,7 @@ struct NewJobSheet: View {
                 }
                 Section("Project") {
                     if projects.isEmpty {
-                        Text("No projects yet — create one from the Projects screen first.")
+                        Text("No projects yet. Create one from the Projects screen first.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     } else {

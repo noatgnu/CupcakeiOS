@@ -15,6 +15,9 @@ let package = Package(
         .library(name: "CupcakeOntology", targets: ["CupcakeOntology"]),
         .library(name: "CupcakeTranscription", targets: ["CupcakeTranscription"]),
     ],
+    dependencies: [
+        .package(url: "https://github.com/yangzichao/argmax-oss-swift", revision: "9e59d8d39ab95a69b886584b74d811bff1789882"),
+    ],
     targets: [
         // Foundation + SwiftData only. No networking, no UI.
         .target(name: "CupcakeModels"),
@@ -44,7 +47,10 @@ let package = Package(
         // Speech/Translation wrappers, WebVTT formatting.
         .target(
             name: "CupcakeTranscription",
-            dependencies: ["CupcakeModels"]
+            dependencies: [
+                "CupcakeModels",
+                .product(name: "WhisperKit", package: "argmax-oss-swift"),
+            ]
         ),
 
         .testTarget(
@@ -61,7 +67,7 @@ let package = Package(
         ),
         .testTarget(
             name: "CupcakeOntologyTests",
-            dependencies: ["CupcakeOntology"]
+            dependencies: ["CupcakeOntology", "CupcakeModels"]
         ),
         .testTarget(
             name: "CupcakeTranscriptionTests",

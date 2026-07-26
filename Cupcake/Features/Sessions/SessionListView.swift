@@ -7,6 +7,7 @@ import SwiftUI
 struct SessionListView: View {
     @Environment(AppSession.self) private var appSession
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Query(sort: \CachedSession.createdAt, order: .reverse) private var sessions: [CachedSession]
     @Query private var allProtocols: [CachedProtocol]
 
@@ -103,6 +104,10 @@ struct SessionListView: View {
             if newValue.count == 1 {
                 selectedSessionID = nil
             }
+            appSession.isShowingPushedDetail = newValue.count > 1 && horizontalSizeClass == .compact
+        }
+        .onAppear {
+            appSession.isShowingPushedDetail = pathStack.count > 1 && horizontalSizeClass == .compact
         }
         .onChange(of: appSession.pendingDeepLink) { _, newValue in
             applyDeepLink(newValue)

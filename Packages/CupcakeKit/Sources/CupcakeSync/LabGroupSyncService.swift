@@ -91,11 +91,122 @@ public actor LabGroupSyncService {
             )
         }
     }
+
+    @discardableResult
+    public func create(
+        name: String,
+        description: String?,
+        parentGroupServerID: Int64?,
+        allowMemberInvites: Bool,
+        allowProcessJobs: Bool
+    ) async throws -> LabGroupDTO {
+        guard let token = deviceToken() else {
+            throw LabGroupSyncError.noDeviceToken
+        }
+        let dto: LabGroupDTO = try await apiClient.send(
+            "lab-groups/",
+            method: .post,
+            body: CreateLabGroupRequest(
+                name: name,
+                description: description,
+                parentGroup: parentGroupServerID,
+                allowMemberInvites: allowMemberInvites,
+                allowProcessJobs: allowProcessJobs
+            ),
+            authorizationHeader: "DeviceToken \(token)"
+        )
+        try await store.upsert([dto])
+        return dto
+    }
+
+    @discardableResult
+    public func update(labGroupServerID: Int64, request: UpdateLabGroupRequest) async throws -> LabGroupDTO {
+        guard let token = deviceToken() else {
+            throw LabGroupSyncError.noDeviceToken
+        }
+        let dto: LabGroupDTO = try await apiClient.send(
+            "lab-groups/\(labGroupServerID)/",
+            method: .patch,
+            body: request,
+            authorizationHeader: "DeviceToken \(token)"
+        )
+        try await store.upsert([dto])
+        return dto
+    }
+
+    public func deleteGroup(labGroupServerID: Int64) async throws {
+        guard let token = deviceToken() else {
+            throw LabGroupSyncError.noDeviceToken
+        }
+        try await apiClient.sendNoContent("lab-groups/\(labGroupServerID)/", method: .delete, authorizationHeader: "DeviceToken \(token)")
+        try await store.remove(serverID: labGroupServerID)
+    }
+
+    public func leaveGroup(labGroupServerID: Int64) async throws {
+        guard let token = deviceToken() else {
+            throw LabGroupSyncError.noDeviceToken
+        }
+        try await apiClient.sendNoContent("lab-groups/\(labGroupServerID)/leave/", method: .post, authorizationHeader: "DeviceToken \(token)")
+        try await store.remove(serverID: labGroupServerID)
+    }
+
+    public func removeMember(labGroupServerID: Int64, userServerID: Int64) async throws {
+        guard let token = deviceToken() else {
+            throw LabGroupSyncError.noDeviceToken
+        }
+        let _: EmptyResponse = try await apiClient.send(
+            "lab-groups/\(labGroupServerID)/remove_member/",
+            method: .post,
+            body: RemoveLabGroupMemberRequest(userID: userServerID),
+            authorizationHeader: "DeviceToken \(token)"
+        )
+    }
+
+    @discardableResult
+    public func inviteUser(labGroupServerID: Int64, email: String, message: String?) async throws -> LabGroupInvitationDTO {
+        guard let token = deviceToken() else {
+            throw LabGroupSyncError.noDeviceToken
+        }
+        return try await apiClient.send(
+            "lab-groups/\(labGroupServerID)/invite_user/",
+            method: .post,
+            body: CreateLabGroupInvitationRequest(invitedEmail: email, message: message),
+            authorizationHeader: "DeviceToken \(token)"
+        )
+    }
+
+    public func fetchMyPendingInvitations() async throws -> [LabGroupInvitationDTO] {
+        guard let token = deviceToken() else { return [] }
+        return try await apiClient.get("lab-group-invitations/my_pending_invitations/", authorizationHeader: "DeviceToken \(token)")
+    }
+
+    public func acceptInvitation(id: Int64) async throws {
+        guard let token = deviceToken() else {
+            throw LabGroupSyncError.noDeviceToken
+        }
+        try await apiClient.sendNoContent("lab-group-invitations/\(id)/accept_invitation/", method: .post, authorizationHeader: "DeviceToken \(token)")
+    }
+
+    public func rejectInvitation(id: Int64) async throws {
+        guard let token = deviceToken() else {
+            throw LabGroupSyncError.noDeviceToken
+        }
+        try await apiClient.sendNoContent("lab-group-invitations/\(id)/reject_invitation/", method: .post, authorizationHeader: "DeviceToken \(token)")
+    }
+
+    public func cancelInvitation(id: Int64) async throws {
+        guard let token = deviceToken() else {
+            throw LabGroupSyncError.noDeviceToken
+        }
+        try await apiClient.sendNoContent("lab-group-invitations/\(id)/cancel_invitation/", method: .post, authorizationHeader: "DeviceToken \(token)")
+    }
 }
 
 public enum LabGroupSyncError: Error {
     case noDeviceToken
 }
+
+struct EmptyResponse: Decodable, Sendable {}
 
 @ModelActor
 actor LabGroupStore {
@@ -110,7 +221,6 @@ actor LabGroupStore {
                     serverID: dto.id,
                     name: dto.name,
                     groupDescription: dto.description,
-                    allowProcessJobs: dto.allowProcessJobs,
                     createdAt: Date.parsedISO8601(dto.createdAt)
                 )
                 modelContext.insert(created)
@@ -118,8 +228,31 @@ actor LabGroupStore {
             }()
             group.name = dto.name
             group.groupDescription = dto.description
+            group.parentGroupServerID = dto.parentGroup
+            group.fullPathNames = dto.fullPath.map(\.name)
+            group.creatorServerID = dto.creator
+            group.creatorName = dto.creatorName
+            group.isActive = dto.isActive
+            group.allowMemberInvites = dto.allowMemberInvites
             group.allowProcessJobs = dto.allowProcessJobs
+            group.memberCount = dto.memberCount
+            group.subGroupsCount = dto.subGroupsCount
+            group.isCreator = dto.isCreator
+            group.isMember = dto.isMember
+            group.canInvite = dto.canInvite
+            group.canManage = dto.canManage
+            group.canProcessJobs = dto.canProcessJobs
             group.updatedAt = Date.parsedISO8601(dto.updatedAt, fallback: group.updatedAt)
+        }
+        try modelContext.save()
+    }
+
+    func remove(serverID: Int64) throws {
+        let existing = try modelContext.fetch(
+            FetchDescriptor<CachedLabGroup>(predicate: #Predicate { $0.serverID == serverID })
+        )
+        for group in existing {
+            modelContext.delete(group)
         }
         try modelContext.save()
     }

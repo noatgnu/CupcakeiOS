@@ -139,6 +139,7 @@ struct StepDetailView: View {
                                     }
                                     .buttonStyle(.plain)
                                     .accessibilityIdentifier("deleteReagentButton_\(entry.stepReagent.clientID)")
+                                    .help("Remove Reagent")
                                 }
                             }
                         }
@@ -222,6 +223,6 @@ struct StepDetailView: View {
         let base = "\(entry.reagent.name): \(entry.stepReagent.quantity.formatted()) \(entry.reagent.unit)"
         guard entry.stepReagent.scalable else { return base }
         let scaled = entry.stepReagent.quantity * entry.stepReagent.scalableFactor
-        return "\(base) — ×\(entry.stepReagent.scalableFactor.formatted()) = \(scaled.formatted()) \(entry.reagent.unit)"
+        return "\(base) (×\(entry.stepReagent.scalableFactor.formatted()) = \(scaled.formatted()) \(entry.reagent.unit))"
     }
 }

@@ -10,6 +10,7 @@ struct StorageListView<SectionPicker: View>: View {
 
     @Environment(AppSession.self) private var appSession
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Query private var allStorageObjects: [CachedStorageObject]
     @Query private var allStoredReagents: [CachedStoredReagent]
 
@@ -166,6 +167,12 @@ struct StorageListView<SectionPicker: View>: View {
             Button("OK") {}
         } message: {
             Text(errorMessage ?? "")
+        }
+        .onChange(of: pathStack) { _, newValue in
+            appSession.isShowingPushedDetail = newValue.count > 1 && horizontalSizeClass == .compact
+        }
+        .onAppear {
+            appSession.isShowingPushedDetail = pathStack.count > 1 && horizontalSizeClass == .compact
         }
     }
 

@@ -220,6 +220,22 @@ struct MetadataTablesBrowserView: View {
                 .accessibilityIdentifier("editMetadataTableButton_\(table.name)")
             }
         }
+        .contextMenu {
+            if table.canEdit {
+                Button {
+                    editingTable = table
+                } label: {
+                    Label("Edit", systemImage: "pencil")
+                }
+                .accessibilityIdentifier("editMetadataTableMenuButton_\(table.name)")
+                Button(role: .destructive) {
+                    Task { await delete(table) }
+                } label: {
+                    Label("Delete", systemImage: "trash")
+                }
+                .accessibilityIdentifier("deleteMetadataTableMenuButton_\(table.name)")
+            }
+        }
     }
 
     private func reloadFromStart() async {

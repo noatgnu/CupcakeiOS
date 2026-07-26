@@ -101,6 +101,13 @@ struct MolarityCalculatorAnnotationView: View {
                                         Label("Delete", systemImage: "trash")
                                     }
                                 }
+                                .contextMenu {
+                                    Button(role: .destructive) {
+                                        history.removeAll { $0.id == entry.id }
+                                    } label: {
+                                        Label("Delete", systemImage: "trash")
+                                    }
+                                }
                         }
                     }
                 }
@@ -130,7 +137,7 @@ struct MolarityCalculatorAnnotationView: View {
     private var modeFields: some View {
         switch mode {
         case .dynamic:
-            Section("Fill any 3 of 4 — the 4th is calculated") {
+            Section("Fill any 3 of 4, the 4th is calculated") {
                 numberField("Concentration", value: $concentration, unit: $concentrationUnit, units: Self.molarityUnits, identifier: "molarityConcentrationField")
                 numberField("Volume", value: $volume, unit: $volumeUnit, units: Self.volumeUnits, identifier: "molarityVolumeField")
                 numberField("Molecular Weight (g/mol)", value: $molecularWeight, identifier: "molarityMolecularWeightField")
@@ -474,7 +481,7 @@ struct MolarityCalculatorAnnotationView: View {
     }
 
     private static func numberString(_ value: MolarityDataValue?) -> String {
-        guard let value = value?.doubleValue else { return "—" }
+        guard let value = value?.doubleValue else { return "-" }
         return String(format: "%.3f", value)
     }
 

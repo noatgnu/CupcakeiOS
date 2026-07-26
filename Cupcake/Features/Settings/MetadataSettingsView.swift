@@ -17,7 +17,7 @@ struct MetadataSettingsView: View {
                 }
                 .accessibilityIdentifier("defaultSchemaPicker")
             } footer: {
-                Text("When adding a metadata field, template search prefers this schema. The same column can exist in several schemas — pick a default here, or switch schemas per-search.")
+                Text("When adding a metadata field, template search prefers this schema. The same column can exist in several schemas, pick a default here, or switch schemas per-search.")
             }
         }
         .formStyle(.grouped)

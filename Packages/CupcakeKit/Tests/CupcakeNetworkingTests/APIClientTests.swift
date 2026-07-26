@@ -54,6 +54,31 @@ struct APIClientTests {
         }
     }
 
+    @Test("setForceOffline(true) throws APIError.transport without ever dispatching a real request")
+    func forceOfflineThrowsTransportWithoutDispatching() async throws {
+        nonisolated(unsafe) var requestWasMade = false
+        StubURLProtocol.handler = { request in
+            requestWasMade = true
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            return (response, Data(#"{"count": 0, "next": null, "previous": null, "results": []}"#.utf8))
+        }
+
+        let client = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        await client.setForceOffline(true)
+        #expect(await client.isForceOffline)
+
+        await #expect(throws: APIError.self) {
+            let _: PaginatedResponse<Widget> = try await client.get("widgets/")
+        }
+        #expect(requestWasMade == false, "no real request should be dispatched while forced offline")
+
+        await client.setForceOffline(false)
+        #expect(await client.isForceOffline == false)
+        let page: PaginatedResponse<Widget> = try await client.get("widgets/")
+        #expect(page.count == 0)
+        #expect(requestWasMade == true, "requests should resume once forceOffline is turned back off")
+    }
+
     @Test("encodes the request body as snake_case JSON")
     func encodesRequestBodyAsSnakeCase() async throws {
         struct CreateWidget: Encodable, Sendable { let displayName: String }

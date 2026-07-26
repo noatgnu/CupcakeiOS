@@ -5,7 +5,7 @@ import Testing
 
 @Suite("Session DTO decoding")
 struct SessionDTOsTests {
-    @Test("decodes the literal SessionSerializer shape — id is the lookup key, not unique_id")
+    @Test("decodes the literal SessionSerializer shape, id is the lookup key, not unique_id")
     func decodesSession() throws {
         let json = Data("""
         {
