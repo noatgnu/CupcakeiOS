@@ -305,13 +305,15 @@ public struct MetadataColumnTemplateDTO: Decodable, Sendable, Identifiable {
     }
 }
 
-public struct GroupedColumnTemplateDTO: Decodable, Sendable {
+public struct GroupedColumnTemplateDTO: Decodable, Sendable, Identifiable {
     public let columnName: String
     public let columnType: String
     public let schemaCount: Int
     public let schemas: [String]
     public let templateIds: [Int64]
     public let sampleTemplate: MetadataColumnTemplateDTO?
+
+    public var id: String { columnName }
 }
 
 public struct CreateColumnTemplateRequest: Encodable, Sendable {

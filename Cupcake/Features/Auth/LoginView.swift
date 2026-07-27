@@ -128,6 +128,7 @@ struct LoginView: View {
             Section {
                 Button("Continue Offline") {
                     appSession.continueOffline()
+                    appSession.checkForOntologyPreloadPrompt()
                 }
                 .disabled(isSigningIn)
                 .accessibilityIdentifier("continueOfflineButton")
@@ -167,6 +168,7 @@ struct LoginView: View {
             do {
                 try await appSession.signIn(serverURLString: serverURLString, username: username, password: password)
                 await appSession.checkForLocalRecordsToImport()
+                appSession.checkForOntologyPreloadPrompt()
             } catch {
                 errorMessage = "Sign in failed: \(error.userFacingMessage)"
             }
@@ -181,6 +183,7 @@ struct LoginView: View {
             do {
                 try await appSession.signInWithORCID(serverURLString: serverURLString)
                 await appSession.checkForLocalRecordsToImport()
+                appSession.checkForOntologyPreloadPrompt()
             } catch {
                 errorMessage = "ORCID sign in failed: \(error.userFacingMessage)"
             }

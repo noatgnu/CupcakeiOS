@@ -61,7 +61,7 @@ struct StepDetailWindowContent: View {
         }
         try? modelContext.save()
         guard canAuthorOnline, let serverID = step.serverID else { return }
-        try? await appSession.makeSyncServices().protocolSync.updateStep(serverID: serverID, stepDescription: description, stepDuration: duration)
+        _ = try? await appSession.makeSyncServices().protocolSync.updateStep(serverID: serverID, stepDescription: description, stepDuration: duration)
     }
 
     private func deleteReagent(_ stepReagent: CachedStepReagent) async {

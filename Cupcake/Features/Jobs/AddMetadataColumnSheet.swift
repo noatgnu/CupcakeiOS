@@ -246,7 +246,3 @@ struct AddMetadataColumnSheet: View {
         }
     }
 }
-
-extension GroupedColumnTemplateDTO: Identifiable {
-    public var id: String { columnName }
-}

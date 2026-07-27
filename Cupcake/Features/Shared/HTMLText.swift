@@ -115,7 +115,7 @@ struct HTMLText: View {
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    static func plainText(from html: String) -> String {
+    nonisolated static func plainText(from html: String) -> String {
         guard html.contains("<") else { return html }
         guard let data = html.data(using: .utf8),
               let nsAttributed = try? NSAttributedString(

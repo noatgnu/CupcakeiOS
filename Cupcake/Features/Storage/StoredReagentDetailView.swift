@@ -181,7 +181,7 @@ struct StoredReagentDetailView: View {
 
     private func refreshMetadataTable() async {
         guard let tableServerID = storedReagent?.metadataTableServerID else { return }
-        try? await appSession.makeSyncServices().inventorySync.refreshMetadataTable(metadataTableServerID: tableServerID)
+        _ = try? await appSession.makeSyncServices().inventorySync.refreshMetadataTable(metadataTableServerID: tableServerID)
     }
 
     private func deleteDocuments(at offsets: IndexSet) {

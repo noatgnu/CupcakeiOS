@@ -201,11 +201,11 @@ struct InstrumentDetailView: View {
 
     private func refreshMetadataTable() async {
         guard let tableServerID = instrument?.metadataTableServerID else { return }
-        try? await appSession.makeSyncServices().instrumentSync.refreshMetadataTable(instrumentServerID: instrumentServerID, metadataTableServerID: tableServerID)
+        _ = try? await appSession.makeSyncServices().instrumentSync.refreshMetadataTable(instrumentServerID: instrumentServerID, metadataTableServerID: tableServerID)
     }
 
     private func markComplete(_ log: CachedMaintenanceLog) async {
-        try? await appSession.makeSyncServices().maintenanceLogSync.updateStatus(serverID: log.serverID, status: "completed")
+        _ = try? await appSession.makeSyncServices().maintenanceLogSync.updateStatus(serverID: log.serverID, status: "completed")
     }
 
     private func toggleEnabled(_ instrument: CachedInstrument) async {

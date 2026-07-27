@@ -9,9 +9,15 @@ struct OfflineOntologyDataView: View {
     @State private var manifest: OntologyManifest?
     @State private var importStates: [String: OntologyImportStateSnapshot] = [:]
     @State private var importingTypeKey: String?
+    @State private var isImportingAll = false
     @State private var errorMessage: String?
     @State private var isShowingError = false
     @State private var isLoadingManifest = false
+
+    private var allTablesImported: Bool {
+        guard let manifest, !manifest.tables.isEmpty else { return true }
+        return manifest.tables.allSatisfy { importStates[$0.name]?.importedAt != nil }
+    }
 
     private var service: OntologyImportService {
         OntologyImportService(modelContainer: modelContext.container)
@@ -34,6 +40,19 @@ struct OfflineOntologyDataView: View {
         .navigationTitle("Offline Ontology Data")
         .task { await loadManifest() }
         .refreshable { await loadManifest() }
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                if isImportingAll {
+                    ProgressView()
+                } else {
+                    Button("Import All") {
+                        Task { await importAllTables() }
+                    }
+                    .accessibilityIdentifier("importAllOntologyButton")
+                    .disabled(manifest == nil || importingTypeKey != nil || allTablesImported)
+                }
+            }
+        }
         .alert("Couldn't import", isPresented: $isShowingError) {
             Button("OK") {}
         } message: {
@@ -94,6 +113,29 @@ struct OfflineOntologyDataView: View {
             importStates[table.name] = try await service.importState(typeKey: table.name)
         } catch {
             errorMessage = error.userFacingMessage
+            isShowingError = true
+        }
+    }
+
+    private func importAllTables() async {
+        guard let manifest else { return }
+        isImportingAll = true
+        defer { isImportingAll = false }
+
+        var failedTableNames: [String] = []
+        for table in manifest.tables where importStates[table.name]?.importedAt == nil {
+            importingTypeKey = table.name
+            do {
+                try await OntologyRegistry.importTable(table, using: service)
+                importStates[table.name] = try await service.importState(typeKey: table.name)
+            } catch {
+                failedTableNames.append(OntologyRegistry.displayNames[table.name] ?? table.name)
+            }
+        }
+        importingTypeKey = nil
+
+        if !failedTableNames.isEmpty {
+            errorMessage = "Couldn't import: \(failedTableNames.joined(separator: ", "))"
             isShowingError = true
         }
     }

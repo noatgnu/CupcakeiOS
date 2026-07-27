@@ -1,6 +1,6 @@
 import Foundation
 
-enum HumanReadableTime {
+nonisolated enum HumanReadableTime {
     static func format(_ isoString: String?) -> String? {
         guard let isoString, let date = parseISO8601(isoString) else { return isoString }
         let hoursAgo = abs(date.timeIntervalSinceNow) / 3600

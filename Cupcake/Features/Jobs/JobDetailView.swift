@@ -519,7 +519,7 @@ struct JobDetailView: View {
 
     private func refreshMetadataTable() async {
         guard let serverID = job?.serverID else { return }
-        try? await appSession.makeSyncServices().instrumentJobSync.refreshMetadataTable(jobServerID: serverID, jobClientID: jobClientID)
+        _ = try? await appSession.makeSyncServices().instrumentJobSync.refreshMetadataTable(jobServerID: serverID, jobClientID: jobClientID)
     }
 
     private func refreshSamplePools() async {

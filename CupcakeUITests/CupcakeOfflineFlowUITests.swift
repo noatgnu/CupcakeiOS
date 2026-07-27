@@ -742,6 +742,194 @@ final class CupcakeOfflineFlowUITests: XCTestCase {
         XCTAssertTrue(startSessionButton.exists, "\"New Session\" never opened the start-session sheet after repeated taps")
     }
 
+    @MainActor
+    func testOntologyPreloadPromptAppearsOnFirstContinueOfflineAndCanBeDismissed() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing-reset-state", "--ui-testing-enable-ontology-preload-prompt"]
+        app.launch()
+
+        let continueOfflineButton = app.buttons["continueOfflineButton"]
+        XCTAssertTrue(continueOfflineButton.waitForExistence(timeout: 5))
+        continueOfflineButton.tap()
+
+        let preloadAlert = app.alerts["Preload Reference Data?"]
+        XCTAssertTrue(preloadAlert.waitForExistence(timeout: 5), "A fresh install should offer to preload reference data once, right after first reaching the main app")
+        preloadAlert.buttons["Not Now"].tap()
+
+        XCTAssertFalse(app.alerts["Preload Reference Data?"].exists, "Dismissing with Not Now should close the prompt")
+        tapToolbarButton("newProtocolButton", label: "New Protocol", in: app)
+        XCTAssertTrue(app.textFields["newProtocolTitleField"].waitForExistence(timeout: 5), "The app should be fully usable after dismissing the preload prompt")
+    }
+
+    @MainActor
+    func testOntologyPreloadPromptCanTriggerPreload() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing-reset-state", "--ui-testing-enable-ontology-preload-prompt"]
+        app.launch()
+
+        let continueOfflineButton = app.buttons["continueOfflineButton"]
+        XCTAssertTrue(continueOfflineButton.waitForExistence(timeout: 5))
+        continueOfflineButton.tap()
+
+        let preloadAlert = app.alerts["Preload Reference Data?"]
+        XCTAssertTrue(preloadAlert.waitForExistence(timeout: 5))
+        preloadAlert.buttons["Preload Now"].tap()
+
+        XCTAssertTrue(elementContaining("Preloading reference data", in: app).waitForExistence(timeout: 10), "Tapping Preload Now should start the background import and show progress")
+    }
+
+    @MainActor
+    func testResumeLastViewedStepAfterReopeningSession() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing-reset-state"]
+        app.launch()
+
+        let continueOfflineButton = app.buttons["continueOfflineButton"]
+        XCTAssertTrue(continueOfflineButton.waitForExistence(timeout: 5))
+        continueOfflineButton.tap()
+
+        tapToolbarButton("newProtocolButton", label: "New Protocol", in: app)
+        let titleField = app.textFields["newProtocolTitleField"]
+        XCTAssertTrue(titleField.waitForExistence(timeout: 5))
+        titleField.tap()
+        titleField.typeText("Resume Step Test")
+        app.buttons["createProtocolButton"].tap()
+
+        let protocolRow = app.staticTexts["Resume Step Test"]
+        XCTAssertTrue(protocolRow.waitForExistence(timeout: 5))
+        protocolRow.tap()
+
+        tapToolbarButton("addSectionButton", label: "Add Section", in: app)
+        XCTAssertTrue(app.staticTexts["New Section 1"].waitForExistence(timeout: 5))
+
+        for stepText in ["First step text", "Second step text"] {
+            let addStepButton = app.buttons["addStepButton"].firstMatch
+            XCTAssertTrue(addStepButton.waitForExistence(timeout: 5))
+            let stepField = openAddStepSheet(tapping: addStepButton, in: app)
+            stepField.tap()
+            stepField.typeText(stepText)
+            app.buttons["addTextSheetSaveButton"].tap()
+            XCTAssertTrue(addStepButton.waitForExistence(timeout: 5), "The Add Step sheet should dismiss back to the section after saving \"\(stepText)\"")
+        }
+        XCTAssertTrue(elementContaining("First step text", in: app).waitForExistence(timeout: 5), "The first step should be visible without scrolling, right after both steps are created")
+
+        #if os(iOS)
+        navigateBack(in: app)
+        #endif
+        openStartSessionSheet(in: app)
+        app.buttons["startSessionButton"].tap()
+
+        XCTAssertTrue(elementContaining("First step text", in: app).waitForExistence(timeout: 5), "The session should open at the top, on the first step")
+        XCTAssertTrue(app.images["lastViewedStepBookmark"].waitForExistence(timeout: 5), "The first step should be marked as last-viewed the moment it's visible on screen")
+
+        let secondStepText = elementContaining("Second step text", in: app)
+        for _ in 0..<5 {
+            if secondStepText.exists && secondStepText.isHittable { break }
+            app.swipeUp(velocity: .slow)
+        }
+        XCTAssertTrue(secondStepText.waitForExistence(timeout: 5), "Scrolling down should reveal the second step")
+
+        #if os(iOS)
+        navigateBack(in: app)
+        navigateBack(in: app)
+        #endif
+        tapTab("Sessions", in: app)
+        let sessionRow = elementContaining("Resume Step Test", in: app)
+        XCTAssertTrue(sessionRow.waitForExistence(timeout: 5), "The session, named after its protocol, should be reachable from the Sessions tab")
+        sessionRow.tap()
+
+        XCTAssertTrue(app.images["lastViewedStepBookmark"].waitForExistence(timeout: 5), "Reopening the session should mark the step the user last viewed")
+        XCTAssertTrue(elementContaining("Second step text", in: app).waitForExistence(timeout: 5) && elementContaining("Second step text", in: app).isHittable, "Reopening the session should auto-scroll back to the second step without any manual scrolling")
+    }
+
+    @MainActor
+    func testTranscriptionEngineAndVocabularySettings() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing-reset-state"]
+        app.launch()
+
+        let continueOfflineButton = app.buttons["continueOfflineButton"]
+        XCTAssertTrue(continueOfflineButton.waitForExistence(timeout: 5))
+        continueOfflineButton.tap()
+
+        tapTab("Protocols", in: app)
+        #if os(macOS)
+        app.typeKey(",", modifierFlags: .command)
+        #else
+        tapToolbarButton("settingsButton", label: "Settings", in: app)
+        #endif
+
+        let transcriptionLink = elementContaining("Transcription", in: app)
+        XCTAssertTrue(transcriptionLink.waitForExistence(timeout: 10))
+        transcriptionLink.tap()
+
+        XCTAssertTrue(firstExisting(app.otherElements["transcriptionEnginePicker"], app.segmentedControls["transcriptionEnginePicker"]).waitForExistence(timeout: 5))
+
+        tapSegment("WhisperKit", in: app)
+        XCTAssertTrue(elementContaining("WHISPERKIT MODELS", in: app).waitForExistence(timeout: 15), "Switching to WhisperKit should reveal the model list section (native List section headers render uppercase)")
+
+        tapSegment("Apple", in: app)
+        XCTAssertFalse(elementContaining("WHISPERKIT MODELS", in: app).exists, "Switching back to Apple should hide the WhisperKit-specific section")
+
+        let vocabularyField = app.textFields["newVocabularyTermField"]
+        XCTAssertTrue(vocabularyField.waitForExistence(timeout: 5))
+        vocabularyField.tap()
+        vocabularyField.typeText("cryo-EM")
+        app.buttons["addVocabularyTermButton"].tap()
+
+        XCTAssertTrue(elementContaining("cryo-EM", in: app).waitForExistence(timeout: 5), "The added vocabulary term should appear in the list")
+
+        app.buttons["removeVocabularyTermButton_cryo-EM"].firstMatch.tap()
+        XCTAssertFalse(elementContaining("cryo-EM", in: app).waitForExistence(timeout: 3), "Removing the term should take it out of the list")
+    }
+
+    @MainActor
+    func testOntologyBrowserSearchesOfflineAfterImport() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing-reset-state"]
+        app.launch()
+
+        let continueOfflineButton = app.buttons["continueOfflineButton"]
+        XCTAssertTrue(continueOfflineButton.waitForExistence(timeout: 5))
+        continueOfflineButton.tap()
+
+        tapTab("Protocols", in: app)
+        #if os(macOS)
+        app.typeKey(",", modifierFlags: .command)
+        #else
+        tapToolbarButton("settingsButton", label: "Settings", in: app)
+        #endif
+
+        let ontologyDataLink = elementContaining("Offline Ontology Data", in: app)
+        XCTAssertTrue(ontologyDataLink.waitForExistence(timeout: 5))
+        ontologyDataLink.tap()
+
+        let tissueImportButton = app.buttons["importOntologyButton_tissue"]
+        XCTAssertTrue(tissueImportButton.waitForExistence(timeout: 15), "The live manifest should load and show a Tissue row")
+        tissueImportButton.tap()
+        XCTAssertTrue(elementContaining("Imported", in: app).waitForExistence(timeout: 20), "Tissue import should complete")
+
+        #if os(iOS)
+        if UIDevice.current.userInterfaceIdiom == .phone {
+            let doneButton = app.buttons["Done"].firstMatch
+            XCTAssertTrue(doneButton.waitForExistence(timeout: 5))
+            doneButton.tap()
+            tapToolbarButton("settingsButton", label: "Settings", in: app)
+        }
+        #endif
+
+        let ontologyBrowserLink = elementContaining("Ontology Browser", in: app)
+        XCTAssertTrue(ontologyBrowserLink.waitForExistence(timeout: 5))
+        ontologyBrowserLink.tap()
+
+        let searchField = app.textFields["ontologyBrowserSearchField"]
+        XCTAssertTrue(searchField.waitForExistence(timeout: 5))
+        searchField.tap()
+        searchField.typeText("Abdomen")
+
+        XCTAssertTrue(elementContaining("Abdomen", in: app).waitForExistence(timeout: 10), "A real, freshly-imported tissue term should be searchable fully offline, with no network access")
+    }
+
     private func firstExisting(_ candidates: XCUIElement..., timeout: TimeInterval = 5) -> XCUIElement {
         let deadline = Date().addingTimeInterval(timeout)
         repeat {

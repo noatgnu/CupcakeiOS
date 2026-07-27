@@ -72,6 +72,7 @@ final class AppSession {
     private(set) var currentLastName: String?
     private(set) var pendingLocalImportCount: Int?
     private(set) var isImportingLocalNotebook = false
+    private(set) var isShowingOntologyPreloadPrompt = false
     private(set) var pendingDeepLink: DeepLinkTarget?
     var isShowingPushedDetail = false
     private(set) var syncProgress: SyncProgress?
@@ -98,6 +99,7 @@ final class AppSession {
     private static let standaloneDefaultsKey = "cupcake.isStandalone"
     private static let currentUserIDDefaultsKey = "cupcake.currentUserID"
     private static let isStaffDefaultsKey = "cupcake.isStaff"
+    private static let hasPromptedOntologyPreloadDefaultsKey = "cupcake.hasPromptedOntologyPreload"
     private static let activeContextDefaultsKey = "cupcake.activeContextIdentifier"
 
     static func resolveInitialContext(defaults: UserDefaults = .standard) -> ActiveContext {
@@ -474,6 +476,16 @@ final class AppSession {
         pendingLocalImportCount = nil
     }
 
+    func checkForOntologyPreloadPrompt() {
+        guard !UserDefaults.standard.bool(forKey: Self.hasPromptedOntologyPreloadDefaultsKey) else { return }
+        UserDefaults.standard.set(true, forKey: Self.hasPromptedOntologyPreloadDefaultsKey)
+        isShowingOntologyPreloadPrompt = true
+    }
+
+    func dismissOntologyPreloadPrompt() {
+        isShowingOntologyPreloadPrompt = false
+    }
+
     func handleDeepLink(_ url: URL) {
         guard url.scheme == "cupcake", url.host == "annotation",
               let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
@@ -661,8 +673,13 @@ final class AppSession {
         UserDefaults.standard.removeObject(forKey: currentUserIDDefaultsKey)
         UserDefaults.standard.removeObject(forKey: isStaffDefaultsKey)
         UserDefaults.standard.removeObject(forKey: activeContextDefaultsKey)
+        UserDefaults.standard.removeObject(forKey: hasPromptedOntologyPreloadDefaultsKey)
         KnownInstanceRegistry.removeAll()
         KeychainStore().delete()
+    }
+
+    static func suppressOntologyPreloadPromptForUITesting() {
+        UserDefaults.standard.set(true, forKey: hasPromptedOntologyPreloadDefaultsKey)
     }
 
     private static var deviceLabel: String {

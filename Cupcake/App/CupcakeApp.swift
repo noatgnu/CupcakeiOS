@@ -25,6 +25,9 @@ struct CupcakeApp: App {
         let isUITesting = ProcessInfo.processInfo.arguments.contains("--ui-testing-reset-state")
         if isUITesting {
             AppSession.resetPersistedStateForUITesting()
+            if !ProcessInfo.processInfo.arguments.contains("--ui-testing-enable-ontology-preload-prompt") {
+                AppSession.suppressOntologyPreloadPromptForUITesting()
+            }
         }
         let initialContext: AppSession.ActiveContext = isUITesting ? .none : AppSession.resolveInitialContext()
         let store = Self.makeCupcakeStore(storeFileName: AppSession.storeFileName(for: initialContext), inMemoryOnly: isUITesting)

@@ -957,6 +957,56 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
     }
 
     @MainActor
+    func testRunningStepTimerShowsPulsingIndicator() throws {
+        let unique = Int(Date().timeIntervalSince1970)
+        let seed = try seedSessionWithTimedStepViaAPI(
+            protocolTitle: "Live Pulse Test \(unique)",
+            sessionName: "Live Pulse Session \(unique)"
+        )
+
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing-reset-state"]
+        app.launch()
+        signIn(app)
+
+        tapTab("Sessions", in: app, timeout: 30)
+        let sessionRow = waitForMatchAcrossTypes(
+            NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", seed.sessionName, seed.sessionName),
+            in: app, timeout: 30
+        )
+        XCTAssertTrue(sessionRow.exists, "The session seeded via the API should appear once synced")
+        sessionRow.tap()
+
+        XCTAssertFalse(app.otherElements["pulsingTimerIndicator"].exists, "No pulsing indicator should show before the timer is started")
+
+        let startButton = app.buttons["startStepTimerButton"].firstMatch
+        XCTAssertTrue(startButton.waitForExistence(timeout: 15), "The step's timer Start button should render since the step has a duration")
+        startButton.tap()
+
+        XCTAssertTrue(app.otherElements["pulsingTimerIndicator"].firstMatch.waitForExistence(timeout: 10), "Starting the timer should show a pulsing indicator")
+        XCTAssertGreaterThanOrEqual(
+            app.otherElements.matching(identifier: "pulsingTimerIndicator").count, 2,
+            "A running timer should pulse both on the section header and on the step itself"
+        )
+
+        let stopButton = app.buttons["stopStepTimerButton"].firstMatch
+        XCTAssertTrue(stopButton.waitForExistence(timeout: 10))
+        stopButton.tap()
+
+        XCTAssertFalse(app.otherElements["pulsingTimerIndicator"].waitForExistence(timeout: 5), "Stopping the timer should remove the pulsing indicator")
+
+        let resumeButton = app.buttons["startStepTimerButton"].firstMatch
+        XCTAssertTrue(resumeButton.waitForExistence(timeout: 10))
+        resumeButton.tap()
+        XCTAssertTrue(app.otherElements["pulsingTimerIndicator"].firstMatch.waitForExistence(timeout: 10), "Resuming the timer should show the pulsing indicator again")
+
+        let timeKeeperID = try findTimeKeeperIDViaAPI(sessionID: seed.sessionID, stepID: seed.stepID, deviceToken: seed.deviceToken)
+        try postJSON("time-keepers/\(timeKeeperID)/stop_timer/", body: [:], deviceToken: seed.deviceToken)
+
+        XCTAssertFalse(app.otherElements["pulsingTimerIndicator"].waitForExistence(timeout: 15), "Stopping the timer from another \"device\" should push a live update that removes the pulsing indicator, with no local interaction")
+    }
+
+    @MainActor
     func testSamplePoolCreateSyncImmediately() throws {
         let templateName = "Live Pool Test Template \(Int(Date().timeIntervalSince1970))"
         try createBlankTemplateViaAPI(named: templateName)
@@ -1444,6 +1494,73 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         XCTAssertEqual(profile["last_name"] as? String, lastName, "The profile edit made through the real UI should persist server-side")
 
         try patchJSON("users/1/", body: ["last_name": ""], deviceToken: deviceToken)
+    }
+
+    @MainActor
+    func testChangePasswordSurfacesWrongCurrentPasswordError() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing-reset-state"]
+        app.launch()
+        signIn(app)
+
+        let settingsButton = app.buttons["settingsButton"]
+        XCTAssertTrue(settingsButton.waitForExistence(timeout: 15))
+        settingsButton.tap()
+
+        let accountRow = elementContaining("Account", in: app)
+        XCTAssertTrue(accountRow.waitForExistence(timeout: 10))
+        accountRow.tap()
+
+        let currentPasswordField = app.secureTextFields["accountCurrentPasswordField"]
+        XCTAssertTrue(currentPasswordField.waitForExistence(timeout: 10))
+        currentPasswordField.tap()
+        Thread.sleep(forTimeInterval: 0.3)
+        currentPasswordField.typeText("definitely-the-wrong-password\n")
+        Thread.sleep(forTimeInterval: 0.3)
+
+        let newPasswordField = app.secureTextFields["accountNewPasswordField"]
+        newPasswordField.tap()
+        Thread.sleep(forTimeInterval: 0.3)
+        newPasswordField.typeText("SomeNewPassword123\n")
+        Thread.sleep(forTimeInterval: 0.3)
+
+        let confirmPasswordField = app.secureTextFields["accountConfirmPasswordField"]
+        confirmPasswordField.tap()
+        Thread.sleep(forTimeInterval: 0.3)
+        confirmPasswordField.typeText("SomeNewPassword123")
+
+        app.buttons["changePasswordButton"].tap()
+
+        XCTAssertTrue(waitForTextAppearing("current_password", in: app, timeout: 15), "A wrong current password should surface the real server-side validation error")
+        XCTAssertFalse(app.staticTexts["Password changed successfully."].exists, "The change must not have gone through")
+
+        XCTAssertNoThrow(try fetchDeviceTokenViaAPI(), "The real password must still work afterward — this test must never actually change it")
+    }
+
+    @MainActor
+    func testKnownInstanceSwitchSignsBackInWithoutCredentials() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing-reset-state"]
+        app.launch()
+        signIn(app)
+
+        tapTab("Protocols", in: app, timeout: 30)
+        let accountMenu = app.buttons["accountMenu"]
+        XCTAssertTrue(accountMenu.waitForExistence(timeout: 15))
+        accountMenu.tap()
+
+        let switchInstanceItem = firstExisting(app.menuItems["Switch Instance…"], app.buttons["Switch Instance…"])
+        XCTAssertTrue(switchInstanceItem.waitForExistence(timeout: 5))
+        switchInstanceItem.tap()
+
+        let knownInstanceRow = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "knownInstanceRow_")).firstMatch
+        XCTAssertTrue(knownInstanceRow.waitForExistence(timeout: 10), "Leaving an active instance should list it under Known Instances on the login screen")
+        knownInstanceRow.tap()
+
+        XCTAssertTrue(
+            firstExisting(app.buttons["accountMenu"], app.buttons["settingsButton"]).waitForExistence(timeout: 15),
+            "Tapping a known instance should sign back in directly using its stored credentials, with nothing retyped"
+        )
     }
 
     @MainActor

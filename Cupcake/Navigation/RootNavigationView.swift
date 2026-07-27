@@ -1,4 +1,7 @@
 
+import CupcakeModels
+import CupcakeNetworking
+import CupcakeOntology
 import SwiftData
 import SwiftUI
 
@@ -6,6 +9,10 @@ struct RootNavigationView: View {
     @Environment(AppSession.self) private var appSession
     @Environment(\.openWindow) private var openWindow
     let ontologyStore: ModelContainer
+
+    @State private var isPreloadingOntologyData = false
+    @State private var ontologyPreloadErrorMessage: String?
+    @State private var isShowingOntologyPreloadError = false
 
     private enum Tab: CaseIterable {
         case protocols, sessions, jobs, inventory
@@ -54,13 +61,20 @@ struct RootNavigationView: View {
                     }
                 }
                 .overlay(alignment: .top) {
-                    if let progress = appSession.syncProgress {
-                        SyncProgressBanner(progress: progress)
-                            .padding(.top, 8)
-                            .transition(.move(edge: .top).combined(with: .opacity))
+                    VStack(spacing: 4) {
+                        if let progress = appSession.syncProgress {
+                            SyncProgressBanner(progress: progress)
+                                .transition(.move(edge: .top).combined(with: .opacity))
+                        }
+                        if isPreloadingOntologyData {
+                            SyncProgressBanner(progress: SyncProgress(direction: .pull, label: "Preloading reference data…"))
+                                .transition(.move(edge: .top).combined(with: .opacity))
+                        }
                     }
+                    .padding(.top, 8)
                 }
                 .animation(.default, value: appSession.syncProgress)
+                .animation(.default, value: isPreloadingOntologyData)
                 .task {
                     try? await appSession.syncAll()
                 }
@@ -92,10 +106,56 @@ struct RootNavigationView: View {
         } message: {
             Text("You have \(appSession.pendingLocalImportCount ?? 0) item(s) created while offline. Import them to this server now?")
         }
+        .alert(
+            "Preload Reference Data?",
+            isPresented: Binding(
+                get: { appSession.isShowingOntologyPreloadPrompt },
+                set: { if !$0 { appSession.dismissOntologyPreloadPrompt() } }
+            )
+        ) {
+            Button("Not Now", role: .cancel) { appSession.dismissOntologyPreloadPrompt() }
+            Button("Preload Now") {
+                appSession.dismissOntologyPreloadPrompt()
+                Task { await preloadOntologyData() }
+            }
+            .accessibilityIdentifier("preloadOntologyDataButton")
+        } message: {
+            Text("Cupcake can download species, tissue, disease, and other reference data now so it's available offline later. This works best over Wi-Fi. You can also do this anytime from Settings.")
+        }
+        .alert("Couldn't preload reference data", isPresented: $isShowingOntologyPreloadError) {
+            Button("OK") {}
+        } message: {
+            Text(ontologyPreloadErrorMessage ?? "")
+        }
         .onChange(of: appSession.pendingDeepLink) { _, newValue in
             if newValue != nil {
                 selectedTab = .sessions
             }
+        }
+    }
+
+    private func preloadOntologyData() async {
+        isPreloadingOntologyData = true
+        defer { isPreloadingOntologyData = false }
+
+        let service = OntologyImportService(modelContainer: ontologyStore)
+        do {
+            let manifest = try await service.fetchManifest()
+            var failedTableNames: [String] = []
+            for table in manifest.tables {
+                do {
+                    try await OntologyRegistry.importTable(table, using: service)
+                } catch {
+                    failedTableNames.append(OntologyRegistry.displayNames[table.name] ?? table.name)
+                }
+            }
+            if !failedTableNames.isEmpty {
+                ontologyPreloadErrorMessage = "Couldn't preload: \(failedTableNames.joined(separator: ", "))"
+                isShowingOntologyPreloadError = true
+            }
+        } catch {
+            ontologyPreloadErrorMessage = error.userFacingMessage
+            isShowingOntologyPreloadError = true
         }
     }
 

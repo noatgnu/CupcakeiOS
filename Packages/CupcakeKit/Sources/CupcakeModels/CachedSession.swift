@@ -15,6 +15,7 @@ public final class CachedSession {
     @available(*, deprecated, message: "Use protocolClientIDs instead, kept for one release.")
     public var primaryProtocolClientID: UUID?
     public var createdAt: Date
+    public var lastViewedStepClientID: UUID?
 
     public init(
         clientID: UUID = UUID(),
@@ -27,7 +28,8 @@ public final class CachedSession {
         protocolServerIDs: [Int64] = [],
         protocolClientIDs: [UUID] = [],
         primaryProtocolClientID: UUID? = nil,
-        createdAt: Date = Date()
+        createdAt: Date = Date(),
+        lastViewedStepClientID: UUID? = nil
     ) {
         self.clientID = clientID
         self.serverID = serverID
@@ -40,6 +42,7 @@ public final class CachedSession {
         self.protocolClientIDs = protocolClientIDs
         self.primaryProtocolClientID = primaryProtocolClientID
         self.createdAt = createdAt
+        self.lastViewedStepClientID = lastViewedStepClientID
     }
 }
 

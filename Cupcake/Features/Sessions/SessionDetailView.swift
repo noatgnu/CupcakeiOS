@@ -6,6 +6,22 @@ import PhotosUI
 import SwiftData
 import SwiftUI
 
+private struct PulsingTimerIndicator: View {
+    @State private var isPulsing = false
+
+    var body: some View {
+        Circle()
+            .fill(Color.red)
+            .frame(width: 8, height: 8)
+            .scaleEffect(isPulsing ? 1.4 : 0.8)
+            .opacity(isPulsing ? 0.4 : 1)
+            .animation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true), value: isPulsing)
+            .onAppear { isPulsing = true }
+            .accessibilityLabel("Timer running")
+            .accessibilityIdentifier("pulsingTimerIndicator")
+    }
+}
+
 struct PhotoAnnotationButton: View {
     let label: String
     let onPick: (Data) -> Void
@@ -215,6 +231,16 @@ struct SessionDetailView: View {
             .flatMap { $0.steps.sorted { $0.order < $1.order } }
     }
 
+    private func hasRunningTimer(for step: CachedProtocolStep) -> Bool {
+        allTimeKeepers.contains { $0.sessionClientID == sessionClientID && $0.stepClientID == step.clientID && $0.started }
+    }
+
+    private func markStepViewed(_ step: CachedProtocolStep) {
+        guard let currentSession, currentSession.lastViewedStepClientID != step.clientID else { return }
+        currentSession.lastViewedStepClientID = step.clientID
+        try? modelContext.save()
+    }
+
     private func stepVariations(for step: CachedProtocolStep) -> [CachedStepVariation] {
         guard let stepServerID = step.serverID, let sessionServerID else { return [] }
         return allStepVariations.filter { $0.stepServerID == stepServerID && $0.sessionServerID == sessionServerID }
@@ -371,10 +397,13 @@ struct SessionDetailView: View {
             }
             if isProtocolMode {
             ForEach(steps) { step in
-                Section(step.section?.sectionDescription ?? "Untitled Section") {
+                Section {
                     VStack(alignment: .leading, spacing: 4) {
                         HStack(alignment: .top) {
                             HTMLText(html: StepTemplateRenderer.render(stepDescription: step.stepDescription, reagents: stepReagents(for: step)))
+                            if hasRunningTimer(for: step) {
+                                PulsingTimerIndicator()
+                            }
                             if focusedStepClientID == nil, PlatformWindowPreference.prefersSeparateWindow {
                                 Spacer()
                                 Button {
@@ -505,7 +534,23 @@ struct SessionDetailView: View {
                         }
                         .accessibilityIdentifier("addVariationButton")
                     }
+                } header: {
+                    HStack(spacing: 6) {
+                        Text(step.section?.sectionDescription ?? "Untitled Section")
+                        if hasRunningTimer(for: step) {
+                            PulsingTimerIndicator()
+                        }
+                        if currentSession?.lastViewedStepClientID == step.clientID {
+                            Image(systemName: "bookmark.fill")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .accessibilityLabel("Last viewed step")
+                                .accessibilityIdentifier("lastViewedStepBookmark")
+                        }
+                    }
                 }
+                .id(step.clientID)
+                .onAppear { markStepViewed(step) }
             }
             }
         }
@@ -700,6 +745,15 @@ struct SessionDetailView: View {
             guard allStepAnnotations.contains(where: { $0.annotationType == "booking" && $0.instrumentUsageServerID != nil }) else { return }
             try? await appSession.makeSyncServices().instrumentSync.refetchInstrumentUsage()
         }
+        .task {
+            guard highlightAnnotationServerID == nil, focusedStepClientID == nil, isProtocolMode,
+                  let lastViewedStepClientID = currentSession?.lastViewedStepClientID,
+                  steps.contains(where: { $0.clientID == lastViewedStepClientID }) else { return }
+            try? await Task.sleep(for: .milliseconds(300))
+            withAnimation {
+                scrollProxy.scrollTo(lastViewedStepClientID, anchor: .top)
+            }
+        }
         .task(id: sessionServerID) {
             guard let sessionServerID else { return }
             await refreshTimeKeepers(sessionServerID: sessionServerID)
@@ -767,11 +821,11 @@ struct SessionDetailView: View {
     }
 
     private func refreshStepTranscription(serverID: Int64) async {
-        try? await appSession.makeSyncServices().stepAnnotationSync.refreshTranscription(serverID: serverID)
+        _ = try? await appSession.makeSyncServices().stepAnnotationSync.refreshTranscription(serverID: serverID)
     }
 
     private func refreshSessionTranscription(serverID: Int64) async {
-        try? await appSession.makeSyncServices().sessionAnnotationSync.refreshTranscription(serverID: serverID)
+        _ = try? await appSession.makeSyncServices().sessionAnnotationSync.refreshTranscription(serverID: serverID)
     }
 
     private func deleteSession() async {

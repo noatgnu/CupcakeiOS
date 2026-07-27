@@ -90,7 +90,7 @@ struct StepTimerView: View {
         guard let timeKeeper else { return }
         isBusy = true
         defer { isBusy = false }
-        try? await appSession.makeSyncServices().timeKeeperSync.stopTimer(serverID: timeKeeper.serverID)
+        _ = try? await appSession.makeSyncServices().timeKeeperSync.stopTimer(serverID: timeKeeper.serverID)
         await onTimeKeeperChanged()
     }
 
@@ -98,7 +98,7 @@ struct StepTimerView: View {
         guard let timeKeeper else { return }
         isBusy = true
         defer { isBusy = false }
-        try? await appSession.makeSyncServices().timeKeeperSync.resetTimer(serverID: timeKeeper.serverID)
+        _ = try? await appSession.makeSyncServices().timeKeeperSync.resetTimer(serverID: timeKeeper.serverID)
         await onTimeKeeperChanged()
     }
 }
