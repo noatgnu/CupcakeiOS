@@ -2689,14 +2689,30 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
     }
 
     @MainActor
-    private func waitForSignInSyncToFinish(in app: XCUIApplication, timeout: TimeInterval = 30) {
+    private func waitForSignInSyncToFinish(in app: XCUIApplication, timeout: TimeInterval = 30, stallTimeout: TimeInterval = 15) {
         let bannerQuery = app.staticTexts.matching(NSPredicate(format: "identifier == %@", "syncProgressBanner"))
         let deadline = Date().addingTimeInterval(timeout)
         var consecutiveAbsences = 0
+        var lastText: String?
+        var lastChangeTime = Date()
         while Date() < deadline {
-            if bannerQuery.firstMatch.exists {
+            let element = bannerQuery.firstMatch
+            if element.exists {
                 consecutiveAbsences = 0
+                let valueText = (element.value as? String) ?? ""
+                let text = !valueText.isEmpty ? valueText : element.label
+                if text != lastText {
+                    lastText = text
+                    lastChangeTime = Date()
+                } else if Date().timeIntervalSince(lastChangeTime) > stallTimeout {
+                    XCTFail("Sign-in sync appears stalled: the sync banner has shown \"\(text)\" unchanged for more than \(Int(stallTimeout))s")
+                    return
+                }
             } else {
+                if lastText != nil {
+                    lastText = nil
+                    lastChangeTime = Date()
+                }
                 consecutiveAbsences += 1
                 if consecutiveAbsences >= 40 { return }
             }
