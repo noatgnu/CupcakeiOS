@@ -69,7 +69,9 @@ struct MoveAnnotationFolderSheet: View {
                 }
             }
         }
+        #if os(macOS)
         .frame(minWidth: 320, minHeight: 400)
+        #endif
         .alert("Couldn't move folder", isPresented: $isShowingError) {
             Button("OK") {}
         } message: {

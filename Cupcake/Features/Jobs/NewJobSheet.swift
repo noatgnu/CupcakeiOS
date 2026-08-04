@@ -67,7 +67,9 @@ struct NewJobSheet: View {
                 }
             }
         }
+        #if os(macOS)
         .frame(minWidth: 360, minHeight: 340)
+        #endif
         .alert("Couldn't create job", isPresented: $isShowingError) {
             Button("OK") {}
         } message: {

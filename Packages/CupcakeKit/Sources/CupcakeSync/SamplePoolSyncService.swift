@@ -20,34 +20,22 @@ public actor SamplePoolSyncService {
 
     public func refetch(metadataTableServerID: Int64) async throws {
         guard let token = deviceToken() else { return }
-        let authorization = "DeviceToken \(token)"
-        var page: PaginatedResponse<SamplePoolDTO> = try await apiClient.get(
-            "sample-pools/",
+        try await apiClient.fetchAllPages(
+            path: "sample-pools/",
             query: [URLQueryItem(name: "metadata_table_id", value: String(metadataTableServerID))],
-            authorizationHeader: authorization
-        )
-        while true {
-            try await store.upsert(page.results)
-            guard let nextURLString = page.next, let nextURL = URL(string: nextURLString) else { break }
-            page = try await apiClient.get(absoluteURL: nextURL, authorizationHeader: authorization)
+            authorizationHeader: "DeviceToken \(token)"
+        ) { (dtos: [SamplePoolDTO]) in
+            try await store.upsert(dtos)
         }
     }
 
     public func fetchDetail(metadataTableServerID: Int64) async throws -> [SamplePoolDTO] {
         guard let token = deviceToken() else { return [] }
-        let authorization = "DeviceToken \(token)"
-        var results: [SamplePoolDTO] = []
-        var page: PaginatedResponse<SamplePoolDTO> = try await apiClient.get(
-            "sample-pools/",
+        return try await apiClient.fetchAllPages(
+            path: "sample-pools/",
             query: [URLQueryItem(name: "metadata_table_id", value: String(metadataTableServerID))],
-            authorizationHeader: authorization
+            authorizationHeader: "DeviceToken \(token)"
         )
-        while true {
-            results.append(contentsOf: page.results)
-            guard let nextURLString = page.next, let nextURL = URL(string: nextURLString) else { break }
-            page = try await apiClient.get(absoluteURL: nextURL, authorizationHeader: authorization)
-        }
-        return results
     }
 
     @discardableResult

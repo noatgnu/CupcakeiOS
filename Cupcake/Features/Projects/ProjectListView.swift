@@ -43,6 +43,7 @@ struct ProjectListView: View {
                     } label: {
                         Label("New Project", systemImage: "plus")
                     }
+                    .labelStyle(.iconOnly)
                     .accessibilityIdentifier("newProjectButton")
                 }
             }
@@ -76,6 +77,7 @@ struct ProjectListView: View {
                         } label: {
                             Label("Edit", systemImage: "pencil")
                         }
+                        .labelStyle(.iconOnly)
                         .disabled(project.serverID == nil)
                         .accessibilityIdentifier("editProjectButton")
                     }

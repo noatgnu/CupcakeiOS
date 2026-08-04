@@ -11,17 +11,21 @@ struct BreadcrumbBar: View {
     let onSelect: (Int) -> Void
 
     var body: some View {
+        if segments.count > 1 {
+            content
+        }
+    }
+
+    private var content: some View {
         HStack(spacing: 6) {
-            if segments.count > 1 {
-                Button {
-                    onGoBack()
-                } label: {
-                    Image(systemName: "chevron.left")
-                }
-                .buttonStyle(.plain)
-                .accessibilityIdentifier("breadcrumbBackButton")
-                .help("Back")
+            Button {
+                onGoBack()
+            } label: {
+                Image(systemName: "chevron.left")
             }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("breadcrumbBackButton")
+            .help("Back")
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 4) {

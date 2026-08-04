@@ -100,7 +100,9 @@ struct SketchCanvasView: View {
                 }
             }
         }
+        #if os(macOS)
         .frame(minWidth: 360, minHeight: 480)
+        #endif
     }
 
     private var controls: some View {

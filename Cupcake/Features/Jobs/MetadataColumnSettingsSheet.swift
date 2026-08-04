@@ -74,7 +74,9 @@ struct MetadataColumnSettingsSheet: View {
                 }
             }
         }
+        #if os(macOS)
         .frame(minWidth: 380, minHeight: 420)
+        #endif
         .alert("Couldn't save column", isPresented: $isShowingError) {
             Button("OK") {}
         } message: {

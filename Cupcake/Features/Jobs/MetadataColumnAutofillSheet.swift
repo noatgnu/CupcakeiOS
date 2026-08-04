@@ -126,7 +126,9 @@ struct MetadataColumnAutofillSheet: View {
                 }
             }
         }
+        #if os(macOS)
         .frame(minWidth: 380, minHeight: 560)
+        #endif
         .alert("Couldn't autofill", isPresented: $isShowingError) {
             Button("OK") {}
         } message: {

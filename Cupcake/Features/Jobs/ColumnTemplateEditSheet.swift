@@ -147,7 +147,9 @@ struct ColumnTemplateEditSheet: View {
                 }
             }
         }
+        #if os(macOS)
         .frame(minWidth: 380, minHeight: 480)
+        #endif
         .alert("Couldn't save template", isPresented: $isShowingError) {
             Button("OK") {}
         } message: {

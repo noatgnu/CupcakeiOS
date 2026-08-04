@@ -21,6 +21,12 @@ public struct ProtocolDTO: Decodable, Sendable {
     public let sections: [ProtocolSectionDTO]
     public let createdAt: String?
     public let updatedAt: String?
+    public let owner: Int64?
+    public let ownerUsername: String?
+    public let editors: [Int64]
+    public let editorsUsernames: [String]
+    public let viewers: [Int64]
+    public let viewersUsernames: [String]
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -31,10 +37,27 @@ public struct ProtocolDTO: Decodable, Sendable {
         sections = try container.decodeIfPresent([ProtocolSectionDTO].self, forKey: .sections) ?? []
         createdAt = try container.decodeIfPresent(String.self, forKey: .createdAt)
         updatedAt = try container.decodeIfPresent(String.self, forKey: .updatedAt)
+        owner = try container.decodeIfPresent(Int64.self, forKey: .owner)
+        ownerUsername = try container.decodeIfPresent(String.self, forKey: .ownerUsername)
+        editors = try container.decodeIfPresent([Int64].self, forKey: .editors) ?? []
+        editorsUsernames = try container.decodeIfPresent([String].self, forKey: .editorsUsernames) ?? []
+        viewers = try container.decodeIfPresent([Int64].self, forKey: .viewers) ?? []
+        viewersUsernames = try container.decodeIfPresent([String].self, forKey: .viewersUsernames) ?? []
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, protocolTitle, protocolDescription, enabled, sections, createdAt, updatedAt
+        case owner, ownerUsername, editors, editorsUsernames, viewers, viewersUsernames
+    }
+}
+
+public struct UpdateProtocolAccessRequest: Encodable, Sendable {
+    public var editors: [Int64]
+    public var viewers: [Int64]
+
+    public init(editors: [Int64], viewers: [Int64]) {
+        self.editors = editors
+        self.viewers = viewers
     }
 }
 

@@ -20,13 +20,8 @@ public actor MetadataTableTemplateSyncService {
 
     public func refetchAll() async throws {
         guard let token = deviceToken() else { return }
-        let authorization = "DeviceToken \(token)"
-
-        var page: PaginatedResponse<MetadataTableTemplateDTO> = try await apiClient.get("metadata-table-templates/", authorizationHeader: authorization)
-        while true {
-            try await store.upsert(page.results)
-            guard let nextURLString = page.next, let nextURL = URL(string: nextURLString) else { break }
-            page = try await apiClient.get(absoluteURL: nextURL, authorizationHeader: authorization)
+        try await apiClient.fetchAllPages(path: "metadata-table-templates/", authorizationHeader: "DeviceToken \(token)") { (dtos: [MetadataTableTemplateDTO]) in
+            try await store.upsert(dtos)
         }
     }
 
@@ -236,16 +231,24 @@ public enum MetadataTableTemplateSyncError: Error {
 @ModelActor
 actor MetadataTableTemplateStore {
     func upsert(_ dtos: [MetadataTableTemplateDTO]) throws {
+        guard !dtos.isEmpty else { return }
+
+        let templateServerIDs = Set(dtos.map(\.id))
+        let existingTemplates = try modelContext.fetch(
+            FetchDescriptor<CachedMetadataTableTemplate>(predicate: #Predicate { templateServerIDs.contains($0.serverID) })
+        )
+        var templatesByServerID = Dictionary(uniqueKeysWithValues: existingTemplates.map { ($0.serverID, $0) })
+
         for dto in dtos {
-            let templateServerID = dto.id
-            let existing = try? modelContext.fetch(
-                FetchDescriptor<CachedMetadataTableTemplate>(predicate: #Predicate { $0.serverID == templateServerID })
-            )
-            let template = existing?.first ?? {
+            let template: CachedMetadataTableTemplate
+            if let found = templatesByServerID[dto.id] {
+                template = found
+            } else {
                 let created = CachedMetadataTableTemplate(serverID: dto.id, name: dto.name, createdAt: Date.parsedISO8601(dto.createdAt))
                 modelContext.insert(created)
-                return created
-            }()
+                templatesByServerID[dto.id] = created
+                template = created
+            }
             template.name = dto.name
             template.templateDescription = dto.description
             template.ownerUsername = dto.ownerUsername

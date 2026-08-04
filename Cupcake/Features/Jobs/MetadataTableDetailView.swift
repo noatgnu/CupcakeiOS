@@ -6,6 +6,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct MetadataTableDetailWindowID: Codable, Hashable {
+    let namespaceID: UUID
     let metadataTableServerID: Int64
     let jobClientID: UUID?
     let projectServerID: Int64?
@@ -49,6 +50,7 @@ struct MetadataTableDetailView: View {
     @Environment(AppSession.self) private var appSession
     @Environment(\.modelContext) private var modelContext
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.namespaceID) private var namespaceID
     @Query private var allColumns: [CachedMetadataColumn]
 
     private enum ViewMode: String, CaseIterable, Identifiable {
@@ -68,6 +70,7 @@ struct MetadataTableDetailView: View {
     @State private var editingCell: MetadataCellEditTarget?
     @State private var columnSettingsTarget: CachedMetadataColumn?
     @State private var autofillTarget: CachedMetadataColumn?
+    @State private var findReplaceTarget: CachedMetadataColumn?
     @State private var errorMessage: String?
     @State private var isShowingError = false
     @State private var isExportingSDRF = false
@@ -79,6 +82,7 @@ struct MetadataTableDetailView: View {
     @State private var isImporting = false
     @State private var replaceExistingOnImport = false
     @State private var importScope: AsyncMetadataImportScope = .userMetadata
+    @State private var pendingAsyncTaskCount = 0
 
     private var allTableColumns: [CachedMetadataColumn] {
         allColumns
@@ -137,6 +141,13 @@ struct MetadataTableDetailView: View {
         }
         .formStyle(.grouped)
         .navigationTitle("Metadata Table")
+        .overlay(alignment: .topLeading) {
+            Text("\(pendingAsyncTaskCount)")
+                .accessibilityIdentifier("pendingAsyncTaskCount")
+                .frame(width: 0, height: 0)
+                .clipped()
+                .allowsHitTesting(false)
+        }
         .toolbar {
             ToolbarItem {
                 Menu {
@@ -202,12 +213,15 @@ struct MetadataTableDetailView: View {
             ToolbarItem {
                 Button {
                     if PlatformWindowPreference.prefersSeparateWindow {
-                        PlatformWindowPreference.openOrFocusWindow(id: "async-task-center", using: openWindow)
+                        PlatformWindowPreference.openOrFocusWindow(id: "async-task-center", namespaceID: namespaceID, using: openWindow)
                     } else {
                         isShowingAsyncTaskCenter = true
                     }
                 } label: {
-                    Label("Async Tasks", systemImage: "clock.arrow.circlepath")
+                    Label(
+                        pendingAsyncTaskCount == 0 ? "Async Tasks" : "Async Tasks (\(pendingAsyncTaskCount))",
+                        systemImage: pendingAsyncTaskCount == 0 ? "clock.arrow.circlepath" : "clock.badge.exclamationmark"
+                    )
                 }
                 .accessibilityIdentifier("openAsyncTaskCenterButton")
                 .help("Async Tasks")
@@ -226,6 +240,11 @@ struct MetadataTableDetailView: View {
         .sheet(isPresented: $isShowingAsyncTaskCenter) {
             NavigationStack {
                 AsyncTaskCenterView()
+            }
+        }
+        .onChange(of: isShowingAsyncTaskCenter) { _, isShowing in
+            if !isShowing {
+                Task { await refreshAsyncTaskAttentionCount() }
             }
         }
         .fileImporter(isPresented: $isShowingImportPicker, allowedContentTypes: [.tabSeparatedText, .commaSeparatedText, .plainText, .data]) { result in
@@ -253,9 +272,20 @@ struct MetadataTableDetailView: View {
                 await refreshColumns()
             }
         }
+        .sheet(item: $findReplaceTarget) { column in
+            ColumnFindReplaceSheet(column: column.asDTO) {
+                await refreshColumns()
+            }
+        }
         .task {
             await refreshColumns()
             await loadPools()
+        }
+        .task {
+            await refreshAsyncTaskAttentionCount()
+            for await _ in await appSession.asyncTaskEvents() {
+                await refreshAsyncTaskAttentionCount()
+            }
         }
     }
 
@@ -269,7 +299,7 @@ struct MetadataTableDetailView: View {
                 ForEach(columns) { column in
                     HStack {
                         Button {
-                            editingCell = MetadataCellEditTarget(column: column, sampleIndex: nil)
+                            openCellEditor(column: column, sampleIndex: nil)
                         } label: {
                             VStack(alignment: .leading, spacing: 2) {
                                 HStack(spacing: 4) {
@@ -328,6 +358,12 @@ struct MetadataTableDetailView: View {
                                 Label("Autofill", systemImage: "wand.and.stars")
                             }
                             .accessibilityIdentifier("metadataTableColumnAutofillMenuItem_\(column.name)")
+                            Button {
+                                findReplaceTarget = column
+                            } label: {
+                                Label("Find & Replace", systemImage: "text.magnifyingglass")
+                            }
+                            .accessibilityIdentifier("metadataTableColumnFindReplaceMenuItem_\(column.name)")
                         } label: {
                             Image(systemName: "ellipsis.circle")
                         }
@@ -413,7 +449,7 @@ struct MetadataTableDetailView: View {
                                 ForEach(columns) { column in
                                     let cellValue = resolvedValue(column: column, sampleIndex: sampleIndex)
                                     Button {
-                                        editingCell = MetadataCellEditTarget(column: column, sampleIndex: sampleIndex)
+                                        openCellEditor(column: column, sampleIndex: sampleIndex)
                                     } label: {
                                         Text(cellValue.isEmpty ? "-" : cellValue)
                                             .font(.caption)
@@ -470,6 +506,14 @@ struct MetadataTableDetailView: View {
                     .padding(.vertical, 4)
                 }
             }
+        }
+    }
+
+    private func openCellEditor(column: CachedMetadataColumn, sampleIndex: Int?) {
+        if PlatformWindowPreference.prefersSeparateWindow {
+            openWindow(id: "metadata-value-editor", value: MetadataValueEditWindowID(namespaceID: namespaceID, columnServerID: column.serverID, sampleIndex: sampleIndex, projectServerID: projectServerID))
+        } else {
+            editingCell = MetadataCellEditTarget(column: column, sampleIndex: sampleIndex)
         }
     }
 
@@ -547,14 +591,23 @@ struct MetadataTableDetailView: View {
                     metadataTableServerID: metadataTableServerID, metadataColumnIDs: columnIDs,
                     sampleNumber: sampleCount, includePools: !samplePools.isEmpty
                 )
+                appSession.recordRetryAction(
+                    .exportSDRF(metadataTableServerID: metadataTableServerID, metadataColumnIDs: columnIDs, sampleNumber: sampleCount, includePools: !samplePools.isEmpty),
+                    forTaskID: taskID
+                )
             case .excel:
                 taskID = try await services.asyncTaskSync.exportExcelTemplate(
                     metadataTableServerID: metadataTableServerID, metadataColumnIDs: columnIDs,
                     sampleNumber: sampleCount, includePools: !samplePools.isEmpty
                 )
+                appSession.recordRetryAction(
+                    .exportExcel(metadataTableServerID: metadataTableServerID, metadataColumnIDs: columnIDs, sampleNumber: sampleCount, includePools: !samplePools.isEmpty),
+                    forTaskID: taskID
+                )
             }
             exportedTaskMessage = "Export queued (task \(taskID.prefix(8))…). Check Async Tasks for progress and download."
             isShowingExportedTaskMessage = true
+            await refreshAsyncTaskAttentionCount()
         } catch {
             errorMessage = error.userFacingMessage
             isShowingError = true
@@ -567,16 +620,34 @@ struct MetadataTableDetailView: View {
         let didAccess = fileURL.startAccessingSecurityScopedResource()
         defer { if didAccess { fileURL.stopAccessingSecurityScopedResource() } }
         do {
+            let fileData = try Data(contentsOf: fileURL)
+            let fileName = fileURL.lastPathComponent
+            let effectiveImportScope = appSession.isStaff ? importScope : .userMetadata
             let services = appSession.makeSyncServices()
             let taskID = try await services.asyncTaskSync.importSDRFFile(
-                metadataTableServerID: metadataTableServerID, fileURL: fileURL, replaceExisting: replaceExistingOnImport,
-                importScope: appSession.isStaff ? importScope : .userMetadata
+                metadataTableServerID: metadataTableServerID, fileData: fileData, fileName: fileName,
+                replaceExisting: replaceExistingOnImport, importScope: effectiveImportScope
+            )
+            appSession.recordRetryAction(
+                .importSDRF(metadataTableServerID: metadataTableServerID, fileData: fileData, fileName: fileName, replaceExisting: replaceExistingOnImport, importScope: effectiveImportScope),
+                forTaskID: taskID
             )
             exportedTaskMessage = "Import queued (task \(taskID.prefix(8))…). Check Async Tasks for progress."
             isShowingExportedTaskMessage = true
+            await refreshAsyncTaskAttentionCount()
         } catch {
             errorMessage = error.userFacingMessage
             isShowingError = true
+        }
+    }
+
+    private func refreshAsyncTaskAttentionCount() async {
+        do {
+            let services = appSession.makeSyncServices()
+            let page = try await services.asyncTaskSync.fetchAll(limit: 100)
+            pendingAsyncTaskCount = page.results.filter { !$0.isTerminal || $0.status == "FAILURE" }.count
+        } catch {
+            // Leave the last known count as-is; this is a best-effort indicator, not a source of truth.
         }
     }
 }

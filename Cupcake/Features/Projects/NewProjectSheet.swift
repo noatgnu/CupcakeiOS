@@ -48,7 +48,9 @@ struct NewProjectSheet: View {
                 }
             }
         }
+        #if os(macOS)
         .frame(minWidth: 320, minHeight: 220)
+        #endif
         .alert(isEditing ? "Couldn't save project" : "Couldn't create project", isPresented: $isShowingError) {
             Button("OK") {}
         } message: {

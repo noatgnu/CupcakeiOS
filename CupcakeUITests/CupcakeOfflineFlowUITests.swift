@@ -95,7 +95,7 @@ final class CupcakeOfflineFlowUITests: XCTestCase {
         stepDurationField.tap()
         stepDurationField.typeText("15")
 
-        app.buttons["addTextSheetSaveButton"].tap()
+        app.buttons["addStepSaveButton"].tap()
 
         XCTAssertTrue(elementContaining("Run the assay", in: app).waitForExistence(timeout: 5), "The manually-added step should show its description")
         XCTAssertTrue(elementContaining("15m", in: app).waitForExistence(timeout: 5), "The manually-added step should show its entered duration")
@@ -392,7 +392,7 @@ final class CupcakeOfflineFlowUITests: XCTestCase {
         stepDurationField.tap()
         stepDurationField.typeText("15")
 
-        app.buttons["addTextSheetSaveButton"].tap()
+        app.buttons["addStepSaveButton"].tap()
         XCTAssertTrue(elementContaining("Mix reagents", in: app).waitForExistence(timeout: 5))
 
         elementContaining("Mix reagents", in: app).tap()
@@ -522,7 +522,7 @@ final class CupcakeOfflineFlowUITests: XCTestCase {
         let stepField = openAddStepSheet(tapping: addStepButton, in: app)
         stepField.tap()
         stepField.typeText("Record observations")
-        app.buttons["addTextSheetSaveButton"].tap()
+        app.buttons["addStepSaveButton"].tap()
         XCTAssertTrue(elementContaining("Record observations", in: app).waitForExistence(timeout: 5))
 
         #if os(iOS)
@@ -601,7 +601,7 @@ final class CupcakeOfflineFlowUITests: XCTestCase {
         }
 
         tapTab("Sessions", in: app)
-        tapToolbarButton("newSessionButton", label: "New Session", in: app)
+        tapToolbarButton("newStandaloneSessionButton", label: "New Session", in: app)
 
         let sessionNameField = app.textFields["newSessionNameField"]
         XCTAssertTrue(sessionNameField.waitForExistence(timeout: 5))
@@ -645,7 +645,7 @@ final class CupcakeOfflineFlowUITests: XCTestCase {
         #endif
 
         tapTab("Sessions", in: app)
-        tapToolbarButton("newSessionButton", label: "New Session", in: app)
+        tapToolbarButton("newStandaloneSessionButton", label: "New Session", in: app)
         let secondSessionNameField = app.textFields["newSessionNameField"]
         XCTAssertTrue(secondSessionNameField.waitForExistence(timeout: 5))
         secondSessionNameField.tap()
@@ -714,14 +714,14 @@ final class CupcakeOfflineFlowUITests: XCTestCase {
     @MainActor
     private func openAddStepSheet(tapping button: XCUIElement, in app: XCUIApplication) -> XCUIElement {
         let durationField = app.textFields["stepDurationField"]
-        var stepField = firstExisting(app.textViews["addTextSheetField"], app.textFields["addTextSheetField"], timeout: 0)
+        var stepField = firstExisting(app.textViews["stepDescriptionField"], app.textFields["stepDescriptionField"], timeout: 0)
         for _ in 0..<3 {
             if stepField.exists && durationField.exists { break }
             if stepField.exists && !durationField.exists {
                 firstExisting(app.navigationBars.buttons["Cancel"], app.buttons["Cancel"]).tap()
             }
             button.tap()
-            stepField = firstExisting(app.textViews["addTextSheetField"], app.textFields["addTextSheetField"], timeout: 3)
+            stepField = firstExisting(app.textViews["stepDescriptionField"], app.textFields["stepDescriptionField"], timeout: 3)
         }
         XCTAssertTrue(stepField.exists && durationField.exists, "The Add Step sheet (not Rename Section) should be open")
         return stepField
@@ -736,7 +736,7 @@ final class CupcakeOfflineFlowUITests: XCTestCase {
             if strayCancel.exists {
                 strayCancel.tap()
             }
-            tapToolbarButton("newSessionButton", label: "New Session", in: app)
+            tapToolbarButton("startProtocolSessionButton", label: "New Session", in: app)
             _ = startSessionButton.waitForExistence(timeout: 3)
         }
         XCTAssertTrue(startSessionButton.exists, "\"New Session\" never opened the start-session sheet after repeated taps")
@@ -808,7 +808,7 @@ final class CupcakeOfflineFlowUITests: XCTestCase {
             let stepField = openAddStepSheet(tapping: addStepButton, in: app)
             stepField.tap()
             stepField.typeText(stepText)
-            app.buttons["addTextSheetSaveButton"].tap()
+            app.buttons["addStepSaveButton"].tap()
             XCTAssertTrue(addStepButton.waitForExistence(timeout: 5), "The Add Step sheet should dismiss back to the section after saving \"\(stepText)\"")
         }
         XCTAssertTrue(elementContaining("First step text", in: app).waitForExistence(timeout: 5), "The first step should be visible without scrolling, right after both steps are created")

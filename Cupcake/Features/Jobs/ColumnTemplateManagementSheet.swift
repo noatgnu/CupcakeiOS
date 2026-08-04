@@ -47,6 +47,7 @@ struct ColumnTemplateManagementSheet: View {
     @State private var sortField: SortField = .name
     @State private var sortAscending = true
     @State private var editingTemplate: MetadataColumnTemplateDTO?
+    @State private var sharingTemplate: MetadataColumnTemplateDTO?
     @State private var isShowingNewTemplateSheet = false
     @State private var errorMessage: String?
     @State private var isShowingError = false
@@ -139,9 +140,13 @@ struct ColumnTemplateManagementSheet: View {
                 await loadTemplates()
             }
         }
+        .sheet(item: $sharingTemplate) { template in
+            ColumnTemplateShareSheet(template: template)
+        }
         .task {
             await loadTemplates()
         }
+        .closableWindowToolbar(id: "column-template-manager")
     }
 
     @ViewBuilder
@@ -252,6 +257,15 @@ struct ColumnTemplateManagementSheet: View {
             }
             .tint(.blue)
             .accessibilityIdentifier("duplicateColumnTemplateButton_\(template.name)")
+            if template.canEdit {
+                Button {
+                    sharingTemplate = template
+                } label: {
+                    Label("Share", systemImage: "person.crop.circle.badge.plus")
+                }
+                .tint(.green)
+                .accessibilityIdentifier("shareColumnTemplateButton_\(template.name)")
+            }
         }
         .contextMenu {
             Button {
@@ -260,6 +274,14 @@ struct ColumnTemplateManagementSheet: View {
                 Label("Duplicate", systemImage: "plus.square.on.square")
             }
             .accessibilityIdentifier("duplicateColumnTemplateMenuButton_\(template.name)")
+            if template.canEdit {
+                Button {
+                    sharingTemplate = template
+                } label: {
+                    Label("Share", systemImage: "person.crop.circle.badge.plus")
+                }
+                .accessibilityIdentifier("shareColumnTemplateMenuButton_\(template.name)")
+            }
             Button(role: .destructive) {
                 Task { await delete(template) }
             } label: {

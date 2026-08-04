@@ -46,6 +46,7 @@ struct LabGroupListView: View {
                     } label: {
                         Label("Invitations", systemImage: "envelope")
                     }
+                    .labelStyle(.iconOnly)
                     .accessibilityIdentifier("pendingInvitationsButton")
                 }
                 ToolbarItem {
@@ -54,6 +55,7 @@ struct LabGroupListView: View {
                     } label: {
                         Label("New Lab Group", systemImage: "plus")
                     }
+                    .labelStyle(.iconOnly)
                     .accessibilityIdentifier("newLabGroupButton")
                 }
             }
@@ -69,7 +71,9 @@ struct LabGroupListView: View {
                             }
                         }
                 }
+                #if os(macOS)
                 .frame(minWidth: 360, minHeight: 420)
+                #endif
             }
         } detail: {
             if let selectedGroupServerID, let group = labGroups.first(where: { $0.serverID == selectedGroupServerID }) {
@@ -99,5 +103,6 @@ struct LabGroupListView: View {
         .task {
             try? await appSession.makeSyncServices().labGroupSync.refetchAll()
         }
+        .closableWindowToolbar(id: "lab-group-manager")
     }
 }

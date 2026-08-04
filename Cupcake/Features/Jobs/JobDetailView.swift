@@ -5,6 +5,7 @@ import SwiftData
 import SwiftUI
 
 struct JobDetailWindowID: Codable, Hashable {
+    let namespaceID: UUID
     let jobClientID: UUID
 }
 
@@ -27,6 +28,7 @@ struct JobDetailView: View {
     @Environment(AppSession.self) private var appSession
     @Environment(\.openWindow) private var openWindow
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.namespaceID) private var namespaceID
     let jobClientID: UUID
     let ontologyStore: ModelContainer
 
@@ -54,6 +56,7 @@ struct JobDetailView: View {
     @State private var isShowingNewSamplePoolSheet = false
     @State private var editingSamplePool: CachedSamplePool?
     @State private var staffOnlyFilter: StaffOnlyFilter = .all
+    @State private var columnSearchText = ""
     @State private var isGridPreviewExpanded = true
     @State private var funderText = ""
     @State private var labGroupSearchText = ""
@@ -103,11 +106,14 @@ struct JobDetailView: View {
     }
 
     private var filteredColumns: [CachedMetadataColumn] {
+        let staffFiltered: [CachedMetadataColumn]
         switch staffOnlyFilter {
-        case .all: sortedColumns
-        case .user: sortedColumns.filter { !$0.staffOnly }
-        case .staff: sortedColumns.filter { $0.staffOnly }
+        case .all: staffFiltered = sortedColumns
+        case .user: staffFiltered = sortedColumns.filter { !$0.staffOnly }
+        case .staff: staffFiltered = sortedColumns.filter { $0.staffOnly }
         }
+        guard !columnSearchText.isEmpty else { return staffFiltered }
+        return staffFiltered.filter { ($0.displayName ?? $0.name).localizedCaseInsensitiveContains(columnSearchText) }
     }
 
     private var canEditStaffOnlyColumns: Bool {
@@ -259,6 +265,10 @@ struct JobDetailView: View {
                             Label("Open Full Table View", systemImage: "tablecells")
                         }
                         .accessibilityIdentifier("openFullMetadataTableViewButton")
+                        if sortedColumns.count > 5 {
+                            TextField("Search columns", text: $columnSearchText)
+                                .accessibilityIdentifier("jobMetadataColumnSearchField")
+                        }
                         if sortedColumns.contains(where: \.staffOnly) {
                             Picker("Show", selection: $staffOnlyFilter) {
                                 ForEach(StaffOnlyFilter.allCases, id: \.self) { filter in
@@ -409,7 +419,7 @@ struct JobDetailView: View {
             if PlatformWindowPreference.prefersSeparateWindow {
                 ToolbarItem {
                     Button {
-                        openWindow(id: "job-detail-window", value: JobDetailWindowID(jobClientID: jobClientID))
+                        openWindow(id: "job-detail-window", value: JobDetailWindowID(namespaceID: namespaceID, jobClientID: jobClientID))
                     } label: {
                         Label("Open in New Window", systemImage: "macwindow.badge.plus")
                     }
@@ -542,7 +552,7 @@ struct JobDetailView: View {
 
     private func openCellEditor(column: CachedMetadataColumn, sampleIndex: Int?) {
         if PlatformWindowPreference.prefersSeparateWindow {
-            openWindow(id: "metadata-value-editor", value: MetadataValueEditWindowID(columnServerID: column.serverID, sampleIndex: sampleIndex, projectServerID: projectServerID))
+            openWindow(id: "metadata-value-editor", value: MetadataValueEditWindowID(namespaceID: namespaceID, columnServerID: column.serverID, sampleIndex: sampleIndex, projectServerID: projectServerID))
         } else {
             editingCell = MetadataCellEditTarget(column: column, sampleIndex: sampleIndex)
         }
@@ -550,7 +560,7 @@ struct JobDetailView: View {
 
     private func openFullTableView(metadataTable: CachedMetadataTable) {
         if PlatformWindowPreference.prefersSeparateWindow {
-            openWindow(id: "metadata-table-detail", value: MetadataTableDetailWindowID(metadataTableServerID: metadataTable.serverID, jobClientID: jobClientID, projectServerID: projectServerID))
+            openWindow(id: "metadata-table-detail", value: MetadataTableDetailWindowID(namespaceID: namespaceID, metadataTableServerID: metadataTable.serverID, jobClientID: jobClientID, projectServerID: projectServerID))
         } else {
             isShowingFullTableView = true
         }

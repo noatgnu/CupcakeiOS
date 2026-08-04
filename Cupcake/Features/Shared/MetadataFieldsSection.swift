@@ -13,6 +13,7 @@ struct MetadataFieldsSection: View {
 
     @Environment(AppSession.self) private var appSession
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.namespaceID) private var namespaceID
     @Query private var allColumns: [CachedMetadataColumn]
     @State private var errorMessage: String?
     @State private var isShowingError = false
@@ -59,7 +60,7 @@ struct MetadataFieldsSection: View {
                 } label: {
                     Label("Add Metadata Field", systemImage: "plus")
                 }
-                .accessibilityIdentifier("addMetadataColumnButton")
+                .accessibilityIdentifier("addMetadataFieldButton")
             } else {
                 Text("Metadata isn't available yet.")
                     .foregroundStyle(.secondary)
@@ -74,7 +75,7 @@ struct MetadataFieldsSection: View {
 
     private func openEditor(for column: CachedMetadataColumn) {
         if PlatformWindowPreference.prefersSeparateWindow {
-            openWindow(id: "metadata-value-editor", value: MetadataValueEditWindowID(columnServerID: column.serverID, sampleIndex: nil, projectServerID: nil))
+            openWindow(id: "metadata-value-editor", value: MetadataValueEditWindowID(namespaceID: namespaceID, columnServerID: column.serverID, sampleIndex: nil, projectServerID: nil))
         } else {
             editingColumn = column
         }

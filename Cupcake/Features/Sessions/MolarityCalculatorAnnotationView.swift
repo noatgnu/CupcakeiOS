@@ -130,7 +130,9 @@ struct MolarityCalculatorAnnotationView: View {
                 Text(errorMessage ?? "")
             }
         }
+        #if os(macOS)
         .frame(minWidth: 380, minHeight: 520)
+        #endif
     }
 
     @ViewBuilder

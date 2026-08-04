@@ -77,7 +77,9 @@ struct LabGroupPermissionsView: View {
                 await load()
             }
         }
+        #if os(macOS)
         .frame(minWidth: 480, minHeight: 400)
+        #endif
     }
 
     private func permission(for userID: Int64) -> EditablePermission {

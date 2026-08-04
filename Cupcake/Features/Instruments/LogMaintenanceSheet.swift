@@ -63,7 +63,9 @@ struct LogMaintenanceSheet: View {
                 }
             }
         }
+        #if os(macOS)
         .frame(minWidth: 360, minHeight: 440)
+        #endif
         .alert("Couldn't log maintenance", isPresented: $isShowingError) {
             Button("OK") {}
         } message: {

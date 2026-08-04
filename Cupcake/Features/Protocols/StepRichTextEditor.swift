@@ -178,7 +178,7 @@ struct StepRichTextEditorRepresentable: UIViewRepresentable {
         textView.font = .preferredFont(forTextStyle: .body)
         textView.isScrollEnabled = true
         textView.backgroundColor = .clear
-        textView.accessibilityIdentifier = "addTextSheetField"
+        textView.accessibilityIdentifier = "stepDescriptionField"
         context.coordinator.apply(html: html, to: textView)
         controller.textView = textView
         controller.syncHTMLFromTextView = { [weak textView] in
@@ -233,7 +233,7 @@ struct StepRichTextEditorRepresentable: NSViewRepresentable {
         textView.isRichText = true
         textView.delegate = context.coordinator
         textView.font = .preferredFont(forTextStyle: .body)
-        textView.setAccessibilityIdentifier("addTextSheetField")
+        textView.setAccessibilityIdentifier("stepDescriptionField")
         textView.isEditable = true
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = false

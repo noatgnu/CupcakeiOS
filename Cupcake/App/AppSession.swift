@@ -3,6 +3,7 @@ import CupcakeAuth
 import CupcakeModels
 import CupcakeNetworking
 import CupcakeSync
+import CupcakeTranscription
 import Foundation
 import Network
 import SwiftData
@@ -77,6 +78,10 @@ final class AppSession {
     var isShowingPushedDetail = false
     private(set) var syncProgress: SyncProgress?
     private(set) var isForceOffline = false
+    private(set) var appearanceOverride: AppAppearance?
+    private(set) var transcriptionEngineOverride: TranscriptionEngineKind?
+    private(set) var defaultSDRFSchemaOverride: String?
+    @ObservationIgnored private var retryableAsyncTasks: [String: AsyncTaskRetryAction] = [:]
 
     var isAuthenticated: Bool { deviceToken != nil }
     var canUseApp: Bool { activeContext != .none }
@@ -85,6 +90,7 @@ final class AppSession {
 
     private(set) var modelContainer: ModelContainer
     @ObservationIgnored var onRequestContainerSwap: ((ModelContainer) -> Void)?
+    @ObservationIgnored private var pendingLocalImportSourceContainer: ModelContainer?
     private var keychain: KeychainStore
     private var apiClient: APIClient?
     private var authManager: AuthManager?
@@ -154,6 +160,10 @@ final class AppSession {
             deviceToken = nil
             apiClient = nil
             authManager = nil
+            isForceOffline = false
+            appearanceOverride = nil
+            transcriptionEngineOverride = nil
+            defaultSDRFSchemaOverride = nil
         case .instance(let instance):
             deviceToken = keychain.load()
             let context = ModelContext(modelContainer)
@@ -164,6 +174,10 @@ final class AppSession {
             currentEmail = metadata?.email
             currentFirstName = metadata?.firstName
             currentLastName = metadata?.lastName
+            isForceOffline = metadata?.isForceOffline ?? false
+            appearanceOverride = metadata?.appearanceOverrideRawValue.flatMap(AppAppearance.init(rawValue:))
+            transcriptionEngineOverride = metadata?.transcriptionEngineOverrideRawValue.flatMap(TranscriptionEngineKind.init(rawValue:))
+            defaultSDRFSchemaOverride = metadata?.defaultSDRFSchemaOverride
             let urlString = metadata?.baseURLString ?? instance.baseURLString
             if let url = URL(string: urlString) {
                 configureClient(baseURL: url)
@@ -184,7 +198,26 @@ final class AppSession {
         metadata.firstName = currentFirstName
         metadata.lastName = currentLastName
         metadata.baseURLString = baseURL?.absoluteString
+        metadata.isForceOffline = isForceOffline
+        metadata.appearanceOverrideRawValue = appearanceOverride?.rawValue
+        metadata.transcriptionEngineOverrideRawValue = transcriptionEngineOverride?.rawValue
+        metadata.defaultSDRFSchemaOverride = defaultSDRFSchemaOverride
         try? context.save()
+    }
+
+    func setAppearanceOverride(_ value: AppAppearance?) {
+        appearanceOverride = value
+        saveActiveInstanceMetadata()
+    }
+
+    func setTranscriptionEngineOverride(_ value: TranscriptionEngineKind?) {
+        transcriptionEngineOverride = value
+        saveActiveInstanceMetadata()
+    }
+
+    func setDefaultSDRFSchemaOverride(_ value: String?) {
+        defaultSDRFSchemaOverride = value
+        saveActiveInstanceMetadata()
     }
 
     private func startMonitoringConnectivity() {
@@ -205,6 +238,7 @@ final class AppSession {
 
     func setForceOffline(_ value: Bool) async {
         isForceOffline = value
+        saveActiveInstanceMetadata()
         await apiClient?.setForceOffline(value)
         if !value {
             await replayOutbox()
@@ -297,6 +331,14 @@ final class AppSession {
         let service = asyncTaskNotificationService ?? AsyncTaskNotificationService(apiClient: client, deviceToken: { tokenSnapshot })
         asyncTaskNotificationService = service
         return await service.subscribe()
+    }
+
+    func recordRetryAction(_ action: AsyncTaskRetryAction, forTaskID taskID: String) {
+        retryableAsyncTasks[taskID] = action
+    }
+
+    func retryAction(forTaskID taskID: String) -> AsyncTaskRetryAction? {
+        retryableAsyncTasks[taskID]
     }
 
     private func persistActiveContext() {
@@ -410,6 +452,7 @@ final class AppSession {
         keychain = Self.keychain(for: .instance(instance))
         configureClient(baseURL: url)
         let result = try await authManager?.signIn(username: username, password: password, deviceLabel: Self.deviceLabel)
+        pendingLocalImportSourceContainer = modelContainer
         commitActiveInstance(instance)
         if let userID = result?.deviceToken.user {
             currentUserID = Int64(userID)
@@ -457,19 +500,30 @@ final class AppSession {
     }
 
     func checkForLocalRecordsToImport() async {
-        let count = (try? await makeSyncServices().localNotebookImportSync.countLocalOnlyRecords()) ?? 0
+        let container = pendingLocalImportSourceContainer ?? modelContainer
+        let count = (try? await makeSyncServices(using: container).localNotebookImportSync.countLocalOnlyRecords()) ?? 0
         if count > 0 {
             pendingLocalImportCount = count
+        } else {
+            pendingLocalImportSourceContainer = nil
         }
     }
 
     func importLocalNotebook() async {
         isImportingLocalNotebook = true
+        let container = pendingLocalImportSourceContainer ?? modelContainer
         defer {
             isImportingLocalNotebook = false
             pendingLocalImportCount = nil
+            pendingLocalImportSourceContainer = nil
         }
-        await makeSyncServices().localNotebookImportSync.importAll()
+        let sourceServices = makeSyncServices(using: container)
+        await sourceServices.localNotebookImportSync.importAll()
+        await sourceServices.outboxSync.replayPending(onProgress: { [weak self] progress in
+            self?.syncProgress = progress
+        })
+        syncProgress = nil
+        try? await syncAll()
     }
 
     func dismissLocalImportPrompt() {
@@ -530,6 +584,7 @@ final class AppSession {
         }
 
         let result = try await authManager.completeORCIDSignIn(authCode: authCode, deviceLabel: Self.deviceLabel)
+        pendingLocalImportSourceContainer = modelContainer
         commitActiveInstance(instance)
         currentUserID = Int64(result.deviceToken.user)
         isStaff = result.user.isStaff
@@ -588,26 +643,30 @@ final class AppSession {
     }
 
     func makeSyncServices() -> SyncServices {
+        makeSyncServices(using: modelContainer)
+    }
+
+    private func makeSyncServices(using container: ModelContainer) -> SyncServices {
         let client = apiClient ?? APIClient(baseURL: Self.placeholderBaseURL)
         let tokenSnapshot = deviceToken
-        let protocolSync = ProtocolSyncService(modelContainer: modelContainer, apiClient: client, deviceToken: { tokenSnapshot })
-        let sessionSync = SessionSyncService(modelContainer: modelContainer, apiClient: client, deviceToken: { tokenSnapshot })
-        let stepReagentSync = StepReagentSyncService(modelContainer: modelContainer, apiClient: client, deviceToken: { tokenSnapshot })
-        let stepAnnotationSync = StepAnnotationSyncService(modelContainer: modelContainer, apiClient: client, deviceToken: { tokenSnapshot })
-        let inventorySync = InventorySyncService(modelContainer: modelContainer, apiClient: client, deviceToken: { tokenSnapshot })
-        let instrumentSync = InstrumentSyncService(modelContainer: modelContainer, apiClient: client, deviceToken: { tokenSnapshot })
-        let projectSync = ProjectSyncService(modelContainer: modelContainer, apiClient: client, deviceToken: { tokenSnapshot })
-        let instrumentJobSync = InstrumentJobSyncService(modelContainer: modelContainer, apiClient: client, deviceToken: { tokenSnapshot })
-        let labGroupSync = LabGroupSyncService(modelContainer: modelContainer, apiClient: client, deviceToken: { tokenSnapshot })
-        let metadataTableTemplateSync = MetadataTableTemplateSyncService(modelContainer: modelContainer, apiClient: client, deviceToken: { tokenSnapshot })
-        let instrumentJobAnnotationSync = InstrumentJobAnnotationSyncService(modelContainer: modelContainer, apiClient: client, deviceToken: { tokenSnapshot }, instrumentJobSync: instrumentJobSync)
-        let metadataColumnSync = MetadataColumnSyncService(modelContainer: modelContainer, apiClient: client, deviceToken: { tokenSnapshot })
+        let protocolSync = ProtocolSyncService(modelContainer: container, apiClient: client, deviceToken: { tokenSnapshot })
+        let sessionSync = SessionSyncService(modelContainer: container, apiClient: client, deviceToken: { tokenSnapshot })
+        let stepReagentSync = StepReagentSyncService(modelContainer: container, apiClient: client, deviceToken: { tokenSnapshot })
+        let stepAnnotationSync = StepAnnotationSyncService(modelContainer: container, apiClient: client, deviceToken: { tokenSnapshot })
+        let inventorySync = InventorySyncService(modelContainer: container, apiClient: client, deviceToken: { tokenSnapshot })
+        let instrumentSync = InstrumentSyncService(modelContainer: container, apiClient: client, deviceToken: { tokenSnapshot })
+        let projectSync = ProjectSyncService(modelContainer: container, apiClient: client, deviceToken: { tokenSnapshot })
+        let instrumentJobSync = InstrumentJobSyncService(modelContainer: container, apiClient: client, deviceToken: { tokenSnapshot })
+        let labGroupSync = LabGroupSyncService(modelContainer: container, apiClient: client, deviceToken: { tokenSnapshot })
+        let metadataTableTemplateSync = MetadataTableTemplateSyncService(modelContainer: container, apiClient: client, deviceToken: { tokenSnapshot })
+        let instrumentJobAnnotationSync = InstrumentJobAnnotationSyncService(modelContainer: container, apiClient: client, deviceToken: { tokenSnapshot }, instrumentJobSync: instrumentJobSync)
+        let metadataColumnSync = MetadataColumnSyncService(modelContainer: container, apiClient: client, deviceToken: { tokenSnapshot })
         let metadataColumnTemplateSync = MetadataColumnTemplateSyncService(apiClient: client, deviceToken: { tokenSnapshot })
         let favouriteMetadataOptionSync = FavouriteMetadataOptionSyncService(apiClient: client, deviceToken: { tokenSnapshot })
-        let annotationFolderSync = AnnotationFolderSyncService(modelContainer: modelContainer, apiClient: client, deviceToken: { tokenSnapshot })
-        let sessionAnnotationSync = SessionAnnotationSyncService(modelContainer: modelContainer, apiClient: client, deviceToken: { tokenSnapshot })
+        let annotationFolderSync = AnnotationFolderSyncService(modelContainer: container, apiClient: client, deviceToken: { tokenSnapshot })
+        let sessionAnnotationSync = SessionAnnotationSyncService(modelContainer: container, apiClient: client, deviceToken: { tokenSnapshot })
         let outboxSync = OutboxService(
-            modelContainer: modelContainer,
+            modelContainer: container,
             protocolSync: protocolSync,
             sessionSync: sessionSync,
             stepReagentSync: stepReagentSync,
@@ -618,14 +677,14 @@ final class AppSession {
             projectSync: projectSync,
             instrumentJobSync: instrumentJobSync
         )
-        let localNotebookImportSync = LocalNotebookImportService(modelContainer: modelContainer, outboxSync: outboxSync)
-        let timeKeeperSync = TimeKeeperSyncService(modelContainer: modelContainer, apiClient: client, deviceToken: { tokenSnapshot })
-        let maintenanceLogSync = MaintenanceLogSyncService(modelContainer: modelContainer, apiClient: client, deviceToken: { tokenSnapshot })
-        let stepVariationSync = StepVariationSyncService(modelContainer: modelContainer, apiClient: client, deviceToken: { tokenSnapshot })
-        let protocolRatingSync = ProtocolRatingSyncService(modelContainer: modelContainer, apiClient: client, deviceToken: { tokenSnapshot })
-        let storedReagentAnnotationSync = StoredReagentAnnotationSyncService(modelContainer: modelContainer, apiClient: client, deviceToken: { tokenSnapshot })
-        let reagentSubscriptionSync = ReagentSubscriptionSyncService(modelContainer: modelContainer, apiClient: client, deviceToken: { tokenSnapshot })
-        let samplePoolSync = SamplePoolSyncService(modelContainer: modelContainer, apiClient: client, deviceToken: { tokenSnapshot })
+        let localNotebookImportSync = LocalNotebookImportService(modelContainer: container, outboxSync: outboxSync)
+        let timeKeeperSync = TimeKeeperSyncService(modelContainer: container, apiClient: client, deviceToken: { tokenSnapshot })
+        let maintenanceLogSync = MaintenanceLogSyncService(modelContainer: container, apiClient: client, deviceToken: { tokenSnapshot })
+        let stepVariationSync = StepVariationSyncService(modelContainer: container, apiClient: client, deviceToken: { tokenSnapshot })
+        let protocolRatingSync = ProtocolRatingSyncService(modelContainer: container, apiClient: client, deviceToken: { tokenSnapshot })
+        let storedReagentAnnotationSync = StoredReagentAnnotationSyncService(modelContainer: container, apiClient: client, deviceToken: { tokenSnapshot })
+        let reagentSubscriptionSync = ReagentSubscriptionSyncService(modelContainer: container, apiClient: client, deviceToken: { tokenSnapshot })
+        let samplePoolSync = SamplePoolSyncService(modelContainer: container, apiClient: client, deviceToken: { tokenSnapshot })
         let metadataTableSync = MetadataTableSyncService(apiClient: client, deviceToken: { tokenSnapshot })
         let ontologySearchSync = OnlineOntologySearchService(metadataColumnSync: metadataColumnSync)
         let userProfileSync = UserProfileSyncService(apiClient: client, deviceToken: { tokenSnapshot })
@@ -674,6 +733,8 @@ final class AppSession {
         UserDefaults.standard.removeObject(forKey: isStaffDefaultsKey)
         UserDefaults.standard.removeObject(forKey: activeContextDefaultsKey)
         UserDefaults.standard.removeObject(forKey: hasPromptedOntologyPreloadDefaultsKey)
+        UserDefaults.standard.removeObject(forKey: "ontologyBrowserEnabledOffline")
+        UserDefaults.standard.removeObject(forKey: "ontologyBrowserEnabledOnline")
         KnownInstanceRegistry.removeAll()
         KeychainStore().delete()
     }

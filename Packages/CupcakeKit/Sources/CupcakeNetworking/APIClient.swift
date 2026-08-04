@@ -48,6 +48,45 @@ public actor APIClient {
         return try await execute(request)
     }
 
+    public func fetchAllPages<DTO: Decodable & Sendable>(
+        path: String,
+        query: [URLQueryItem] = [],
+        pageSize: Int = 200,
+        authorizationHeader: String,
+        onPage: @Sendable ([DTO]) async throws -> Void
+    ) async throws {
+        var page: PaginatedResponse<DTO> = try await get(
+            path,
+            query: query + [URLQueryItem(name: "limit", value: String(pageSize))],
+            authorizationHeader: authorizationHeader
+        )
+        while true {
+            try await onPage(page.results)
+            guard let nextURLString = page.next, let nextURL = URL(string: nextURLString) else { break }
+            page = try await get(absoluteURL: nextURL, authorizationHeader: authorizationHeader)
+        }
+    }
+
+    public func fetchAllPages<DTO: Decodable & Sendable>(
+        path: String,
+        query: [URLQueryItem] = [],
+        pageSize: Int = 200,
+        authorizationHeader: String
+    ) async throws -> [DTO] {
+        var allResults: [DTO] = []
+        var page: PaginatedResponse<DTO> = try await get(
+            path,
+            query: query + [URLQueryItem(name: "limit", value: String(pageSize))],
+            authorizationHeader: authorizationHeader
+        )
+        while true {
+            allResults.append(contentsOf: page.results)
+            guard let nextURLString = page.next, let nextURL = URL(string: nextURLString) else { break }
+            page = try await get(absoluteURL: nextURL, authorizationHeader: authorizationHeader)
+        }
+        return allResults
+    }
+
     public func send<Body: Encodable & Sendable, Response: Decodable & Sendable>(
         _ path: String,
         method: HTTPMethod,

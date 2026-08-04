@@ -53,7 +53,9 @@ struct NewSessionSheet: View {
                 }
             }
         }
+        #if os(macOS)
         .frame(minWidth: 360, minHeight: 400)
+        #endif
     }
 
     private func toggle(_ clientID: UUID) {

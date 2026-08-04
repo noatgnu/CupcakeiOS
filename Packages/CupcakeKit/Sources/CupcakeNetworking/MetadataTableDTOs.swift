@@ -239,6 +239,45 @@ public struct UnimodFullData: Decodable, Sendable {
     }
 }
 
+public struct TaxonomyFullData: Decodable, Sendable {
+    public let taxId: Int?
+    public let scientificName: String?
+    public let commonName: String?
+    public let synonyms: String?
+    public let rank: String?
+}
+
+public struct SpeciesFullData: Decodable, Sendable {
+    public let code: String?
+    public let taxon: Int?
+    public let officialName: String?
+    public let commonName: String?
+    public let synonym: String?
+}
+
+public struct ChEBIFullData: Decodable, Sendable {
+    public let identifier: String?
+    public let name: String?
+    public let definition: String?
+    public let synonyms: String?
+    public let formula: String?
+    public let mass: Double?
+    public let charge: Int?
+    public let inchi: String?
+    public let smiles: String?
+    public let parentTerms: String?
+    public let roles: String?
+}
+
+public struct SubcellularLocationFullData: Decodable, Sendable {
+    public let locationIdentifier: String?
+    public let topologyIdentifier: String?
+    public let orientationIdentifier: String?
+    public let accession: String?
+    public let definition: String?
+    public let synonyms: String?
+}
+
 public struct OntologySuggestionDTO: Decodable, Sendable, Identifiable {
     public let id: String
     public let value: String
@@ -246,6 +285,28 @@ public struct OntologySuggestionDTO: Decodable, Sendable, Identifiable {
     public let description: String?
     public let ontologyType: String
     public let fullData: UnimodFullData?
+    public let taxonomyFullData: TaxonomyFullData?
+    public let speciesFullData: SpeciesFullData?
+    public let chebiFullData: ChEBIFullData?
+    public let subcellularLocationFullData: SubcellularLocationFullData?
+
+    private enum CodingKeys: String, CodingKey {
+        case id, value, displayName, description, ontologyType, fullData
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        value = try container.decode(String.self, forKey: .value)
+        displayName = try container.decode(String.self, forKey: .displayName)
+        description = try container.decodeIfPresent(String.self, forKey: .description)
+        ontologyType = try container.decode(String.self, forKey: .ontologyType)
+        fullData = try container.decodeIfPresent(UnimodFullData.self, forKey: .fullData)
+        taxonomyFullData = try container.decodeIfPresent(TaxonomyFullData.self, forKey: .fullData)
+        speciesFullData = try container.decodeIfPresent(SpeciesFullData.self, forKey: .fullData)
+        chebiFullData = try container.decodeIfPresent(ChEBIFullData.self, forKey: .fullData)
+        subcellularLocationFullData = try container.decodeIfPresent(SubcellularLocationFullData.self, forKey: .fullData)
+    }
 }
 
 public struct OntologySuggestionsResponse: Decodable, Sendable {
@@ -365,6 +426,46 @@ public struct CreateColumnTemplateRequest: Encodable, Sendable {
     }
 }
 
+public struct MetadataColumnTemplateShareDTO: Decodable, Sendable, Identifiable {
+    public let id: Int64
+    public let template: Int64
+    public let user: Int64
+    public let userUsername: String
+    public let sharedBy: Int64?
+    public let sharedByUsername: String?
+    public let permissionLevel: String
+    public let sharedAt: String?
+}
+
+public struct ShareColumnTemplateRequest: Encodable, Sendable {
+    public var userId: Int64
+    public var permissionLevel: String
+
+    public init(userId: Int64, permissionLevel: String) {
+        self.userId = userId
+        self.permissionLevel = permissionLevel
+    }
+}
+
+public struct ShareColumnTemplateResponse: Decodable, Sendable {
+    public let message: String
+    public let shareId: Int64
+    public let user: String
+    public let permissionLevel: String
+}
+
+public struct UnshareColumnTemplateRequest: Encodable, Sendable {
+    public var userId: Int64
+
+    public init(userId: Int64) {
+        self.userId = userId
+    }
+}
+
+public struct UnshareColumnTemplateResponse: Decodable, Sendable {
+    public let message: String
+}
+
 public struct AddColumnDataRequest: Encodable, Sendable {
     public var name: String
     public var type: String
@@ -427,6 +528,29 @@ public struct BulkUpdateSampleValuesResponse: Decodable, Sendable {
     public let updatedCount: Int
     public let failedCount: Int
     public let column: MetadataColumnDTO
+}
+
+public struct ReplaceColumnValueRequest: Encodable, Sendable {
+    public var oldValue: String
+    public var newValue: String
+    public var updatePools: Bool
+
+    public init(oldValue: String, newValue: String, updatePools: Bool = true) {
+        self.oldValue = oldValue
+        self.newValue = newValue
+        self.updatePools = updatePools
+    }
+}
+
+public struct ReplaceColumnValueResponse: Decodable, Sendable {
+    public let message: String
+    public let oldValue: String
+    public let newValue: String
+    public let defaultValueUpdated: Bool
+    public let modifiersMerged: Int
+    public let modifiersDeleted: Int
+    public let samplesRevertedToDefault: Int
+    public let poolColumnsUpdated: Int
 }
 
 public struct AutofillVariationSpec: Encodable, Sendable {

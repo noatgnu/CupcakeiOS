@@ -48,7 +48,9 @@ struct EditProtocolSheet: View {
                 }
             }
         }
+        #if os(macOS)
         .frame(minWidth: 360, minHeight: 320)
+        #endif
         .alert("Couldn't save protocol", isPresented: $isShowingError) {
             Button("OK") {}
         } message: {

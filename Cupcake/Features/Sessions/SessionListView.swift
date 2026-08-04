@@ -4,6 +4,11 @@ import CupcakeSync
 import SwiftData
 import SwiftUI
 
+enum SessionListFilter {
+    case mine
+    case sharedWithMe
+}
+
 struct SessionListView: View {
     @Environment(AppSession.self) private var appSession
     @Environment(\.modelContext) private var modelContext
@@ -17,11 +22,32 @@ struct SessionListView: View {
     @State private var isShowingNewSessionSheet = false
     @State private var errorMessage: String?
     @State private var isShowingError = false
+    @State private var listFilter: SessionListFilter?
+
+    private var displayedSessions: [CachedSession] {
+        guard let listFilter, let currentUserID = appSession.currentUserID else { return sessions }
+        switch listFilter {
+        case .mine:
+            return sessions.filter { $0.ownerServerID == currentUserID }
+        case .sharedWithMe:
+            return sessions.filter { session in
+                session.ownerServerID != currentUserID
+                    && (session.editorServerIDs.contains(currentUserID) || session.viewerServerIDs.contains(currentUserID))
+            }
+        }
+    }
 
     private func protocolTitles(for session: CachedSession) -> [String] {
         session.protocolClientIDs.compactMap { clientID in
             allProtocols.first(where: { $0.clientID == clientID })?.protocolTitle
         }
+    }
+
+    private func accessRoleLabel(for session: CachedSession) -> String? {
+        guard let currentUserID = appSession.currentUserID, let ownerServerID = session.ownerServerID, ownerServerID != currentUserID else { return nil }
+        if session.editorServerIDs.contains(currentUserID) { return "Editor" }
+        if session.viewerServerIDs.contains(currentUserID) { return "Viewer" }
+        return "Group"
     }
 
     private func protocols(for session: CachedSession) -> [CachedProtocol] {
@@ -34,14 +60,24 @@ struct SessionListView: View {
         TwoPanelExplorerView(pathStack: $pathStack, pushesDetailOnCompact: true) {
             SelectableExplorerList(
                 selection: $selectedSessionID,
-                isEmpty: sessions.isEmpty,
+                isEmpty: displayedSessions.isEmpty,
                 emptyTitle: "No Sessions Yet",
                 emptySystemImage: "clock",
                 emptyMessage: "Start a session from a protocol, or create one here."
             ) {
-                ForEach(sessions) { session in
+                ForEach(displayedSessions) { session in
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(session.name ?? "Untitled Session")
+                        HStack(spacing: 6) {
+                            Text(session.name ?? "Untitled Session")
+                            if let role = accessRoleLabel(for: session) {
+                                Text(role)
+                                    .font(.caption2.bold())
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(.tertiary, in: Capsule())
+                                    .accessibilityIdentifier("sessionAccessRoleBadge_\(session.name ?? "")")
+                            }
+                        }
                         HStack(spacing: 4) {
                             Text(session.status)
                             let titles = protocolTitles(for: session)
@@ -64,7 +100,21 @@ struct SessionListView: View {
                     } label: {
                         Label("New Session", systemImage: "plus")
                     }
-                    .accessibilityIdentifier("newSessionButton")
+                    .labelStyle(.iconOnly)
+                    .accessibilityIdentifier("newStandaloneSessionButton")
+                }
+                if appSession.isAuthenticated {
+                    ToolbarItem {
+                        Menu {
+                            Button("All Sessions") { listFilter = nil }
+                            Button("My Sessions") { listFilter = .mine }
+                            Button("Shared With Me") { listFilter = .sharedWithMe }
+                        } label: {
+                            Label("Filter", systemImage: listFilter == nil ? "line.3.horizontal.decrease.circle" : "line.3.horizontal.decrease.circle.fill")
+                                .labelStyle(.iconOnly)
+                        }
+                        .accessibilityIdentifier("sessionFilterMenu")
+                    }
                 }
             }
         } detail: {

@@ -16,6 +16,9 @@ public final class CachedSession {
     public var primaryProtocolClientID: UUID?
     public var createdAt: Date
     public var lastViewedStepClientID: UUID?
+    public var ownerServerID: Int64?
+    public var editorServerIDs: [Int64]
+    public var viewerServerIDs: [Int64]
 
     public init(
         clientID: UUID = UUID(),
@@ -29,7 +32,10 @@ public final class CachedSession {
         protocolClientIDs: [UUID] = [],
         primaryProtocolClientID: UUID? = nil,
         createdAt: Date = Date(),
-        lastViewedStepClientID: UUID? = nil
+        lastViewedStepClientID: UUID? = nil,
+        ownerServerID: Int64? = nil,
+        editorServerIDs: [Int64] = [],
+        viewerServerIDs: [Int64] = []
     ) {
         self.clientID = clientID
         self.serverID = serverID
@@ -43,6 +49,9 @@ public final class CachedSession {
         self.primaryProtocolClientID = primaryProtocolClientID
         self.createdAt = createdAt
         self.lastViewedStepClientID = lastViewedStepClientID
+        self.ownerServerID = ownerServerID
+        self.editorServerIDs = editorServerIDs
+        self.viewerServerIDs = viewerServerIDs
     }
 }
 

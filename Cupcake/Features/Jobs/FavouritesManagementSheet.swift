@@ -39,6 +39,7 @@ struct FavouritesManagementSheet: View {
         .task {
             await loadAll()
         }
+        .closableWindowToolbar(id: "favourites-manager")
     }
 
     @ViewBuilder

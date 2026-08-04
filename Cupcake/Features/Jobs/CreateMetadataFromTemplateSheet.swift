@@ -176,7 +176,9 @@ struct CreateMetadataFromTemplateSheet: View {
             .padding(.horizontal)
             .padding(.top, 8)
         }
+        #if os(macOS)
         .frame(minWidth: 360, minHeight: 460)
+        #endif
         .alert("Couldn't create metadata table", isPresented: $isShowingError) {
             Button("OK") {}
         } message: {
@@ -191,7 +193,9 @@ struct CreateMetadataFromTemplateSheet: View {
                         }
                     }
             }
+            #if os(macOS)
             .frame(minWidth: 320, minHeight: 420)
+            #endif
         }
     }
 

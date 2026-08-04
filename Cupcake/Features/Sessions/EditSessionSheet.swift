@@ -44,7 +44,9 @@ struct EditSessionSheet: View {
                 }
             }
         }
+        #if os(macOS)
         .frame(minWidth: 320, minHeight: 220)
+        #endif
         .alert("Couldn't save session", isPresented: $isShowingError) {
             Button("OK") {}
         } message: {

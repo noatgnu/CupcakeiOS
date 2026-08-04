@@ -20,16 +20,8 @@ public actor SessionAnnotationSyncService {
 
     public func refetchAll() async throws {
         guard let token = deviceToken() else { return }
-        let authorization = "DeviceToken \(token)"
-
-        var page: PaginatedResponse<SessionAnnotationDTO> = try await apiClient.get(
-            "session-annotations/",
-            authorizationHeader: authorization
-        )
-        while true {
-            try await store.upsert(page.results)
-            guard let nextURLString = page.next, let nextURL = URL(string: nextURLString) else { break }
-            page = try await apiClient.get(absoluteURL: nextURL, authorizationHeader: authorization)
+        try await apiClient.fetchAllPages(path: "session-annotations/", authorizationHeader: "DeviceToken \(token)") { (dtos: [SessionAnnotationDTO]) in
+            try await store.upsert(dtos)
         }
     }
 

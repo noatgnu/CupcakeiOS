@@ -71,6 +71,7 @@ struct MetadataTablesBrowserView: View {
                             } label: {
                                 Label("Edit…", systemImage: "pencil")
                             }
+                            .labelStyle(.iconOnly)
                             .accessibilityIdentifier("editMetadataTableButton")
                         }
                     }
@@ -132,9 +133,22 @@ struct MetadataTablesBrowserView: View {
                 await reload()
             }
         }
+        .onChange(of: selectedTableServerID) { _, newValue in
+            guard let newValue, let table = tables.first(where: { $0.id == newValue }) else {
+                pathStack = [pathStack[0]]
+                return
+            }
+            pathStack = [pathStack[0], BreadcrumbSegment(id: table.id, name: table.name)]
+        }
+        .onChange(of: pathStack) { _, newValue in
+            if newValue.count == 1 {
+                selectedTableServerID = nil
+            }
+        }
         .task {
             await reload()
         }
+        .closableWindowToolbar(id: "metadata-tables-browser")
     }
 
     private var paginationControls: some View {

@@ -115,6 +115,19 @@ public actor MetadataColumnSyncService {
     }
 
     @discardableResult
+    public func replaceValue(columnServerID: Int64, oldValue: String, newValue: String, updatePools: Bool = true) async throws -> ReplaceColumnValueResponse {
+        guard let token = deviceToken() else {
+            throw MetadataColumnSyncError.noDeviceToken
+        }
+        return try await apiClient.send(
+            "metadata-columns/\(columnServerID)/replace_value/",
+            method: .post,
+            body: ReplaceColumnValueRequest(oldValue: oldValue, newValue: newValue, updatePools: updatePools),
+            authorizationHeader: "DeviceToken \(token)"
+        )
+    }
+
+    @discardableResult
     public func updateColumn(columnServerID: Int64, request: UpdateMetadataColumnRequest) async throws -> MetadataColumnDTO {
         guard let token = deviceToken() else {
             throw MetadataColumnSyncError.noDeviceToken

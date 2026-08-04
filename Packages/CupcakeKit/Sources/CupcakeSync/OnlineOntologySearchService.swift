@@ -48,26 +48,51 @@ public actor OnlineOntologySearchService {
                 source: .online
             ))
         case "ncbi_taxonomy":
+            let taxonomyData = dto.taxonomyFullData
             return .taxonomy(TaxonomyOntologyTerm(
                 id: id,
-                scientificName: dto.displayName,
-                commonName: dto.description,
+                scientificName: taxonomyData?.scientificName ?? dto.displayName,
+                commonName: taxonomyData?.commonName ?? dto.description,
+                synonyms: taxonomyData?.synonyms,
+                rank: taxonomyData?.rank,
+                parentTaxId: nil,
+                source: .online
+            ))
+        case "species":
+            let speciesData = dto.speciesFullData
+            return .taxonomy(TaxonomyOntologyTerm(
+                id: id,
+                typeKey: typeKey,
+                scientificName: speciesData?.officialName ?? dto.displayName,
+                commonName: speciesData?.commonName ?? dto.description,
+                synonyms: speciesData?.synonym,
                 source: .online
             ))
         case "chebi":
+            let chebiData = dto.chebiFullData
             return .chemicalCompound(ChemicalCompoundOntologyTerm(
                 id: id,
-                name: dto.displayName,
-                accession: dto.value,
-                definition: dto.description,
+                name: chebiData?.name ?? dto.displayName,
+                accession: chebiData?.identifier ?? dto.value,
+                definition: chebiData?.definition ?? dto.description,
+                synonyms: chebiData?.synonyms,
+                formula: chebiData?.formula,
+                mass: chebiData?.mass.map { String($0) },
+                charge: chebiData?.charge,
+                inchi: chebiData?.inchi,
+                smiles: chebiData?.smiles,
                 source: .online
             ))
         case "subcellular_location":
+            let subcellularData = dto.subcellularLocationFullData
             return .subcellularLocation(SubcellularLocationOntologyTerm(
                 id: id,
-                title: dto.displayName,
-                accession: dto.value,
-                definition: dto.description,
+                title: subcellularData?.locationIdentifier ?? dto.displayName,
+                accession: subcellularData?.accession ?? dto.value,
+                definition: subcellularData?.definition ?? dto.description,
+                synonyms: subcellularData?.synonyms,
+                topology: subcellularData?.topologyIdentifier,
+                orientation: subcellularData?.orientationIdentifier,
                 source: .online
             ))
         default:

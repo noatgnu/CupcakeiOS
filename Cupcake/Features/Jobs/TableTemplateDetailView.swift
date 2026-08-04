@@ -11,7 +11,7 @@ struct TableTemplateDetailView: View {
 
     @State private var columns: [MetadataColumnDTO]
     @State private var isLoadingColumns = false
-    @State private var isShowingEditSheet = false
+    @State private var editingTemplateSnapshot: MetadataTableTemplateDTO?
 
     init(template: MetadataTableTemplateDTO, onSaved: @escaping (MetadataTableTemplateDTO) -> Void, onColumnCountChanged: @escaping (Int) -> Void = { _ in }) {
         self.template = template
@@ -69,10 +69,11 @@ struct TableTemplateDetailView: View {
         .toolbar {
             ToolbarItem {
                 Button {
-                    isShowingEditSheet = true
+                    editingTemplateSnapshot = template
                 } label: {
                     Label("Edit…", systemImage: "pencil")
                 }
+                .labelStyle(.iconOnly)
                 .accessibilityIdentifier("editTableTemplateButton")
             }
         }
@@ -81,10 +82,10 @@ struct TableTemplateDetailView: View {
             await reloadColumns()
             isLoadingColumns = false
         }
-        .sheet(isPresented: $isShowingEditSheet, onDismiss: {
+        .sheet(item: $editingTemplateSnapshot, onDismiss: {
             Task { await reloadColumns() }
-        }) {
-            TableTemplateEditSheet(template: template, onSaved: onSaved, onColumnCountChanged: onColumnCountChanged)
+        }) { snapshot in
+            TableTemplateEditSheet(template: snapshot, onSaved: onSaved, onColumnCountChanged: onColumnCountChanged)
         }
     }
 

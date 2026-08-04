@@ -7,6 +7,7 @@ struct JobListView: View {
 
     @Environment(AppSession.self) private var appSession
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.namespaceID) private var namespaceID
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Query(sort: \CachedInstrumentJob.createdAt, order: .reverse) private var jobs: [CachedInstrumentJob]
     @Query private var projects: [CachedProject]
@@ -98,6 +99,8 @@ struct JobListView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     }
+                    .accessibilityElement(children: .combine)
+                    .accessibilityIdentifier("jobRow_\(job.jobName ?? "")")
                     .tag(job.clientID)
                 }
             }
@@ -109,54 +112,59 @@ struct JobListView: View {
                     } label: {
                         Label("Projects", systemImage: "folder")
                     }
+                    .labelStyle(.iconOnly)
                     .accessibilityIdentifier("projectsLink")
                 }
                 ToolbarItem {
                     Button {
                         if PlatformWindowPreference.prefersSeparateWindow {
-                            PlatformWindowPreference.openOrFocusWindow(id: "table-template-manager", using: openWindow)
+                            PlatformWindowPreference.openOrFocusWindow(id: "table-template-manager", namespaceID: namespaceID, using: openWindow)
                         } else {
                             isShowingTableTemplateManagement = true
                         }
                     } label: {
                         Label("Table Templates", systemImage: "folder.badge.gearshape")
                     }
+                    .labelStyle(.iconOnly)
                     .accessibilityIdentifier("manageMetadataTableTemplatesButton")
                 }
                 ToolbarItem {
                     Button {
                         if PlatformWindowPreference.prefersSeparateWindow {
-                            PlatformWindowPreference.openOrFocusWindow(id: "column-template-manager", using: openWindow)
+                            PlatformWindowPreference.openOrFocusWindow(id: "column-template-manager", namespaceID: namespaceID, using: openWindow)
                         } else {
                             isShowingColumnTemplateManagement = true
                         }
                     } label: {
                         Label("Column Templates", systemImage: "square.stack.3d.up")
                     }
-                    .accessibilityIdentifier("manageColumnTemplatesButton")
+                    .labelStyle(.iconOnly)
+                    .accessibilityIdentifier("columnTemplatesToolbarButton")
                 }
                 ToolbarItem {
                     Button {
                         if PlatformWindowPreference.prefersSeparateWindow {
-                            PlatformWindowPreference.openOrFocusWindow(id: "metadata-tables-browser", using: openWindow)
+                            PlatformWindowPreference.openOrFocusWindow(id: "metadata-tables-browser", namespaceID: namespaceID, using: openWindow)
                         } else {
                             isShowingMetadataTablesBrowser = true
                         }
                     } label: {
                         Label("Metadata Tables", systemImage: "tablecells")
                     }
+                    .labelStyle(.iconOnly)
                     .accessibilityIdentifier("metadataTablesBrowserButton")
                 }
                 ToolbarItem {
                     Button {
                         if PlatformWindowPreference.prefersSeparateWindow {
-                            PlatformWindowPreference.openOrFocusWindow(id: "lab-group-manager", using: openWindow)
+                            PlatformWindowPreference.openOrFocusWindow(id: "lab-group-manager", namespaceID: namespaceID, using: openWindow)
                         } else {
                             isShowingLabGroups = true
                         }
                     } label: {
                         Label("Lab Groups", systemImage: "person.3")
                     }
+                    .labelStyle(.iconOnly)
                     .accessibilityIdentifier("labGroupsButton")
                 }
                 ToolbarItem {
@@ -165,6 +173,7 @@ struct JobListView: View {
                     } label: {
                         Label("New Job", systemImage: "plus")
                     }
+                    .labelStyle(.iconOnly)
                     .accessibilityIdentifier("newJobButton")
                 }
             }
@@ -180,7 +189,9 @@ struct JobListView: View {
                             }
                         }
                 }
+                #if os(macOS)
                 .frame(minWidth: 360, minHeight: 500)
+                #endif
             }
             .sheet(isPresented: $isShowingTableTemplateManagement) {
                 NavigationStack {
@@ -188,7 +199,7 @@ struct JobListView: View {
                         .toolbar {
                             ToolbarItem(placement: .cancellationAction) {
                                 Button("Done") { isShowingTableTemplateManagement = false }
-                                    .accessibilityIdentifier("doneButton")
+                                    .accessibilityIdentifier("tableTemplateManagementSheetDoneButton")
                             }
                         }
                 }

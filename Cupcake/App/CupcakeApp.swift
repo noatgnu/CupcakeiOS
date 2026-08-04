@@ -10,70 +10,48 @@ struct CupcakeApp: App {
     #if os(macOS)
     @NSApplicationDelegateAdaptor(MacWindowPlacementFixer.self) private var windowPlacementFixer
     @Environment(\.openWindow) private var openWindow
+    #elseif os(iOS)
+    @UIApplicationDelegateAdaptor(UITestingSceneCleaner.self) private var sceneCleaner
     #endif
 
-    @State private var cupcakeStore: ModelContainer
     let cupcakeOntologyStore: ModelContainer
-    @State private var appSession: AppSession
     @AppStorage("appAppearance") private var appearanceRawValue: String = AppAppearance.system.rawValue
 
-    private var resolvedColorScheme: ColorScheme? {
-        (AppAppearance(rawValue: appearanceRawValue) ?? .system).colorScheme
+    private func resolvedColorScheme(for session: AppSession) -> ColorScheme? {
+        (session.appearanceOverride ?? AppAppearance(rawValue: appearanceRawValue) ?? .system).colorScheme
     }
 
     init() {
+        #if os(macOS)
+        UserDefaults.standard.register(defaults: ["ApplePersistenceIgnoreState": true])
+        #endif
         let isUITesting = ProcessInfo.processInfo.arguments.contains("--ui-testing-reset-state")
-        if isUITesting {
-            AppSession.resetPersistedStateForUITesting()
-            if !ProcessInfo.processInfo.arguments.contains("--ui-testing-enable-ontology-preload-prompt") {
-                AppSession.suppressOntologyPreloadPromptForUITesting()
-            }
-        }
-        let initialContext: AppSession.ActiveContext = isUITesting ? .none : AppSession.resolveInitialContext()
-        let store = Self.makeCupcakeStore(storeFileName: AppSession.storeFileName(for: initialContext), inMemoryOnly: isUITesting)
-        _cupcakeStore = State(initialValue: store)
         cupcakeOntologyStore = Self.makeOntologyStore(inMemoryOnly: isUITesting)
-        _appSession = State(initialValue: AppSession(modelContainer: store, activeContext: initialContext, isUITesting: isUITesting))
+    }
 
-        if ProcessInfo.processInfo.arguments.contains("--ui-testing-seed-storage-instrument") {
-            let context = ModelContext(store)
-            let location = CachedStorageObject(serverID: 9001, objectType: "shelf", objectName: "Test Shelf")
-            context.insert(location)
-            let instrument = CachedInstrument(
-                serverID: 9002,
-                instrumentName: "Test Centrifuge",
-                enabled: true,
-                acceptsBookings: true,
-                allowOverlappingBookings: false,
-                maintenanceOverdue: false
-            )
-            context.insert(instrument)
-            try? context.save()
-        }
-
-        if ProcessInfo.processInfo.arguments.contains("--ui-testing-seed-real-protocol") {
-            RealProtocolFixture.seed(into: ModelContext(store))
+    @ViewBuilder
+    private func auxiliaryContent(for windowID: AuxiliaryWindowID?, windowKey: String, @ViewBuilder content: (AppSession) -> some View) -> some View {
+        if let windowID, let session = NamespaceRegistry.shared.session(for: windowID.namespaceID) {
+            content(session)
+                .environment(session)
+                .environment(\.namespaceID, windowID.namespaceID)
+                .modelContainer(session.modelContainer)
+                .preferredColorScheme(resolvedColorScheme(for: session))
+                #if os(macOS)
+                .background(WindowRegistrar(key: "\(windowKey)|\(windowID.namespaceID.uuidString)"))
+                #endif
+        } else {
+            OrphanedAuxiliaryWindowView()
         }
     }
 
     var body: some Scene {
-        WindowGroup {
-            RootNavigationView(ontologyStore: cupcakeOntologyStore)
-                .environment(appSession)
-                .preferredColorScheme(resolvedColorScheme)
-                .id(ObjectIdentifier(cupcakeStore))
-                .onOpenURL { url in
-                    appSession.handleDeepLink(url)
-                }
-                .onAppear {
-                    appSession.onRequestContainerSwap = { newContainer in
-                        cupcakeStore = newContainer
-                    }
-                }
+        WindowGroup(id: "main") {
+            MainWindowRootView(ontologyStore: cupcakeOntologyStore)
         }
-        .modelContainer(cupcakeStore)
         #if os(macOS)
         .defaultSize(width: 1200, height: 700)
+        .restorationBehavior(.disabled)
         .commands {
             CommandGroup(replacing: .newItem) {
                 Button("New Protocol…") { NotificationCenter.default.post(name: .newProtocolRequested, object: nil) }
@@ -82,207 +60,259 @@ struct CupcakeApp: App {
                     .keyboardShortcut("n", modifiers: [.command, .shift])
                 Button("New Session…") { NotificationCenter.default.post(name: .newSessionRequested, object: nil) }
                 Button("New Project…") { NotificationCenter.default.post(name: .newProjectRequested, object: nil) }
+                Button("New Window") { openWindow(id: "main") }
+                    .keyboardShortcut("n", modifiers: [.command, .option])
             }
             CommandGroup(replacing: .sidebar) {}
             CommandGroup(replacing: .help) {}
             CommandGroup(after: .windowArrangement) {
-                Button("Metadata Table Templates") { PlatformWindowPreference.openOrFocusWindow(id: "table-template-manager", using: openWindow) }
-                Button("Column Templates") { PlatformWindowPreference.openOrFocusWindow(id: "column-template-manager", using: openWindow) }
-                Button("Metadata Tables") { PlatformWindowPreference.openOrFocusWindow(id: "metadata-tables-browser", using: openWindow) }
-                Button("Lab Groups") { PlatformWindowPreference.openOrFocusWindow(id: "lab-group-manager", using: openWindow) }
-                Button("My Favourites") { PlatformWindowPreference.openOrFocusWindow(id: "favourites-manager", using: openWindow) }
-                Button("Sync Issues") { PlatformWindowPreference.openOrFocusWindow(id: "sync-issues", using: openWindow) }
-                Button("Async Tasks") { PlatformWindowPreference.openOrFocusWindow(id: "async-task-center", using: openWindow) }
+                Button("Metadata Table Templates") { openFocusedAuxiliaryWindow(id: "table-template-manager") }
+                Button("Column Templates") { openFocusedAuxiliaryWindow(id: "column-template-manager") }
+                Button("Metadata Tables") { openFocusedAuxiliaryWindow(id: "metadata-tables-browser") }
+                Button("Lab Groups") { openFocusedAuxiliaryWindow(id: "lab-group-manager") }
+                Button("My Favourites") { openFocusedAuxiliaryWindow(id: "favourites-manager") }
+                Button("Sync Issues") { openFocusedAuxiliaryWindow(id: "sync-issues") }
+                Button("Async Tasks") { openFocusedAuxiliaryWindow(id: "async-task-center") }
             }
             CommandGroup(replacing: .appSettings) {
-                Button("Settings…") { PlatformWindowPreference.openOrFocusWindow(id: "settings", using: openWindow) }
+                Button("Settings…") { openFocusedAuxiliaryWindow(id: "settings") }
                     .keyboardShortcut(",", modifiers: .command)
             }
         }
         #endif
 
-        WindowGroup("Metadata Table Templates", id: "table-template-manager") {
-            NavigationStack {
-                TableTemplateManagementView(ontologyStore: cupcakeOntologyStore)
+        WindowGroup("Metadata Table Templates", id: "table-template-manager", for: AuxiliaryWindowID.self) { $windowID in
+            auxiliaryContent(for: windowID, windowKey: "table-template-manager") { _ in
+                NavigationStack {
+                    TableTemplateManagementView(ontologyStore: cupcakeOntologyStore)
+                }
             }
-            .environment(appSession)
-            .preferredColorScheme(resolvedColorScheme)
         }
-        .modelContainer(cupcakeStore)
-        .defaultSize(width: 480, height: 520)
+        .defaultSize(width: 900, height: 780)
         #if os(macOS)
+        .restorationBehavior(.disabled)
         .defaultLaunchBehavior(.suppressed)
         #endif
 
-        WindowGroup("Column Templates", id: "column-template-manager") {
-            NavigationStack {
-                ColumnTemplateManagementSheet()
+        WindowGroup("Column Templates", id: "column-template-manager", for: AuxiliaryWindowID.self) { $windowID in
+            auxiliaryContent(for: windowID, windowKey: "column-template-manager") { _ in
+                NavigationStack {
+                    ColumnTemplateManagementSheet()
+                }
             }
-            .environment(appSession)
-            .preferredColorScheme(resolvedColorScheme)
         }
-        .modelContainer(cupcakeStore)
-        .defaultSize(width: 380, height: 420)
+        .defaultSize(width: 480, height: 560)
         #if os(macOS)
+        .restorationBehavior(.disabled)
         .defaultLaunchBehavior(.suppressed)
         #endif
 
-        WindowGroup("Metadata Tables", id: "metadata-tables-browser") {
-            NavigationStack {
-                MetadataTablesBrowserView(ontologyStore: cupcakeOntologyStore)
+        WindowGroup("Metadata Tables", id: "metadata-tables-browser", for: AuxiliaryWindowID.self) { $windowID in
+            auxiliaryContent(for: windowID, windowKey: "metadata-tables-browser") { _ in
+                NavigationStack {
+                    MetadataTablesBrowserView(ontologyStore: cupcakeOntologyStore)
+                }
             }
-            .environment(appSession)
-            .preferredColorScheme(resolvedColorScheme)
         }
-        .modelContainer(cupcakeStore)
         .defaultSize(width: 700, height: 600)
         #if os(macOS)
+        .restorationBehavior(.disabled)
         .defaultLaunchBehavior(.suppressed)
         #endif
 
-        WindowGroup("Lab Groups", id: "lab-group-manager") {
-            NavigationStack {
-                LabGroupListView()
+        WindowGroup("Lab Groups", id: "lab-group-manager", for: AuxiliaryWindowID.self) { $windowID in
+            auxiliaryContent(for: windowID, windowKey: "lab-group-manager") { _ in
+                NavigationStack {
+                    LabGroupListView()
+                }
             }
-            .environment(appSession)
-            .preferredColorScheme(resolvedColorScheme)
         }
-        .modelContainer(cupcakeStore)
         .defaultSize(width: 700, height: 560)
         #if os(macOS)
+        .restorationBehavior(.disabled)
         .defaultLaunchBehavior(.suppressed)
         #endif
 
-        WindowGroup("My Favourites", id: "favourites-manager") {
-            NavigationStack {
-                FavouritesManagementSheet()
+        WindowGroup("My Favourites", id: "favourites-manager", for: AuxiliaryWindowID.self) { $windowID in
+            auxiliaryContent(for: windowID, windowKey: "favourites-manager") { _ in
+                NavigationStack {
+                    FavouritesManagementSheet()
+                }
             }
-            .environment(appSession)
-            .preferredColorScheme(resolvedColorScheme)
         }
-        .modelContainer(cupcakeStore)
-        .defaultSize(width: 380, height: 440)
+        .defaultSize(width: 460, height: 520)
         #if os(macOS)
+        .restorationBehavior(.disabled)
         .defaultLaunchBehavior(.suppressed)
         #endif
 
-        WindowGroup("Sync Issues", id: "sync-issues") {
-            NavigationStack {
-                SyncIssuesView()
+        WindowGroup("Sync Issues", id: "sync-issues", for: AuxiliaryWindowID.self) { $windowID in
+            auxiliaryContent(for: windowID, windowKey: "sync-issues") { _ in
+                NavigationStack {
+                    SyncIssuesView()
+                }
             }
-            .environment(appSession)
-            .preferredColorScheme(resolvedColorScheme)
         }
-        .modelContainer(cupcakeStore)
-        .defaultSize(width: 360, height: 400)
+        .defaultSize(width: 420, height: 460)
         #if os(macOS)
+        .restorationBehavior(.disabled)
         .defaultLaunchBehavior(.suppressed)
         #endif
 
-        WindowGroup("Async Tasks", id: "async-task-center") {
-            NavigationStack {
-                AsyncTaskCenterView()
+        WindowGroup("Async Tasks", id: "async-task-center", for: AuxiliaryWindowID.self) { $windowID in
+            auxiliaryContent(for: windowID, windowKey: "async-task-center") { _ in
+                NavigationStack {
+                    AsyncTaskCenterView()
+                }
             }
-            .environment(appSession)
-            .preferredColorScheme(resolvedColorScheme)
         }
-        .modelContainer(cupcakeStore)
         .defaultSize(width: 420, height: 480)
         #if os(macOS)
+        .restorationBehavior(.disabled)
         .defaultLaunchBehavior(.suppressed)
         #endif
 
         WindowGroup("Edit Value", id: "metadata-value-editor", for: MetadataValueEditWindowID.self) { $windowID in
-            MetadataValueEditWindowContent(windowID: windowID, ontologyStore: cupcakeOntologyStore)
-                .environment(appSession)
-                .preferredColorScheme(resolvedColorScheme)
+            if let windowID, let session = NamespaceRegistry.shared.session(for: windowID.namespaceID) {
+                MetadataValueEditWindowContent(windowID: windowID, ontologyStore: cupcakeOntologyStore)
+                    .environment(session)
+                    .environment(\.namespaceID, windowID.namespaceID)
+                    .modelContainer(session.modelContainer)
+                    .preferredColorScheme(resolvedColorScheme(for: session))
+            } else {
+                OrphanedAuxiliaryWindowView()
+            }
         }
-        .modelContainer(cupcakeStore)
         .defaultSize(width: 360, height: 480)
         #if os(macOS)
+        .restorationBehavior(.disabled)
         .defaultLaunchBehavior(.suppressed)
         #endif
 
         WindowGroup("Metadata Table", id: "metadata-table-detail", for: MetadataTableDetailWindowID.self) { $windowID in
-            MetadataTableDetailWindowContent(windowID: windowID, ontologyStore: cupcakeOntologyStore)
-                .environment(appSession)
-                .preferredColorScheme(resolvedColorScheme)
+            if let windowID, let session = NamespaceRegistry.shared.session(for: windowID.namespaceID) {
+                MetadataTableDetailWindowContent(windowID: windowID, ontologyStore: cupcakeOntologyStore)
+                    .environment(session)
+                    .environment(\.namespaceID, windowID.namespaceID)
+                    .modelContainer(session.modelContainer)
+                    .preferredColorScheme(resolvedColorScheme(for: session))
+            } else {
+                OrphanedAuxiliaryWindowView()
+            }
         }
-        .modelContainer(cupcakeStore)
-        .defaultSize(width: 700, height: 600)
+        .defaultSize(width: 700, height: 800)
         #if os(macOS)
+        .restorationBehavior(.disabled)
         .defaultLaunchBehavior(.suppressed)
         #endif
 
         WindowGroup("Protocol", id: "protocol-detail-window", for: ProtocolDetailWindowID.self) { $windowID in
-            ProtocolDetailWindowContent(windowID: windowID)
-                .environment(appSession)
-                .preferredColorScheme(resolvedColorScheme)
+            if let windowID, let session = NamespaceRegistry.shared.session(for: windowID.namespaceID) {
+                ProtocolDetailWindowContent(windowID: windowID)
+                    .environment(session)
+                    .environment(\.namespaceID, windowID.namespaceID)
+                    .modelContainer(session.modelContainer)
+                    .preferredColorScheme(resolvedColorScheme(for: session))
+            } else {
+                OrphanedAuxiliaryWindowView()
+            }
         }
-        .modelContainer(cupcakeStore)
         .defaultSize(width: 600, height: 700)
         #if os(macOS)
+        .restorationBehavior(.disabled)
         .defaultLaunchBehavior(.suppressed)
         #endif
 
         WindowGroup("Job", id: "job-detail-window", for: JobDetailWindowID.self) { $windowID in
-            JobDetailWindowContent(windowID: windowID, ontologyStore: cupcakeOntologyStore)
-                .environment(appSession)
-                .preferredColorScheme(resolvedColorScheme)
+            if let windowID, let session = NamespaceRegistry.shared.session(for: windowID.namespaceID) {
+                JobDetailWindowContent(windowID: windowID, ontologyStore: cupcakeOntologyStore)
+                    .environment(session)
+                    .environment(\.namespaceID, windowID.namespaceID)
+                    .modelContainer(session.modelContainer)
+                    .preferredColorScheme(resolvedColorScheme(for: session))
+            } else {
+                OrphanedAuxiliaryWindowView()
+            }
         }
-        .modelContainer(cupcakeStore)
         .defaultSize(width: 500, height: 600)
         #if os(macOS)
+        .restorationBehavior(.disabled)
         .defaultLaunchBehavior(.suppressed)
         #endif
 
         WindowGroup("Session", id: "session-detail-window", for: SessionDetailWindowID.self) { $windowID in
-            SessionDetailWindowContent(windowID: windowID)
-                .environment(appSession)
-                .preferredColorScheme(resolvedColorScheme)
+            if let windowID, let session = NamespaceRegistry.shared.session(for: windowID.namespaceID) {
+                SessionDetailWindowContent(windowID: windowID)
+                    .environment(session)
+                    .environment(\.namespaceID, windowID.namespaceID)
+                    .modelContainer(session.modelContainer)
+                    .preferredColorScheme(resolvedColorScheme(for: session))
+            } else {
+                OrphanedAuxiliaryWindowView()
+            }
         }
-        .modelContainer(cupcakeStore)
         .defaultSize(width: 600, height: 700)
         #if os(macOS)
+        .restorationBehavior(.disabled)
         .defaultLaunchBehavior(.suppressed)
         #endif
 
         WindowGroup("Step", id: "step-session-window", for: StepSessionWindowID.self) { $windowID in
-            StepSessionWindowContent(windowID: windowID)
-                .environment(appSession)
-                .preferredColorScheme(resolvedColorScheme)
+            if let windowID, let session = NamespaceRegistry.shared.session(for: windowID.namespaceID) {
+                StepSessionWindowContent(windowID: windowID)
+                    .environment(session)
+                    .environment(\.namespaceID, windowID.namespaceID)
+                    .modelContainer(session.modelContainer)
+                    .preferredColorScheme(resolvedColorScheme(for: session))
+            } else {
+                OrphanedAuxiliaryWindowView()
+            }
         }
-        .modelContainer(cupcakeStore)
         .defaultSize(width: 420, height: 500)
         #if os(macOS)
+        .restorationBehavior(.disabled)
         .defaultLaunchBehavior(.suppressed)
         #endif
 
         WindowGroup("Step", id: "step-detail-window", for: StepDetailWindowID.self) { $windowID in
-            StepDetailWindowContent(windowID: windowID)
-                .environment(appSession)
-                .preferredColorScheme(resolvedColorScheme)
+            if let windowID, let session = NamespaceRegistry.shared.session(for: windowID.namespaceID) {
+                StepDetailWindowContent(windowID: windowID)
+                    .environment(session)
+                    .environment(\.namespaceID, windowID.namespaceID)
+                    .modelContainer(session.modelContainer)
+                    .preferredColorScheme(resolvedColorScheme(for: session))
+            } else {
+                OrphanedAuxiliaryWindowView()
+            }
         }
-        .modelContainer(cupcakeStore)
         .defaultSize(width: 420, height: 500)
         #if os(macOS)
+        .restorationBehavior(.disabled)
         .defaultLaunchBehavior(.suppressed)
         #endif
 
-        WindowGroup("Settings", id: "settings") {
-            SettingsView()
-                .environment(appSession)
-                .modelContainer(cupcakeOntologyStore)
-                .preferredColorScheme(resolvedColorScheme)
-                #if os(macOS)
-                .frame(minWidth: 500, minHeight: 400)
-                #endif
+        WindowGroup("Settings", id: "settings", for: AuxiliaryWindowID.self) { $windowID in
+            auxiliaryContent(for: windowID, windowKey: "settings") { _ in
+                SettingsView()
+                    .modelContainer(cupcakeOntologyStore)
+                    #if os(macOS)
+                    .frame(minWidth: 560, minHeight: 620)
+                    #endif
+            }
         }
-        .defaultSize(width: 500, height: 400)
+        .defaultSize(width: 560, height: 620)
         #if os(macOS)
+        .restorationBehavior(.disabled)
         .defaultLaunchBehavior(.suppressed)
         #endif
     }
+
+    #if os(macOS)
+    private func openFocusedAuxiliaryWindow(id: String) {
+        guard let namespaceID = NamespaceRegistry.shared.focusedOrFirstNamespaceID else { return }
+        PlatformWindowPreference.openOrFocusWindow(id: id, namespaceID: namespaceID, using: openWindow)
+    }
+    #endif
 
     private static func makeOntologyStore(inMemoryOnly: Bool) -> ModelContainer {
         do {
@@ -344,5 +374,16 @@ struct CupcakeApp: App {
         let url = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
+    }
+}
+
+private struct OrphanedAuxiliaryWindowView: View {
+    @Environment(\.dismissWindow) private var dismissWindow
+
+    var body: some View {
+        ContentUnavailableView("Window Unavailable", systemImage: "questionmark.square.dashed")
+            .task {
+                dismissWindow()
+            }
     }
 }

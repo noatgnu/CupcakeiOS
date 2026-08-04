@@ -9,6 +9,7 @@ struct AddMetadataColumnSheet: View {
     @Environment(AppSession.self) private var appSession
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.namespaceID) private var namespaceID
     @AppStorage("defaultSDRFSchema") private var defaultSchemaName: String = ""
 
     let tableServerID: Int64
@@ -38,12 +39,12 @@ struct AddMetadataColumnSheet: View {
                 Section {
                     Button("Manage My Templates…") {
                         if PlatformWindowPreference.prefersSeparateWindow {
-                            PlatformWindowPreference.openOrFocusWindow(id: "column-template-manager", using: openWindow)
+                            PlatformWindowPreference.openOrFocusWindow(id: "column-template-manager", namespaceID: namespaceID, using: openWindow)
                         } else {
                             isShowingManagementSheet = true
                         }
                     }
-                    .accessibilityIdentifier("manageColumnTemplatesButton")
+                    .accessibilityIdentifier("manageMyColumnTemplatesButton")
                 }
                 if !groupedResults.isEmpty {
                     Section("Results") {
@@ -102,7 +103,9 @@ struct AddMetadataColumnSheet: View {
                 }
             }
         }
+        #if os(macOS)
         .frame(minWidth: 360, minHeight: 400)
+        #endif
         .alert("Couldn't add column", isPresented: $isShowingError) {
             Button("OK") {}
         } message: {
@@ -117,7 +120,9 @@ struct AddMetadataColumnSheet: View {
                         }
                     }
             }
+            #if os(macOS)
             .frame(minWidth: 380, minHeight: 420)
+            #endif
         }
         .sheet(item: $schemaPickerTarget) { group in
             NavigationStack {
@@ -134,7 +139,9 @@ struct AddMetadataColumnSheet: View {
                     }
                 }
             }
+            #if os(macOS)
             .frame(minWidth: 320, minHeight: 360)
+            #endif
         }
     }
 
@@ -170,13 +177,17 @@ struct AddMetadataColumnSheet: View {
         }
     }
 
+    private var effectiveDefaultSchemaName: String {
+        appSession.defaultSDRFSchemaOverride ?? defaultSchemaName
+    }
+
     private func selectGroup(_ group: GroupedColumnTemplateDTO) async {
         if group.schemaCount <= 1, let template = group.sampleTemplate {
             await addColumn(template)
             return
         }
-        if !defaultSchemaName.isEmpty, group.schemas.contains(defaultSchemaName) {
-            await addColumn(columnName: group.columnName, schema: defaultSchemaName)
+        if !effectiveDefaultSchemaName.isEmpty, group.schemas.contains(effectiveDefaultSchemaName) {
+            await addColumn(columnName: group.columnName, schema: effectiveDefaultSchemaName)
             return
         }
         schemaPickerTarget = group

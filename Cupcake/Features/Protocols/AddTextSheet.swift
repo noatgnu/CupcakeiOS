@@ -38,6 +38,8 @@ struct AddTextSheet: View {
                 }
             }
         }
+        #if os(macOS)
         .frame(minWidth: 320, minHeight: 220)
+        #endif
     }
 }

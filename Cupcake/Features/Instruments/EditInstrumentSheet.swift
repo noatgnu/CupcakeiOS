@@ -60,7 +60,9 @@ struct EditInstrumentSheet: View {
                 }
             }
         }
+        #if os(macOS)
         .frame(minWidth: 360, minHeight: 320)
+        #endif
         .alert(isEditing ? "Couldn't save instrument" : "Couldn't create instrument", isPresented: $isShowingError) {
             Button("OK") {}
         } message: {

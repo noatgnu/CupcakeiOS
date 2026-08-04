@@ -116,7 +116,9 @@ struct WebVTTCueEditorView: View {
                 }
             }
         }
+        #if os(macOS)
         .frame(minWidth: 420, minHeight: 480)
+        #endif
         .task {
             await loadMedia()
         }

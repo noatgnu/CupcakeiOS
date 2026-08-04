@@ -54,7 +54,9 @@ struct RateProtocolSheet: View {
                 }
             }
         }
+        #if os(macOS)
         .frame(minWidth: 340, minHeight: 260)
+        #endif
         .onAppear {
             if let existingRating {
                 complexityRating = Double(existingRating.complexityRating)

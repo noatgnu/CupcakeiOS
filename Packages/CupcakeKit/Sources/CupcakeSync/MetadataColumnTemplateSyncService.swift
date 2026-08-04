@@ -81,6 +81,44 @@ public actor MetadataColumnTemplateSyncService {
             authorizationHeader: "DeviceToken \(token)"
         )
     }
+
+    public func fetchShares(templateServerID: Int64) async throws -> [MetadataColumnTemplateShareDTO] {
+        guard let token = deviceToken() else {
+            throw MetadataColumnTemplateSyncError.noDeviceToken
+        }
+        let page: PaginatedResponse<MetadataColumnTemplateShareDTO> = try await apiClient.get(
+            "template-shares/",
+            query: [URLQueryItem(name: "template_id", value: String(templateServerID))],
+            authorizationHeader: "DeviceToken \(token)"
+        )
+        return page.results
+    }
+
+    @discardableResult
+    public func shareTemplate(templateServerID: Int64, userID: Int64, permissionLevel: String) async throws -> ShareColumnTemplateResponse {
+        guard let token = deviceToken() else {
+            throw MetadataColumnTemplateSyncError.noDeviceToken
+        }
+        return try await apiClient.send(
+            "column-templates/\(templateServerID)/share_template/",
+            method: .post,
+            body: ShareColumnTemplateRequest(userId: userID, permissionLevel: permissionLevel),
+            authorizationHeader: "DeviceToken \(token)"
+        )
+    }
+
+    @discardableResult
+    public func unshareTemplate(templateServerID: Int64, userID: Int64) async throws -> UnshareColumnTemplateResponse {
+        guard let token = deviceToken() else {
+            throw MetadataColumnTemplateSyncError.noDeviceToken
+        }
+        return try await apiClient.send(
+            "column-templates/\(templateServerID)/unshare_template/",
+            method: .delete,
+            body: UnshareColumnTemplateRequest(userId: userID),
+            authorizationHeader: "DeviceToken \(token)"
+        )
+    }
 }
 
 public enum MetadataColumnTemplateSyncError: Error {

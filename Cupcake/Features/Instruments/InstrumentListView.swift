@@ -80,6 +80,7 @@ struct InstrumentListView<SectionPicker: View>: View {
                     } label: {
                         Label("New Instrument", systemImage: "plus")
                     }
+                    .labelStyle(.iconOnly)
                     .accessibilityIdentifier("newInstrumentButton")
                 }
             }

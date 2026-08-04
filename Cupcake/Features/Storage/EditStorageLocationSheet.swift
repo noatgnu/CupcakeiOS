@@ -58,7 +58,9 @@ struct EditStorageLocationSheet: View {
                 }
             }
         }
+        #if os(macOS)
         .frame(minWidth: 320, minHeight: 260)
+        #endif
         .alert(isEditing ? "Couldn't save location" : "Couldn't create location", isPresented: $isShowingError) {
             Button("OK") {}
         } message: {

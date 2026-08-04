@@ -30,16 +30,12 @@ public actor StoredReagentAnnotationSyncService {
 
     public func refetch(storedReagentServerID: Int64) async throws {
         guard let token = deviceToken() else { return }
-        let authorization = "DeviceToken \(token)"
-        var page: PaginatedResponse<StoredReagentAnnotationDTO> = try await apiClient.get(
-            "stored-reagent-annotations/",
+        try await apiClient.fetchAllPages(
+            path: "stored-reagent-annotations/",
             query: [URLQueryItem(name: "stored_reagent", value: String(storedReagentServerID))],
-            authorizationHeader: authorization
-        )
-        while true {
-            try await store.upsert(page.results)
-            guard let nextURLString = page.next, let nextURL = URL(string: nextURLString) else { break }
-            page = try await apiClient.get(absoluteURL: nextURL, authorizationHeader: authorization)
+            authorizationHeader: "DeviceToken \(token)"
+        ) { (dtos: [StoredReagentAnnotationDTO]) in
+            try await store.upsert(dtos)
         }
     }
 

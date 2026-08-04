@@ -42,7 +42,9 @@ struct InsertReagentTokenView: View {
             }
             .navigationTitle("Insert Reagent")
         }
+        #if os(macOS)
         .frame(minWidth: 320, minHeight: 360)
+        #endif
     }
 
     private func propertyButton(title: String, token: String) -> some View {

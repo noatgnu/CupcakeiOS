@@ -20,13 +20,8 @@ public actor SessionSyncService {
 
     public func refetchAll() async throws {
         guard let token = deviceToken() else { return }
-        let authorization = "DeviceToken \(token)"
-
-        var page: PaginatedResponse<SessionDTO> = try await apiClient.get("sessions/", authorizationHeader: authorization)
-        while true {
-            try await store.upsert(page.results)
-            guard let nextURLString = page.next, let nextURL = URL(string: nextURLString) else { break }
-            page = try await apiClient.get(absoluteURL: nextURL, authorizationHeader: authorization)
+        try await apiClient.fetchAllPages(path: "sessions/", authorizationHeader: "DeviceToken \(token)") { (dtos: [SessionDTO]) in
+            try await store.upsert(dtos)
         }
     }
 
@@ -78,6 +73,30 @@ public actor SessionSyncService {
         return dto
     }
 
+    public func fetchDetail(serverID: Int64) async throws -> SessionDTO {
+        guard let token = deviceToken() else {
+            throw SessionSyncError.noDeviceToken
+        }
+        let dto: SessionDTO = try await apiClient.get("sessions/\(serverID)/", authorizationHeader: "DeviceToken \(token)")
+        try await store.upsert([dto])
+        return dto
+    }
+
+    @discardableResult
+    public func updateAccess(serverID: Int64, editors: [Int64], viewers: [Int64]) async throws -> SessionDTO {
+        guard let token = deviceToken() else {
+            throw SessionSyncError.noDeviceToken
+        }
+        let dto: SessionDTO = try await apiClient.send(
+            "sessions/\(serverID)/",
+            method: .patch,
+            body: UpdateSessionAccessRequest(editors: editors, viewers: viewers),
+            authorizationHeader: "DeviceToken \(token)"
+        )
+        try await store.upsert([dto])
+        return dto
+    }
+
     public func delete(serverID: Int64) async throws {
         guard let token = deviceToken() else {
             throw SessionSyncError.noDeviceToken
@@ -99,8 +118,69 @@ public enum SessionSyncError: Error {
 @ModelActor
 actor SessionStore {
     func upsert(_ dtos: [SessionDTO]) throws {
+        guard !dtos.isEmpty else { return }
+
+        let sessionServerIDs = Set(dtos.map { Optional($0.id) })
+        let existingSessions = try modelContext.fetch(
+            FetchDescriptor<CachedSession>(predicate: #Predicate { sessionServerIDs.contains($0.serverID) })
+        )
+        var sessionsByServerID: [Int64: CachedSession] = [:]
+        for session in existingSessions {
+            if let serverID = session.serverID {
+                sessionsByServerID[serverID] = session
+            }
+        }
+
+        let protocolServerIDs = Set(dtos.flatMap(\.protocols).map { Optional($0) })
+        let existingProtocols = protocolServerIDs.isEmpty ? [] : try modelContext.fetch(
+            FetchDescriptor<CachedProtocol>(predicate: #Predicate { protocolServerIDs.contains($0.serverID) })
+        )
+        var protocolClientIDsByServerID: [Int64: UUID] = [:]
+        for protocolModel in existingProtocols {
+            if let serverID = protocolModel.serverID {
+                protocolClientIDsByServerID[serverID] = protocolModel.clientID
+            }
+        }
+
         for dto in dtos {
-            _ = upsert(dto)
+            let resolvedClientIDs = dto.protocols.compactMap { protocolClientIDsByServerID[$0] }
+            let cachedSession: CachedSession
+            if let found = sessionsByServerID[dto.id] {
+                cachedSession = found
+            } else {
+                let created = CachedSession(
+                    serverID: dto.id,
+                    uniqueID: dto.uniqueId,
+                    name: dto.name,
+                    enabled: dto.enabled,
+                    isRunning: dto.isRunning,
+                    status: dto.status ?? "draft",
+                    protocolServerIDs: dto.protocols,
+                    protocolClientIDs: resolvedClientIDs,
+                    primaryProtocolClientID: resolvedClientIDs.first,
+                    createdAt: Date.parsedISO8601(dto.createdAt)
+                )
+                modelContext.insert(created)
+                sessionsByServerID[dto.id] = created
+                cachedSession = created
+            }
+            cachedSession.uniqueID = dto.uniqueId
+            cachedSession.name = dto.name
+            cachedSession.enabled = dto.enabled
+            cachedSession.isRunning = dto.isRunning
+            if let status = dto.status {
+                cachedSession.status = status
+            }
+            cachedSession.protocolServerIDs = dto.protocols
+            cachedSession.ownerServerID = dto.owner
+            cachedSession.editorServerIDs = dto.editors
+            cachedSession.viewerServerIDs = dto.viewers
+            if cachedSession.protocolClientIDs.isEmpty {
+                cachedSession.protocolClientIDs = resolvedClientIDs
+            }
+            if cachedSession.primaryProtocolClientID == nil {
+                cachedSession.primaryProtocolClientID = cachedSession.protocolClientIDs.first
+            }
         }
         try modelContext.save()
     }
@@ -145,6 +225,9 @@ actor SessionStore {
             session.status = status
         }
         session.protocolServerIDs = dto.protocols
+        session.ownerServerID = dto.owner
+        session.editorServerIDs = dto.editors
+        session.viewerServerIDs = dto.viewers
         let resolvedClientIDs = protocolClientIDs(forServerIDs: dto.protocols)
         if !resolvedClientIDs.isEmpty {
             session.protocolClientIDs = resolvedClientIDs
@@ -184,6 +267,9 @@ actor SessionStore {
             cachedSession.status = status
         }
         cachedSession.protocolServerIDs = dto.protocols
+        cachedSession.ownerServerID = dto.owner
+        cachedSession.editorServerIDs = dto.editors
+        cachedSession.viewerServerIDs = dto.viewers
         if cachedSession.protocolClientIDs.isEmpty {
             cachedSession.protocolClientIDs = resolvedClientIDs
         }

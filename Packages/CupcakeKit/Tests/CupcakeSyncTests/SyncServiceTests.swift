@@ -3430,10 +3430,10 @@ struct SyncServiceTests {
 
         #expect(buckets["species"]?.count == 1)
         #expect(buckets["unimod"]?.count == 1)
-        if case .simpleTerm(let term) = buckets["species"]?.first {
-            #expect(term.title == "Homo sapiens")
+        if case .taxonomy(let term) = buckets["species"]?.first {
+            #expect(term.scientificName == "Homo sapiens")
         } else {
-            Issue.record("expected .simpleTerm for species")
+            Issue.record("expected .taxonomy for species")
         }
         if case .unimod(let term) = buckets["unimod"]?.first {
             #expect(term.deltaMonoMass == "79.966331")
@@ -3473,6 +3473,112 @@ struct SyncServiceTests {
 
         _ = await ontologySearchSync.search(text: "test", enabledTypeKeys: ["species"], matchType: .startsWith)
     }
+
+    @Test("OnlineOntologySearchService.search decodes ncbi_taxonomy/chebi/subcellular_location full_data into their own rich fields, not just the generic display fields")
+    func onlineOntologySearchDecodesTypeSpecificFullData() async throws {
+        StubURLProtocol.handler = { request in
+            let query = request.url!.query ?? ""
+            if query.contains("type=ncbi_taxonomy") {
+                let json = Data("""
+                {"ontology_type": "ncbi_taxonomy", "suggestions": [
+                    {"id": "9606", "value": "Homo sapiens", "display_name": "Homo sapiens", "description": "Human", "ontology_type": "ncbi_taxonomy",
+                     "full_data": {"tax_id": 9606, "scientific_name": "Homo sapiens", "common_name": "Human", "synonyms": "Human;", "rank": "species"}}
+                ]}
+                """.utf8)
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+            } else if query.contains("type=chebi") {
+                let json = Data("""
+                {"ontology_type": "chebi", "suggestions": [
+                    {"id": "CHEBI:15377", "value": "CHEBI:15377", "display_name": "water", "description": "An oxide of hydrogen.", "ontology_type": "chebi",
+                     "full_data": {"identifier": "CHEBI:15377", "name": "water", "definition": "An oxide of hydrogen.",
+                         "synonyms": "H2O;", "formula": "H2O", "mass": 18.015, "charge": 0,
+                         "inchi": "InChI=1S/H2O/h1H2", "smiles": "[H]O[H]", "parent_terms": null, "roles": null}}
+                ]}
+                """.utf8)
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+            } else if query.contains("type=subcellular_location") {
+                let json = Data("""
+                {"ontology_type": "subcellular_location", "suggestions": [
+                    {"id": "SL-0007", "value": "Acrosome", "display_name": "Acrosome", "description": "Spermatid organelle.", "ontology_type": "subcellular_location",
+                     "full_data": {"location_identifier": "Acrosome", "topology_identifier": null, "orientation_identifier": null,
+                         "accession": "SL-0007", "definition": "Spermatid organelle.", "synonyms": "Acrosomal vesicle.;"}}
+                ]}
+                """.utf8)
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+            }
+            let empty = Data(#"{"ontology_type": "", "suggestions": []}"#.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, empty)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedMetadataColumn.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let metadataColumnSync = MetadataColumnSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+        let ontologySearchSync = OnlineOntologySearchService(metadataColumnSync: metadataColumnSync)
+
+        let buckets = await ontologySearchSync.search(text: "test", enabledTypeKeys: ["ncbi_taxonomy", "chebi", "subcellular_location"])
+
+        if case .taxonomy(let term) = buckets["ncbi_taxonomy"]?.first {
+            #expect(term.rank == "species")
+            #expect(term.synonyms == "Human;")
+        } else {
+            Issue.record("expected .taxonomy with rank/synonyms populated from full_data")
+        }
+        if case .chemicalCompound(let term) = buckets["chebi"]?.first {
+            #expect(term.formula == "H2O")
+            #expect(term.mass == "18.015")
+            #expect(term.charge == 0)
+            #expect(term.smiles == "[H]O[H]")
+        } else {
+            Issue.record("expected .chemicalCompound with formula/mass/charge/smiles populated from full_data")
+        }
+        if case .subcellularLocation(let term) = buckets["subcellular_location"]?.first {
+            #expect(term.title == "Acrosome")
+            #expect(term.synonyms == "Acrosomal vesicle.;")
+        } else {
+            Issue.record("expected .subcellularLocation with synonyms populated from full_data")
+        }
+    }
+
+    @Test("AsyncTaskSyncService.importSDRFFile(fileData:) posts the given bytes directly, without touching the filesystem")
+    func asyncTaskImportSDRFFileDataVariantPostsGivenBytes() async throws {
+        StubURLProtocol.handler = { request in
+            let body = request.httpBodyStream?.readAllData() ?? request.httpBody ?? Data()
+            let bodyString = String(data: body, encoding: .utf8) ?? ""
+            #expect(bodyString.contains("name=\"file\"; filename=\"retry.sdrf.tsv\""))
+            #expect(bodyString.contains("source name"))
+            let json = Data(#"{"task_id": "aaaa1111-c988-465d-ac16-e5c86d3fdc26", "message": "queued"}"#.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 202, httpVersion: nil, headerFields: nil)!, json)
+        }
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let service = AsyncTaskSyncService(apiClient: apiClient, deviceToken: { "test-token" })
+
+        let fileData = Data("source name\tcharacteristics[organism]\nHCC-001\thomo sapiens\n".utf8)
+        let taskID = try await service.importSDRFFile(
+            metadataTableServerID: 290, fileData: fileData, fileName: "retry.sdrf.tsv", replaceExisting: true
+        )
+        #expect(taskID == "aaaa1111-c988-465d-ac16-e5c86d3fdc26")
+    }
+
+    @Test("AsyncTaskRetryAction.resubmit re-issues the original export request for a failed task")
+    func asyncTaskRetryActionResubmitsExport() async throws {
+        nonisolated(unsafe) var hitColumnIDs: [Int64]?
+        StubURLProtocol.handler = { request in
+            #expect(request.url!.path.hasSuffix("/async-export/sdrf_file"))
+            let body = try #require(request.httpBodyStream).readAllData()
+            let sentJSON = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
+            hitColumnIDs = (sentJSON["metadata_column_ids"] as? [Int]).map { $0.map(Int64.init) }
+            let json = Data(#"{"task_id": "retry-task-id", "message": "queued"}"#.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 202, httpVersion: nil, headerFields: nil)!, json)
+        }
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let service = AsyncTaskSyncService(apiClient: apiClient, deviceToken: { "test-token" })
+
+        let action = AsyncTaskRetryAction.exportSDRF(metadataTableServerID: 290, metadataColumnIDs: [1, 2, 3], sampleNumber: 5, includePools: true)
+        let newTaskID = try await action.resubmit(using: service)
+        #expect(newTaskID == "retry-task-id")
+        #expect(hitColumnIDs == [1, 2, 3])
+    }
+
 
     @Test("MetadataColumnSyncService.addColumn posts column_data to add_column_with_auto_reorder")
     func addColumnPostsColumnData() async throws {
@@ -3515,6 +3621,32 @@ struct SyncServiceTests {
         let metadataColumnSync = MetadataColumnSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
 
         try await metadataColumnSync.removeColumn(tableServerID: 3, columnServerID: 6)
+    }
+
+    @Test("MetadataColumnSyncService.replaceValue POSTs old/new value and update_pools to replace_value")
+    func replaceValuePostsCorrectRequest() async throws {
+        StubURLProtocol.handler = { request in
+            #expect(request.url!.path.hasSuffix("/metadata-columns/6957/replace_value"))
+            let body = try #require(request.httpBodyStream).readAllData()
+            let sentJSON = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
+            #expect(sentJSON["old_value"] as? String == "human")
+            #expect(sentJSON["new_value"] as? String == "rat")
+            #expect(sentJSON["update_pools"] as? Bool == true)
+            let json = Data("""
+            {"message": "Value replacement completed", "old_value": "human", "new_value": "rat",
+             "default_value_updated": true, "modifiers_merged": 0, "modifiers_deleted": 0,
+             "samples_reverted_to_default": 0, "pool_columns_updated": 2}
+            """.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let container = try makeInMemoryContainer(for: [CachedMetadataColumn.self])
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let metadataColumnSync = MetadataColumnSyncService(modelContainer: container, apiClient: apiClient, deviceToken: { "test-token" })
+
+        let response = try await metadataColumnSync.replaceValue(columnServerID: 6957, oldValue: "human", newValue: "rat")
+        #expect(response.defaultValueUpdated)
+        #expect(response.poolColumnsUpdated == 2)
     }
 
     @Test("MetadataColumnTemplateSyncService.search hits column-templates with a search query")
@@ -3680,6 +3812,71 @@ struct SyncServiceTests {
         let templateSync = MetadataColumnTemplateSyncService(apiClient: apiClient, deviceToken: { "test-token" })
 
         try await templateSync.delete(templateServerID: 401)
+    }
+
+    @Test("MetadataColumnTemplateSyncService.shareTemplate POSTs user_id and permission_level to share_template")
+    func shareTemplatePostsCorrectRequest() async throws {
+        StubURLProtocol.handler = { request in
+            #expect(request.url!.path.hasSuffix("/column-templates/401/share_template"))
+            let body = try #require(request.httpBodyStream).readAllData()
+            let sentJSON = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
+            #expect(sentJSON["user_id"] as? Int == 6)
+            #expect(sentJSON["permission_level"] as? String == "edit")
+            let json = Data("""
+            {"message": "Template share created successfully", "share_id": 1, "user": "importtestuser", "permission_level": "edit"}
+            """.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let templateSync = MetadataColumnTemplateSyncService(apiClient: apiClient, deviceToken: { "test-token" })
+
+        let response = try await templateSync.shareTemplate(templateServerID: 401, userID: 6, permissionLevel: "edit")
+        #expect(response.shareId == 1)
+        #expect(response.user == "importtestuser")
+    }
+
+    @Test("MetadataColumnTemplateSyncService.unshareTemplate DELETEs with user_id to unshare_template")
+    func unshareTemplateSendsCorrectRequest() async throws {
+        StubURLProtocol.handler = { request in
+            #expect(request.httpMethod == "DELETE")
+            #expect(request.url!.path.hasSuffix("/column-templates/401/unshare_template"))
+            let body = try #require(request.httpBodyStream).readAllData()
+            let sentJSON = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
+            #expect(sentJSON["user_id"] as? Int == 6)
+            let json = Data("""
+            {"message": "Template sharing removed successfully"}
+            """.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let templateSync = MetadataColumnTemplateSyncService(apiClient: apiClient, deviceToken: { "test-token" })
+
+        try await templateSync.unshareTemplate(templateServerID: 401, userID: 6)
+    }
+
+    @Test("MetadataColumnTemplateSyncService.fetchShares GETs template-shares filtered by template_id")
+    func fetchSharesFiltersByTemplateID() async throws {
+        StubURLProtocol.handler = { request in
+            #expect(request.url!.path.hasSuffix("/template-shares"))
+            #expect(request.url!.query?.contains("template_id=401") == true)
+            let json = Data("""
+            {"count": 1, "next": null, "previous": null, "results": [
+                {"id": 1, "template": 401, "user": 6, "user_username": "importtestuser",
+                 "shared_by": 1, "shared_by_username": "testuser", "permission_level": "use", "shared_at": "2026-07-28T14:17:21Z"}
+            ]}
+            """.utf8)
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, json)
+        }
+
+        let apiClient = APIClient(baseURL: URL(string: "https://example.test/api/v1/")!, session: StubURLProtocol.makeSession())
+        let templateSync = MetadataColumnTemplateSyncService(apiClient: apiClient, deviceToken: { "test-token" })
+
+        let shares = try await templateSync.fetchShares(templateServerID: 401)
+        #expect(shares.count == 1)
+        #expect(shares.first?.userUsername == "importtestuser")
+        #expect(shares.first?.permissionLevel == "use")
     }
 
     @Test("AnnotationFolderSyncService.fetchRootFolders resolves each session-attached folder's own details")

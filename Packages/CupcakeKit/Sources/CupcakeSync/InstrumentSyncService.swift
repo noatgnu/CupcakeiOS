@@ -20,25 +20,15 @@ public actor InstrumentSyncService {
 
     public func refetchInstruments() async throws {
         guard let token = deviceToken() else { return }
-        let authorization = "DeviceToken \(token)"
-
-        var page: PaginatedResponse<InstrumentDTO> = try await apiClient.get("instruments/", authorizationHeader: authorization)
-        while true {
-            try await store.upsertInstruments(page.results)
-            guard let nextURLString = page.next, let nextURL = URL(string: nextURLString) else { break }
-            page = try await apiClient.get(absoluteURL: nextURL, authorizationHeader: authorization)
+        try await apiClient.fetchAllPages(path: "instruments/", authorizationHeader: "DeviceToken \(token)") { (dtos: [InstrumentDTO]) in
+            try await store.upsertInstruments(dtos)
         }
     }
 
     public func refetchInstrumentUsage() async throws {
         guard let token = deviceToken() else { return }
-        let authorization = "DeviceToken \(token)"
-
-        var page: PaginatedResponse<InstrumentUsageDTO> = try await apiClient.get("instrument-usage/", authorizationHeader: authorization)
-        while true {
-            try await store.upsertInstrumentUsage(page.results)
-            guard let nextURLString = page.next, let nextURL = URL(string: nextURLString) else { break }
-            page = try await apiClient.get(absoluteURL: nextURL, authorizationHeader: authorization)
+        try await apiClient.fetchAllPages(path: "instrument-usage/", authorizationHeader: "DeviceToken \(token)") { (dtos: [InstrumentUsageDTO]) in
+            try await store.upsertInstrumentUsage(dtos)
         }
     }
 

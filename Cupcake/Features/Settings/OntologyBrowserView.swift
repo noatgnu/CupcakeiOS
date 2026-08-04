@@ -65,12 +65,25 @@ struct OntologyBrowserView: View {
         resultBuckets.values.contains { !$0.isEmpty }
     }
 
+    private var availableModes: [Mode] {
+        appSession.isAuthenticated ? Mode.allCases : [.offline]
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             TextField("Search ontology terms", text: $searchText)
                 .accessibilityIdentifier("ontologyBrowserSearchField")
                 .padding(.horizontal, 12)
                 .padding(.top, 8)
+            Picker("Mode", selection: $mode) {
+                ForEach(availableModes) { option in
+                    Text(option.label).tag(option)
+                }
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal, 12)
+            .padding(.top, 6)
+            .accessibilityIdentifier("ontologyBrowserModePicker")
             Picker("Match", selection: $matchType) {
                 ForEach(OntologyMatchType.allCases) { option in
                     Text(option.label).tag(option)
@@ -108,23 +121,21 @@ struct OntologyBrowserView: View {
         .onChange(of: searchText) { _, newValue in scheduleSearch(newValue) }
         .onChange(of: mode) { _, _ in scheduleSearch(searchText) }
         .onChange(of: matchType) { _, _ in scheduleSearch(searchText) }
+        .onChange(of: isShowingDatabaseFilter) { _, isShowing in
+            if !isShowing { scheduleSearch(searchText) }
+        }
+        .onChange(of: appSession.isAuthenticated) { _, isAuthenticated in
+            if !isAuthenticated, mode == .online { mode = .offline }
+        }
         .navigationTitle("Ontology Browser")
         .toolbar {
-            ToolbarItem {
-                Picker("Mode", selection: $mode) {
-                    ForEach(Mode.allCases) { option in
-                        Text(option.label).tag(option)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .accessibilityIdentifier("ontologyBrowserModePicker")
-            }
             ToolbarItem {
                 Button {
                     isShowingDatabaseFilter = true
                 } label: {
                     Label("Databases", systemImage: "line.3.horizontal.decrease.circle")
                 }
+                .labelStyle(.iconOnly)
                 .accessibilityIdentifier("ontologyBrowserDatabasesButton")
             }
         }
@@ -137,7 +148,9 @@ struct OntologyBrowserView: View {
                         }
                     }
             }
+            #if os(macOS)
             .frame(minWidth: 360, minHeight: 420)
+            #endif
         }
         .sheet(isPresented: $isShowingDatabaseFilter) {
             OntologyDatabaseFilterSheet(
@@ -217,13 +230,17 @@ private struct OntologyDatabaseFilterSheet: View {
                     .accessibilityIdentifier("ontologyDatabaseToggle_\(typeKey)")
                 }
             }
+            .accessibilityIdentifier("ontologyDatabaseFilterList")
             .navigationTitle("Databases")
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
+                        .accessibilityIdentifier("ontologyDatabaseFilterDoneButton")
                 }
             }
         }
+        #if os(macOS)
         .frame(minWidth: 360, minHeight: 420)
+        #endif
     }
 }

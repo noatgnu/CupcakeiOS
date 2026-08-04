@@ -134,5 +134,6 @@ struct SyncIssuesView: View {
                 }
             }
         }
+        .closableWindowToolbar(id: "sync-issues")
     }
 }

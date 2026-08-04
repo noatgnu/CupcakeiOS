@@ -36,6 +36,7 @@ struct TableTemplateEditSheet: View {
     @State private var isShowingError = false
 
     @State private var columns: [MetadataColumnDTO] = []
+    @State private var columnSearchText = ""
     @State private var isLoadingColumns = false
     @State private var isSelecting = false
     @State private var selectedColumnIDs: Set<Int64> = []
@@ -59,6 +60,11 @@ struct TableTemplateEditSheet: View {
 
     private var canSave: Bool {
         !name.isEmpty && (visibility != .group || labGroupServerID != nil)
+    }
+
+    private var filteredColumns: [MetadataColumnDTO] {
+        guard !columnSearchText.isEmpty else { return columns }
+        return columns.filter { ($0.displayName ?? $0.name).localizedCaseInsensitiveContains(columnSearchText) }
     }
 
     var body: some View {
@@ -156,7 +162,9 @@ struct TableTemplateEditSheet: View {
             }
             .onChange(of: columns.count) { onColumnCountChanged(columns.count) }
         }
-        .frame(minWidth: 360, minHeight: 480)
+        #if os(macOS)
+        .frame(minWidth: 360, minHeight: 700)
+        #endif
     }
 
     @ViewBuilder
@@ -167,37 +175,42 @@ struct TableTemplateEditSheet: View {
                     isSelecting.toggle()
                     if !isSelecting { selectedColumnIDs = [] }
                 }
-                .font(.caption)
                 .accessibilityIdentifier("templateColumnSelectModeButton")
                 Spacer()
                 if isSelecting, !selectedColumnIDs.isEmpty {
                     Button("Staff Only") {
                         Task { await bulkSetStaffOnly(true) }
                     }
-                    .font(.caption)
                     .accessibilityIdentifier("templateColumnBulkStaffOnlyButton")
                     Button("Clear Staff Only") {
                         Task { await bulkSetStaffOnly(false) }
                     }
-                    .font(.caption)
                     Button("Delete", role: .destructive) {
                         Task { await bulkDelete() }
                     }
-                    .font(.caption)
                     .accessibilityIdentifier("templateColumnBulkDeleteButton")
                 }
             }
         } header: {
             Text("Columns")
         }
+        if columns.count > 5 {
+            TextField("Search columns", text: $columnSearchText)
+                .accessibilityIdentifier("templateColumnSearchField")
+        }
         if isLoadingColumns {
             ProgressView()
         } else if columns.isEmpty {
             Text("No columns yet.")
                 .foregroundStyle(.secondary)
+        } else if filteredColumns.isEmpty {
+            Text("No columns match \"\(columnSearchText)\".")
+                .foregroundStyle(.secondary)
         } else {
-            ForEach(Array(columns.enumerated()), id: \.element.id) { index, column in
-                columnRow(column, index: index)
+            ForEach(filteredColumns) { column in
+                if let realIndex = columns.firstIndex(where: { $0.id == column.id }) {
+                    columnRow(column, index: realIndex)
+                }
             }
         }
         Button {
@@ -471,7 +484,9 @@ private struct AddTemplateColumnSheet: View {
                 }
             }
         }
+        #if os(macOS)
         .frame(minWidth: 360, minHeight: 360)
+        #endif
         .alert("Couldn't add column", isPresented: $isShowingError) {
             Button("OK") {}
         } message: {

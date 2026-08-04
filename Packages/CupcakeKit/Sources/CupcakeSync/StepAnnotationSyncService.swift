@@ -20,16 +20,8 @@ public actor StepAnnotationSyncService {
 
     public func refetchAll() async throws {
         guard let token = deviceToken() else { return }
-        let authorization = "DeviceToken \(token)"
-
-        var page: PaginatedResponse<StepAnnotationDTO> = try await apiClient.get(
-            "step-annotations/",
-            authorizationHeader: authorization
-        )
-        while true {
-            try await store.upsert(page.results)
-            guard let nextURLString = page.next, let nextURL = URL(string: nextURLString) else { break }
-            page = try await apiClient.get(absoluteURL: nextURL, authorizationHeader: authorization)
+        try await apiClient.fetchAllPages(path: "step-annotations/", authorizationHeader: "DeviceToken \(token)") { (dtos: [StepAnnotationDTO]) in
+            try await store.upsert(dtos)
         }
     }
 

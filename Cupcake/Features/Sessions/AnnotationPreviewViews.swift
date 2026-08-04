@@ -50,6 +50,7 @@ private func writeTempFile(_ data: Data, suggestedFilename: String?, fallbackExt
 
 private struct DownloadShareButton: View {
     let url: URL
+    let annotationClientID: String
 
     var body: some View {
         ShareLink(item: url) {
@@ -57,13 +58,14 @@ private struct DownloadShareButton: View {
                 .font(.title3)
                 .foregroundStyle(.white, .black.opacity(0.5))
         }
-        .accessibilityIdentifier("downloadAnnotationButton")
+        .accessibilityIdentifier("downloadAnnotationButton_\(annotationClientID)")
         .help("Save or Share")
         .padding(6)
     }
 }
 
 struct PhotoAnnotationPreview: View {
+    let annotationClientID: String
     let loadData: () async throws -> (data: Data, suggestedFilename: String?)
 
     @State private var image: PlatformImage?
@@ -79,7 +81,7 @@ struct PhotoAnnotationPreview: View {
                     .frame(maxHeight: 240)
                     .clipShape(RoundedRectangle(cornerRadius: 8))
                     .overlay(alignment: .topTrailing) {
-                        if let tempFileURL { DownloadShareButton(url: tempFileURL) }
+                        if let tempFileURL { DownloadShareButton(url: tempFileURL, annotationClientID: annotationClientID) }
                     }
             } else {
                 HStack {
@@ -288,6 +290,7 @@ private enum MediaAnnotationKind {
 
 private struct MediaAnnotationPreview: View {
     let kind: MediaAnnotationKind
+    let annotationClientID: String
     var annotationServerID: Int64? = nil
     var transcription: String? = nil
     var translation: String? = nil
@@ -316,7 +319,7 @@ private struct MediaAnnotationPreview: View {
                     .frame(height: 200)
                     .clipShape(RoundedRectangle(cornerRadius: 8))
                     .overlay(alignment: .topTrailing) {
-                        if let tempFileURL { DownloadShareButton(url: tempFileURL) }
+                        if let tempFileURL { DownloadShareButton(url: tempFileURL, annotationClientID: annotationClientID) }
                     }
             }
             HStack {
@@ -371,7 +374,7 @@ private struct MediaAnnotationPreview: View {
                     ShareLink(item: tempFileURL) {
                         Image(systemName: "square.and.arrow.up")
                     }
-                    .accessibilityIdentifier("downloadAnnotationButton")
+                    .accessibilityIdentifier("downloadAnnotationButton_\(annotationClientID)")
                     .help("Save or Share")
                 }
             }
@@ -503,7 +506,7 @@ private struct MediaAnnotationPreview: View {
                 return
             }
             defer { try? FileManager.default.removeItem(at: url) }
-            let engine = TranscriptionEngineFactory.makeEngine()
+            let engine = TranscriptionEngineFactory.makeEngine(kind: appSession.transcriptionEngineOverride ?? TranscriptionEngineFactory.selectedEngineKind)
             let languageCode = language ?? Locale.current.identifier
             let vocabulary = TranscriptionVocabularyStore.currentTexts() + contextualVocabulary
             var transcribed = try await engine.transcribe(fileURL: url, languageCode: languageCode, vocabulary: vocabulary)
@@ -527,6 +530,7 @@ private struct MediaAnnotationPreview: View {
 }
 
 struct VideoAnnotationPreview: View {
+    let annotationClientID: String
     var annotationServerID: Int64? = nil
     var transcription: String? = nil
     var translation: String? = nil
@@ -539,6 +543,7 @@ struct VideoAnnotationPreview: View {
     var body: some View {
         MediaAnnotationPreview(
             kind: .video,
+            annotationClientID: annotationClientID,
             annotationServerID: annotationServerID,
             transcription: transcription,
             translation: translation,
@@ -552,6 +557,7 @@ struct VideoAnnotationPreview: View {
 }
 
 struct AudioAnnotationPreview: View {
+    let annotationClientID: String
     var annotationServerID: Int64? = nil
     let transcription: String?
     let translation: String?
@@ -564,6 +570,7 @@ struct AudioAnnotationPreview: View {
     var body: some View {
         MediaAnnotationPreview(
             kind: .audio,
+            annotationClientID: annotationClientID,
             annotationServerID: annotationServerID,
             transcription: transcription,
             translation: translation,
@@ -617,6 +624,7 @@ struct MolarityCalculatorAnnotationPreview: View {
 }
 
 struct SketchAnnotationPreview: View {
+    let annotationClientID: String
     let loadData: () async throws -> (data: Data, suggestedFilename: String?)
 
     @State private var sketch: SketchData?
@@ -649,7 +657,7 @@ struct SketchAnnotationPreview: View {
                                 .font(.title3)
                                 .foregroundStyle(.white, .black.opacity(0.5))
                         }
-                        .accessibilityIdentifier("downloadAnnotationButton")
+                        .accessibilityIdentifier("downloadAnnotationButton_\(annotationClientID)")
                         .help("Export Sketch")
                         .padding(6)
                     }

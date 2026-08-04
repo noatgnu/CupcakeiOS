@@ -57,7 +57,9 @@ struct RecordReagentActionSheet: View {
                 }
             }
         }
+        #if os(macOS)
         .frame(minWidth: 320, minHeight: 280)
+        #endif
         .alert("Couldn't record action", isPresented: $isShowingError) {
             Button("OK") {}
         } message: {

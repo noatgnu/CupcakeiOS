@@ -5,6 +5,7 @@ import SwiftData
 import SwiftUI
 
 struct ProtocolDetailWindowID: Codable, Hashable {
+    let namespaceID: UUID
     let protocolClientID: UUID
 }
 
@@ -33,6 +34,7 @@ struct ProtocolDetailView: View {
     @Environment(AppSession.self) private var appSession
     @Environment(\.modelContext) private var modelContext
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.namespaceID) private var namespaceID
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Query private var allStepReagents: [CachedStepReagent]
     @Query private var allReagents: [CachedReagent]
@@ -52,6 +54,7 @@ struct ProtocolDetailView: View {
     @State private var isDeleting = false
     @State private var stepDetailTarget: UUID?
     @State private var selectedSectionID: UUID?
+    @State private var isShowingAccessSheet = false
 
     private var sections: [CachedProtocolSection] {
         protocolModel.sections.sorted { $0.order < $1.order }
@@ -63,6 +66,10 @@ struct ProtocolDetailView: View {
 
     private var canAuthorOnline: Bool {
         protocolModel.serverID != nil && appSession.isAuthenticated
+    }
+
+    private var isOwner: Bool {
+        protocolModel.serverID != nil && protocolModel.ownerServerID != nil && protocolModel.ownerServerID == appSession.currentUserID
     }
 
     private var isEditable: Bool {
@@ -132,6 +139,11 @@ struct ProtocolDetailView: View {
         }
         .sheet(isPresented: $isShowingEditSheet) {
             EditProtocolSheet(protocolModel: protocolModel)
+        }
+        .sheet(isPresented: $isShowingAccessSheet) {
+            if let protocolServerID = protocolModel.serverID {
+                AccessManagementView(target: .protocolResource(serverID: protocolServerID))
+            }
         }
         .task {
             guard let protocolServerID = protocolModel.serverID, let userID = appSession.currentUserID else { return }
@@ -311,6 +323,16 @@ struct ProtocolDetailView: View {
                 }
                 .accessibilityIdentifier("editProtocolButton")
             }
+            if isOwner {
+                ToolbarItem {
+                    Button {
+                        isShowingAccessSheet = true
+                    } label: {
+                        Label("Manage Access", systemImage: "person.2.badge.gearshape")
+                    }
+                    .accessibilityIdentifier("manageProtocolAccessButton")
+                }
+            }
             ToolbarItem {
                 Button(role: .destructive) {
                     Task { await deleteProtocol() }
@@ -336,12 +358,12 @@ struct ProtocolDetailView: View {
                 }
             }
             .disabled(isCreatingSession)
-            .accessibilityIdentifier("newSessionButton")
+            .accessibilityIdentifier("startProtocolSessionButton")
         }
         if PlatformWindowPreference.prefersSeparateWindow {
             ToolbarItem {
                 Button {
-                    openWindow(id: "protocol-detail-window", value: ProtocolDetailWindowID(protocolClientID: protocolModel.clientID))
+                    openWindow(id: "protocol-detail-window", value: ProtocolDetailWindowID(namespaceID: namespaceID, protocolClientID: protocolModel.clientID))
                 } label: {
                     Label("Open in New Window", systemImage: "macwindow.badge.plus")
                 }
@@ -358,13 +380,13 @@ struct ProtocolDetailView: View {
                 .accessibilityIdentifier("rateProtocolButton")
             }
         }
-        if protocolModel.serverID != nil {
+        if let protocolServerID = protocolModel.serverID {
             ToolbarItem {
                 if let exportURL {
                     ShareLink(item: exportURL) {
                         Label("Export as HTML", systemImage: "square.and.arrow.up")
                     }
-                    .accessibilityIdentifier("exportProtocolButton")
+                    .accessibilityIdentifier("exportProtocolButton_\(protocolServerID)")
                 } else {
                     Button {
                         Task { await loadExportURL() }
@@ -376,7 +398,7 @@ struct ProtocolDetailView: View {
                         }
                     }
                     .disabled(isLoadingExport)
-                    .accessibilityIdentifier("exportProtocolButton")
+                    .accessibilityIdentifier("exportProtocolButton_\(protocolServerID)")
                 }
             }
         }

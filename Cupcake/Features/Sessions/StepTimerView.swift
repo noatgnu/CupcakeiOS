@@ -17,6 +17,11 @@ struct StepTimerView: View {
         timeKeepers.first(where: { $0.sessionClientID == sessionClientID && $0.stepClientID == step.clientID })
     }
 
+    private var timerIdentifierSuffix: String {
+        if let serverID = step.serverID { return "\(serverID)" }
+        return step.clientID.uuidString
+    }
+
     var body: some View {
         if let stepDuration = step.stepDuration {
             HStack {
@@ -26,23 +31,23 @@ struct StepTimerView: View {
                         Text(Self.format(Self.remainingSeconds(for: timeKeeper)))
                             .font(.body.monospacedDigit())
                     }
-                    .accessibilityIdentifier("stepTimerRemaining")
+                    .accessibilityIdentifier("stepTimerRemaining_\(timerIdentifierSuffix)")
                 } else {
                     Text(Self.format(timeKeeper?.currentDuration ?? stepDuration))
                         .font(.body.monospacedDigit())
-                        .accessibilityIdentifier("stepTimerRemaining")
+                        .accessibilityIdentifier("stepTimerRemaining_\(timerIdentifierSuffix)")
                 }
                 Spacer()
                 if timeKeeper?.started == true {
                     Button("Stop") { Task { await stop() } }
-                        .accessibilityIdentifier("stopStepTimerButton")
+                        .accessibilityIdentifier("stopStepTimerButton_\(timerIdentifierSuffix)")
                 } else {
                     Button(timeKeeper == nil ? "Start Timer" : "Resume") { Task { await start(stepDuration: stepDuration) } }
-                        .accessibilityIdentifier("startStepTimerButton")
+                        .accessibilityIdentifier("startStepTimerButton_\(timerIdentifierSuffix)")
                 }
                 if timeKeeper != nil {
                     Button("Reset") { Task { await reset() } }
-                        .accessibilityIdentifier("resetStepTimerButton")
+                        .accessibilityIdentifier("resetStepTimerButton_\(timerIdentifierSuffix)")
                 }
             }
             .disabled(isBusy)

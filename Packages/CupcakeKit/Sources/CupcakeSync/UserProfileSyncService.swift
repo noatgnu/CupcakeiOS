@@ -42,6 +42,16 @@ public actor UserProfileSyncService {
             authorizationHeader: "DeviceToken \(token)"
         )
     }
+
+    public func searchUsers(query: String) async throws -> [UserDTO] {
+        guard let token = deviceToken() else { return [] }
+        let page: PaginatedResponse<UserDTO> = try await apiClient.get(
+            "users/",
+            query: [URLQueryItem(name: "search", value: query)],
+            authorizationHeader: "DeviceToken \(token)"
+        )
+        return page.results
+    }
 }
 
 public enum UserProfileSyncError: Error {

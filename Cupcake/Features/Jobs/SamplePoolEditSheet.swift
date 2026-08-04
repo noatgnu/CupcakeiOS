@@ -128,7 +128,9 @@ struct SamplePoolEditSheet: View {
                 }
             }
         }
+        #if os(macOS)
         .frame(minWidth: 360, minHeight: 480)
+        #endif
         .alert("Couldn't save sample pool", isPresented: $isShowingError) {
             Button("OK") {}
         } message: {

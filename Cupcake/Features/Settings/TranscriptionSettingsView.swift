@@ -2,6 +2,7 @@ import CupcakeTranscription
 import SwiftUI
 
 struct TranscriptionSettingsView: View {
+    @Environment(AppSession.self) private var appSession
     @AppStorage("cupcake.transcriptionEngineKind") private var engineKindRawValue: String = TranscriptionEngineKind.apple.rawValue
 
     @State private var availableModelVariants: [String] = []
@@ -23,6 +24,17 @@ struct TranscriptionSettingsView: View {
         )
     }
 
+    private var isOverridingForInstance: Bool {
+        appSession.transcriptionEngineOverride != nil
+    }
+
+    private var instanceEngineOverride: Binding<TranscriptionEngineKind> {
+        Binding(
+            get: { appSession.transcriptionEngineOverride ?? TranscriptionEngineKind(rawValue: engineKindRawValue) ?? .apple },
+            set: { appSession.setTranscriptionEngineOverride($0) }
+        )
+    }
+
     var body: some View {
         Form {
             Section("Engine") {
@@ -34,6 +46,33 @@ struct TranscriptionSettingsView: View {
                 .pickerStyle(.segmented)
                 .labelsHidden()
                 .accessibilityIdentifier("transcriptionEnginePicker")
+            }
+
+            if appSession.activeInstance != nil {
+                Section {
+                    Toggle(
+                        "Override for This Instance",
+                        isOn: Binding(
+                            get: { isOverridingForInstance },
+                            set: { isOn in appSession.setTranscriptionEngineOverride(isOn ? (appSession.transcriptionEngineOverride ?? TranscriptionEngineKind(rawValue: engineKindRawValue) ?? .apple) : nil) }
+                        )
+                    )
+                    .accessibilityIdentifier("transcriptionEngineOverrideToggle")
+                    if isOverridingForInstance {
+                        Picker("Engine Override", selection: instanceEngineOverride) {
+                            ForEach(TranscriptionEngineKind.allCases) { kind in
+                                Text(kind.label).tag(kind)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                        .accessibilityIdentifier("transcriptionEngineOverridePicker")
+                    }
+                } header: {
+                    Text("This Instance")
+                } footer: {
+                    Text("Downloaded models and custom vocabulary are shared across all instances; only which engine is active can differ per instance.")
+                }
             }
 
             if engineKind.wrappedValue == .whisperKit {

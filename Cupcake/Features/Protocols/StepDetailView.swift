@@ -5,6 +5,7 @@ import SwiftData
 import SwiftUI
 
 struct StepDetailWindowID: Codable, Hashable {
+    let namespaceID: UUID
     let stepClientID: UUID
 }
 
@@ -75,6 +76,7 @@ struct StepDetailWindowContent: View {
 struct StepDetailView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.namespaceID) private var namespaceID
     @Query private var allSteps: [CachedProtocolStep]
     @Query private var allStepReagents: [CachedStepReagent]
     @Query private var allReagents: [CachedReagent]
@@ -167,7 +169,7 @@ struct StepDetailView: View {
                     if PlatformWindowPreference.prefersSeparateWindow {
                         ToolbarItem {
                             Button {
-                                openWindow(id: "step-detail-window", value: StepDetailWindowID(stepClientID: stepClientID))
+                                openWindow(id: "step-detail-window", value: StepDetailWindowID(namespaceID: namespaceID, stepClientID: stepClientID))
                             } label: {
                                 Label("Open in New Window", systemImage: "macwindow.badge.plus")
                             }

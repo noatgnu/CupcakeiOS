@@ -179,17 +179,10 @@ public actor InventorySyncService {
 
     private func refetchAllPages<DTO: Decodable & Sendable>(
         path: String,
-        upsert: ([DTO]) async throws -> Void
+        upsert: @Sendable ([DTO]) async throws -> Void
     ) async throws {
         guard let token = deviceToken() else { return }
-        let authorization = "DeviceToken \(token)"
-
-        var page: PaginatedResponse<DTO> = try await apiClient.get(path, authorizationHeader: authorization)
-        while true {
-            try await upsert(page.results)
-            guard let nextURLString = page.next, let nextURL = URL(string: nextURLString) else { break }
-            page = try await apiClient.get(absoluteURL: nextURL, authorizationHeader: authorization)
-        }
+        try await apiClient.fetchAllPages(path: path, authorizationHeader: "DeviceToken \(token)", onPage: upsert)
     }
 }
 

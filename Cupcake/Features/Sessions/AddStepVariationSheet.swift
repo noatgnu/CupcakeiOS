@@ -48,7 +48,9 @@ struct AddStepVariationSheet: View {
                 }
             }
         }
+        #if os(macOS)
         .frame(minWidth: 320, minHeight: 260)
+        #endif
         .alert("Couldn't add variation", isPresented: $isShowingError) {
             Button("OK") {}
         } message: {

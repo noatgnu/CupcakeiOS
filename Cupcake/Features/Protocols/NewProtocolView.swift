@@ -43,7 +43,9 @@ struct NewProtocolView: View {
                 }
             }
         }
+        #if os(macOS)
         .frame(minWidth: 360, minHeight: 260)
+        #endif
         .alert("Couldn't create protocol", isPresented: $isShowingError) {
             Button("OK") {}
         } message: {

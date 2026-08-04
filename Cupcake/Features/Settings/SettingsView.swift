@@ -25,6 +25,7 @@ struct SettingsView: View {
     private var closeToolbarItem: some ToolbarContent {
         ToolbarItem(placement: .cancellationAction) {
             Button("Done", action: close)
+                .accessibilityIdentifier("doneButton")
         }
     }
     #endif
@@ -40,23 +41,32 @@ struct SettingsView: View {
             ) {
                 Label("Appearance", systemImage: "circle.lefthalf.filled")
                     .tag(Section.appearance)
+                    .accessibilityIdentifier("settingsSidebarItem_appearance")
                 if appSession.isAuthenticated {
                     Label("Account", systemImage: "person.crop.circle")
                         .tag(Section.account)
+                        .accessibilityIdentifier("settingsSidebarItem_account")
                     Label("API Tokens", systemImage: "key")
                         .tag(Section.deviceTokens)
+                        .accessibilityIdentifier("settingsSidebarItem_deviceTokens")
+                    Label("Connection", systemImage: "wifi.slash")
+                        .tag(Section.connection)
+                        .accessibilityIdentifier("settingsSidebarItem_connection")
                 }
-                Label("Connection", systemImage: "wifi.slash")
-                    .tag(Section.connection)
                 Label("Metadata", systemImage: "tablecells")
                     .tag(Section.metadata)
+                    .accessibilityIdentifier("settingsSidebarItem_metadata")
                 Label("Offline Ontology Data", systemImage: "arrow.down.circle")
                     .tag(Section.offlineOntologyData)
+                    .accessibilityIdentifier("settingsSidebarItem_offlineOntologyData")
                 Label("Ontology Browser", systemImage: "magnifyingglass")
                     .tag(Section.ontologyBrowser)
+                    .accessibilityIdentifier("settingsSidebarItem_ontologyBrowser")
                 Label("Transcription", systemImage: "waveform")
                     .tag(Section.transcription)
+                    .accessibilityIdentifier("settingsSidebarItem_transcription")
             }
+            .accessibilityIdentifier("settingsSidebarList")
             .navigationSplitViewColumnWidth(min: 200, ideal: 220, max: 260)
             .navigationTitle("Settings")
             #if os(macOS)

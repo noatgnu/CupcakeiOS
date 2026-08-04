@@ -145,7 +145,9 @@ struct SessionAnnotationFoldersView: View {
                     }
                 }
             }
+            #if os(macOS)
             .frame(minWidth: 320, minHeight: 200)
+            #endif
         }
         .alert("Something went wrong", isPresented: $isShowingError) {
             Button("OK") {}

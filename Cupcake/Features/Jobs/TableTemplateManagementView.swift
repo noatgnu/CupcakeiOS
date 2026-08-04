@@ -67,6 +67,7 @@ struct TableTemplateManagementView: View {
                     } label: {
                         Label("New Template…", systemImage: "plus")
                     }
+                    .labelStyle(.iconOnly)
                     .accessibilityIdentifier("newMetadataTableTemplateButton")
                 }
             }
@@ -116,6 +117,7 @@ struct TableTemplateManagementView: View {
                 selectedTemplateServerID = nil
             }
         }
+        .closableWindowToolbar(id: "table-template-manager")
     }
 
     private var paginationControls: some View {

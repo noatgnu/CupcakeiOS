@@ -105,6 +105,7 @@ enum RecordingMode: String, CaseIterable, Identifiable {
 
 struct RecordMediaAnnotationSheet: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(AppSession.self) private var appSession
 
     let onSaveLocally: (RecordingMode, URL, String?, String?, String?) async throws -> Void
     let onSaved: () -> Void
@@ -196,7 +197,7 @@ struct RecordMediaAnnotationSheet: View {
                     }
                     .disabled(isRecording || hasRecordedFile)
                     .accessibilityIdentifier("spokenLanguagePicker")
-                    if !TranscriptionEngineFactory.makeEngine().supportsOnDeviceRecognition(languageCode: localeIdentifier) {
+                    if !TranscriptionEngineFactory.makeEngine(kind: appSession.transcriptionEngineOverride ?? TranscriptionEngineFactory.selectedEngineKind).supportsOnDeviceRecognition(languageCode: localeIdentifier) {
                         Text("On-device recognition isn't available for this language. Transcription will use network recognition instead, and requires an internet connection.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -299,7 +300,9 @@ struct RecordMediaAnnotationSheet: View {
                 }
             }
         }
+        #if os(macOS)
         .frame(minWidth: 380, minHeight: 460)
+        #endif
         #if os(iOS)
         .onAppear {
             availableInputs = audioRecorder.availableInputs()
@@ -386,7 +389,7 @@ struct RecordMediaAnnotationSheet: View {
             }
             guard let fileURL else { return }
             do {
-                let engine = TranscriptionEngineFactory.makeEngine()
+                let engine = TranscriptionEngineFactory.makeEngine(kind: appSession.transcriptionEngineOverride ?? TranscriptionEngineFactory.selectedEngineKind)
                 let vocabulary = TranscriptionVocabularyStore.currentTexts() + contextualVocabulary
                 let result = try await engine.transcribe(
                     fileURL: fileURL,

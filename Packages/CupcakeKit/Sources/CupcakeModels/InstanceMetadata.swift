@@ -11,6 +11,10 @@ public final class InstanceMetadata {
     public var email: String?
     public var firstName: String?
     public var lastName: String?
+    public var isForceOffline: Bool = false
+    public var appearanceOverrideRawValue: String?
+    public var transcriptionEngineOverrideRawValue: String?
+    public var defaultSDRFSchemaOverride: String?
 
     public init(
         singletonKey: String = "singleton",
@@ -20,7 +24,11 @@ public final class InstanceMetadata {
         username: String? = nil,
         email: String? = nil,
         firstName: String? = nil,
-        lastName: String? = nil
+        lastName: String? = nil,
+        isForceOffline: Bool = false,
+        appearanceOverrideRawValue: String? = nil,
+        transcriptionEngineOverrideRawValue: String? = nil,
+        defaultSDRFSchemaOverride: String? = nil
     ) {
         self.singletonKey = singletonKey
         self.currentUserID = currentUserID
@@ -30,5 +38,9 @@ public final class InstanceMetadata {
         self.email = email
         self.firstName = firstName
         self.lastName = lastName
+        self.isForceOffline = isForceOffline
+        self.appearanceOverrideRawValue = appearanceOverrideRawValue
+        self.transcriptionEngineOverrideRawValue = transcriptionEngineOverrideRawValue
+        self.defaultSDRFSchemaOverride = defaultSDRFSchemaOverride
     }
 }

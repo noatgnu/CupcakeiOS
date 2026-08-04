@@ -20,13 +20,8 @@ public actor ProtocolSyncService {
 
     public func refetchAll() async throws {
         guard let token = deviceToken() else { return }
-        let authorization = "DeviceToken \(token)"
-
-        var page: PaginatedResponse<ProtocolDTO> = try await apiClient.get("protocols/", authorizationHeader: authorization)
-        while true {
-            try await store.upsert(page.results)
-            guard let nextURLString = page.next, let nextURL = URL(string: nextURLString) else { break }
-            page = try await apiClient.get(absoluteURL: nextURL, authorizationHeader: authorization)
+        try await apiClient.fetchAllPages(path: "protocols/", authorizationHeader: "DeviceToken \(token)") { (dtos: [ProtocolDTO]) in
+            try await store.upsert(dtos)
         }
     }
 
@@ -143,6 +138,30 @@ public actor ProtocolSyncService {
         return dto
     }
 
+    public func fetchDetail(serverID: Int64) async throws -> ProtocolDTO {
+        guard let token = deviceToken() else {
+            throw ProtocolSyncError.noDeviceToken
+        }
+        let dto: ProtocolDTO = try await apiClient.get("protocols/\(serverID)/", authorizationHeader: "DeviceToken \(token)")
+        try await store.upsert([dto])
+        return dto
+    }
+
+    @discardableResult
+    public func updateAccess(serverID: Int64, editors: [Int64], viewers: [Int64]) async throws -> ProtocolDTO {
+        guard let token = deviceToken() else {
+            throw ProtocolSyncError.noDeviceToken
+        }
+        let dto: ProtocolDTO = try await apiClient.send(
+            "protocols/\(serverID)/",
+            method: .patch,
+            body: UpdateProtocolAccessRequest(editors: editors, viewers: viewers),
+            authorizationHeader: "DeviceToken \(token)"
+        )
+        try await store.upsert([dto])
+        return dto
+    }
+
     public func delete(serverID: Int64) async throws {
         guard let token = deviceToken() else {
             throw ProtocolSyncError.noDeviceToken
@@ -228,8 +247,21 @@ public enum ProtocolListFilter: String, Sendable {
 @ModelActor
 actor ProtocolStore {
     func upsert(_ dtos: [ProtocolDTO]) throws {
+        guard !dtos.isEmpty else { return }
+
+        let protocolServerIDs = Set(dtos.map { Optional($0.id) })
+        let existingProtocols = try modelContext.fetch(
+            FetchDescriptor<CachedProtocol>(predicate: #Predicate { protocolServerIDs.contains($0.serverID) })
+        )
+        var protocolsByServerID: [Int64: CachedProtocol] = [:]
+        for cachedProtocol in existingProtocols {
+            if let serverID = cachedProtocol.serverID {
+                protocolsByServerID[serverID] = cachedProtocol
+            }
+        }
+
         for dto in dtos {
-            upsert(dto)
+            upsert(dto, existing: protocolsByServerID[dto.id])
         }
         try modelContext.save()
     }
@@ -259,6 +291,9 @@ actor ProtocolStore {
         cachedProtocol.protocolDescription = dto.protocolDescription
         cachedProtocol.enabled = dto.enabled
         cachedProtocol.updatedAt = Date.parsedISO8601(dto.updatedAt, fallback: cachedProtocol.updatedAt)
+        cachedProtocol.ownerServerID = dto.owner
+        cachedProtocol.editorServerIDs = dto.editors
+        cachedProtocol.viewerServerIDs = dto.viewers
         try modelContext.save()
     }
 
@@ -348,12 +383,8 @@ actor ProtocolStore {
         try modelContext.save()
     }
 
-    private func upsert(_ dto: ProtocolDTO) {
-        let protocolServerID = dto.id
-        let existingProtocols = try? modelContext.fetch(
-            FetchDescriptor<CachedProtocol>(predicate: #Predicate { $0.serverID == protocolServerID })
-        )
-        let cachedProtocol = existingProtocols?.first ?? {
+    private func upsert(_ dto: ProtocolDTO, existing: CachedProtocol? = nil) {
+        let cachedProtocol = existing ?? {
             let created = CachedProtocol(
                 serverID: dto.id,
                 protocolTitle: dto.protocolTitle,
@@ -368,6 +399,9 @@ actor ProtocolStore {
         cachedProtocol.protocolDescription = dto.protocolDescription
         cachedProtocol.enabled = dto.enabled
         cachedProtocol.updatedAt = Date.parsedISO8601(dto.updatedAt, fallback: cachedProtocol.updatedAt)
+        cachedProtocol.ownerServerID = dto.owner
+        cachedProtocol.editorServerIDs = dto.editors
+        cachedProtocol.viewerServerIDs = dto.viewers
 
         for sectionDTO in dto.sections {
             upsert(sectionDTO, into: cachedProtocol)

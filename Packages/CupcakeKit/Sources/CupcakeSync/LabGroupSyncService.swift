@@ -20,13 +20,8 @@ public actor LabGroupSyncService {
 
     public func refetchAll() async throws {
         guard let token = deviceToken() else { return }
-        let authorization = "DeviceToken \(token)"
-
-        var page: PaginatedResponse<LabGroupDTO> = try await apiClient.get("lab-groups/my_groups/", authorizationHeader: authorization)
-        while true {
-            try await store.upsert(page.results)
-            guard let nextURLString = page.next, let nextURL = URL(string: nextURLString) else { break }
-            page = try await apiClient.get(absoluteURL: nextURL, authorizationHeader: authorization)
+        try await apiClient.fetchAllPages(path: "lab-groups/my_groups/", authorizationHeader: "DeviceToken \(token)") { (dtos: [LabGroupDTO]) in
+            try await store.upsert(dtos)
         }
     }
 

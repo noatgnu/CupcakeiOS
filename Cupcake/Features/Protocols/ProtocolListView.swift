@@ -8,6 +8,7 @@ struct ProtocolListView: View {
     @Environment(AppSession.self) private var appSession
     @Environment(\.modelContext) private var modelContext
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.namespaceID) private var namespaceID
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Query(sort: \CachedProtocol.createdAt, order: .reverse) private var protocols: [CachedProtocol]
     @Query private var outboxEntries: [OutboxEntry]
@@ -23,6 +24,7 @@ struct ProtocolListView: View {
     @State private var listFilter: ProtocolListFilter?
     @State private var filteredServerIDs: Set<Int64> = []
     @State private var isLoadingFilter = false
+    @State private var searchText = ""
 
     private func pendingSyncLabel(for protocolModel: CachedProtocol) -> String? {
         guard protocolModel.serverID == nil else { return nil }
@@ -30,12 +32,25 @@ struct ProtocolListView: View {
         return appSession.isAuthenticated ? "Pending sync" : "Local only"
     }
 
+    private func accessRoleLabel(for protocolModel: CachedProtocol) -> String? {
+        guard let currentUserID = appSession.currentUserID, let ownerServerID = protocolModel.ownerServerID, ownerServerID != currentUserID else { return nil }
+        if protocolModel.editorServerIDs.contains(currentUserID) { return "Editor" }
+        if protocolModel.viewerServerIDs.contains(currentUserID) { return "Viewer" }
+        return "Group"
+    }
+
     private var displayedProtocols: [CachedProtocol] {
-        guard listFilter != nil else { return protocols }
-        return protocols.filter { protocolModel in
-            guard let serverID = protocolModel.serverID else { return false }
-            return filteredServerIDs.contains(serverID)
+        var result = protocols
+        if listFilter != nil {
+            result = result.filter { protocolModel in
+                guard let serverID = protocolModel.serverID else { return false }
+                return filteredServerIDs.contains(serverID)
+            }
         }
+        if !searchText.isEmpty {
+            result = result.filter { $0.protocolTitle.localizedCaseInsensitiveContains(searchText) }
+        }
+        return result
     }
 
     var body: some View {
@@ -49,7 +64,17 @@ struct ProtocolListView: View {
             ) {
                 ForEach(displayedProtocols) { protocolModel in
                     VStack(alignment: .leading) {
-                        Text(protocolModel.protocolTitle)
+                        HStack(spacing: 6) {
+                            Text(protocolModel.protocolTitle)
+                            if let role = accessRoleLabel(for: protocolModel) {
+                                Text(role)
+                                    .font(.caption2.bold())
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(.tertiary, in: Capsule())
+                                    .accessibilityIdentifier("protocolAccessRoleBadge_\(protocolModel.protocolTitle)")
+                            }
+                        }
                         if let label = pendingSyncLabel(for: protocolModel) {
                             Text(label)
                                 .font(.caption)
@@ -67,6 +92,7 @@ struct ProtocolListView: View {
                     } label: {
                         Label("New Protocol", systemImage: "plus")
                     }
+                    .labelStyle(.iconOnly)
                     .accessibilityIdentifier("newProtocolButton")
                 }
                 if appSession.isAuthenticated {
@@ -82,6 +108,7 @@ struct ProtocolListView: View {
                                 ProgressView()
                             } else {
                                 Label("Filter", systemImage: listFilter == nil ? "line.3.horizontal.decrease.circle" : "line.3.horizontal.decrease.circle.fill")
+                                    .labelStyle(.iconOnly)
                             }
                         }
                         .accessibilityIdentifier("protocolFilterMenu")
@@ -92,18 +119,20 @@ struct ProtocolListView: View {
                         } label: {
                             Label("Import from protocols.io…", systemImage: "square.and.arrow.down")
                         }
+                        .labelStyle(.iconOnly)
                         .accessibilityIdentifier("importFromProtocolsIOButton")
                     }
                     ToolbarItem {
                         Button {
                             if PlatformWindowPreference.prefersSeparateWindow {
-                                PlatformWindowPreference.openOrFocusWindow(id: "sync-issues", using: openWindow)
+                                PlatformWindowPreference.openOrFocusWindow(id: "sync-issues", namespaceID: namespaceID, using: openWindow)
                             } else {
                                 isShowingSyncIssues = true
                             }
                         } label: {
                             Label(outboxEntries.isEmpty ? "Sync Issues" : "Sync Issues (\(outboxEntries.count))", systemImage: outboxEntries.isEmpty ? "checkmark.icloud" : "exclamationmark.icloud")
                         }
+                        .labelStyle(.iconOnly)
                         .accessibilityIdentifier("syncIssuesButton")
                     }
                     ToolbarItem {
@@ -114,6 +143,7 @@ struct ProtocolListView: View {
                                 ProgressView()
                             } else {
                                 Label("Sync", systemImage: "arrow.clockwise")
+                                    .labelStyle(.iconOnly)
                             }
                         }
                         .disabled(isSyncing)
@@ -160,7 +190,9 @@ struct ProtocolListView: View {
                             }
                         }
                 }
+                #if os(macOS)
                 .frame(minWidth: 360, minHeight: 400)
+                #endif
             }
             .alert("Sync failed", isPresented: $isShowingError) {
                 Button("OK") {}
@@ -181,6 +213,12 @@ struct ProtocolListView: View {
                     emptyMessage: "Select a protocol to see its details."
                 ) { EmptyView() }
             }
+        } sidebarHeader: {
+            TextField("Search protocols", text: $searchText)
+                .textFieldStyle(.roundedBorder)
+                .accessibilityIdentifier("protocolSearchField")
+                .padding(.horizontal, 12)
+                .padding(.top, 8)
         }
         .onChange(of: selectedProtocolID) { _, newValue in
             guard let newValue, let protocolModel = protocols.first(where: { $0.clientID == newValue }) else {

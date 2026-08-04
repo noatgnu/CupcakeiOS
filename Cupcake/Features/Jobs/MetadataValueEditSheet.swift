@@ -32,6 +32,7 @@ struct MetadataCellEditTarget: Identifiable {
 }
 
 struct MetadataValueEditWindowID: Codable, Hashable {
+    let namespaceID: UUID
     let columnServerID: Int64
     let sampleIndex: Int?
     let projectServerID: Int64?
@@ -63,6 +64,7 @@ struct MetadataValueEditSheet: View {
     @Environment(\.dismissWindow) private var dismissWindow
     @Environment(\.openWindow) private var openWindow
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.namespaceID) private var namespaceID
     @Query private var labGroups: [CachedLabGroup]
 
     let column: CachedMetadataColumn
@@ -242,7 +244,7 @@ struct MetadataValueEditSheet: View {
                     }
                     Button("Manage My Favourites…") {
                         if PlatformWindowPreference.prefersSeparateWindow {
-                            PlatformWindowPreference.openOrFocusWindow(id: "favourites-manager", using: openWindow)
+                            PlatformWindowPreference.openOrFocusWindow(id: "favourites-manager", namespaceID: namespaceID, using: openWindow)
                         } else {
                             isShowingFavouritesManagementSheet = true
                         }
@@ -279,7 +281,9 @@ struct MetadataValueEditSheet: View {
                 }
             }
         }
+        #if os(macOS)
         .frame(minWidth: 360, minHeight: 480)
+        #endif
         .alert("Couldn't save value", isPresented: $isShowingError) {
             Button("OK") {}
         } message: {
@@ -301,7 +305,9 @@ struct MetadataValueEditSheet: View {
                         }
                     }
             }
+            #if os(macOS)
             .frame(minWidth: 380, minHeight: 440)
+            #endif
         }
     }
 

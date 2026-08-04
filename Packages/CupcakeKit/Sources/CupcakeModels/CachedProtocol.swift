@@ -11,6 +11,9 @@ public final class CachedProtocol {
     public var isLocallyAuthored: Bool
     public var createdAt: Date
     public var updatedAt: Date
+    public var ownerServerID: Int64?
+    public var editorServerIDs: [Int64]
+    public var viewerServerIDs: [Int64]
 
     @Relationship(deleteRule: .cascade, inverse: \CachedProtocolSection.protocolModel)
     public var sections: [CachedProtocolSection] = []
@@ -23,7 +26,10 @@ public final class CachedProtocol {
         enabled: Bool,
         isLocallyAuthored: Bool = false,
         createdAt: Date = Date(),
-        updatedAt: Date = Date()
+        updatedAt: Date = Date(),
+        ownerServerID: Int64? = nil,
+        editorServerIDs: [Int64] = [],
+        viewerServerIDs: [Int64] = []
     ) {
         self.clientID = clientID
         self.serverID = serverID
@@ -33,5 +39,8 @@ public final class CachedProtocol {
         self.isLocallyAuthored = isLocallyAuthored
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+        self.ownerServerID = ownerServerID
+        self.editorServerIDs = editorServerIDs
+        self.viewerServerIDs = viewerServerIDs
     }
 }

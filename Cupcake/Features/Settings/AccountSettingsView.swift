@@ -110,6 +110,13 @@ struct AccountSettingsView: View {
                 .disabled(isChangingPassword || currentPassword.isEmpty || newPassword.isEmpty || confirmPassword.isEmpty)
                 .accessibilityIdentifier("changePasswordButton")
             }
+
+            Section {
+                Button("Sign Out", role: .destructive) {
+                    Task { await appSession.signOut() }
+                }
+                .accessibilityIdentifier("signOutButton")
+            }
         }
         .formStyle(.grouped)
         .navigationTitle("Account")

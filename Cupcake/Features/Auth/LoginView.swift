@@ -4,6 +4,9 @@ import SwiftUI
 
 struct LoginView: View {
     @Environment(AppSession.self) private var appSession
+    #if os(macOS)
+    @Environment(\.openWindow) private var openWindow
+    #endif
 
     @State private var serverURLString = "https://cupcake.proteo.info/api/v1/"
     @State private var username = ""
@@ -12,6 +15,10 @@ struct LoginView: View {
     @State private var isSigningIn = false
     @State private var errorMessage: String?
     @State private var instancePendingRemoval: KnownInstance?
+    @State private var instancePendingWindowChoice: KnownInstance?
+    @State private var isShowingSignInWindowChoice = false
+    @State private var isShowingORCIDWindowChoice = false
+    @State private var isShowingContinueOfflineWindowChoice = false
 
     private var sortedKnownInstances: [KnownInstance] {
         appSession.knownInstances.sorted {
@@ -25,7 +32,15 @@ struct LoginView: View {
                 Section("Known Instances") {
                     ForEach(sortedKnownInstances) { instance in
                         Button {
+                            #if os(macOS)
+                            if NamespaceRegistry.shared.hasOtherOpenMainWindows {
+                                instancePendingWindowChoice = instance
+                            } else {
+                                appSession.switchToInstance(instance)
+                            }
+                            #else
                             appSession.switchToInstance(instance)
+                            #endif
                         } label: {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(instance.label)
@@ -101,7 +116,15 @@ struct LoginView: View {
             }
             Section {
                 Button {
+                    #if os(macOS)
+                    if NamespaceRegistry.shared.hasOtherOpenMainWindows {
+                        isShowingSignInWindowChoice = true
+                    } else {
+                        signIn()
+                    }
+                    #else
                     signIn()
+                    #endif
                 } label: {
                     if isSigningIn {
                         ProgressView()
@@ -111,10 +134,25 @@ struct LoginView: View {
                 }
                 .disabled(isSigningIn || serverURLString.isEmpty || username.isEmpty || password.isEmpty)
                 .accessibilityIdentifier("signInButton")
+                #if os(macOS)
+                .confirmationDialog("Open This Instance", isPresented: $isShowingSignInWindowChoice) {
+                    Button("Open Here") { signIn() }
+                    Button("Open in New Window") { openSignInInNewWindow() }
+                    Button("Cancel", role: .cancel) {}
+                }
+                #endif
             }
             Section {
                 Button {
+                    #if os(macOS)
+                    if NamespaceRegistry.shared.hasOtherOpenMainWindows {
+                        isShowingORCIDWindowChoice = true
+                    } else {
+                        signInWithORCID()
+                    }
+                    #else
                     signInWithORCID()
+                    #endif
                 } label: {
                     if isSigningIn {
                         ProgressView()
@@ -124,21 +162,49 @@ struct LoginView: View {
                 }
                 .disabled(isSigningIn || serverURLString.isEmpty)
                 .accessibilityIdentifier("signInWithOrcidButton")
+                #if os(macOS)
+                .confirmationDialog("Open This Instance", isPresented: $isShowingORCIDWindowChoice) {
+                    Button("Open Here") { signInWithORCID() }
+                    Button("Open in New Window") { openORCIDInNewWindow() }
+                    Button("Cancel", role: .cancel) {}
+                }
+                #endif
             }
             Section {
                 Button("Continue Offline") {
+                    #if os(macOS)
+                    if NamespaceRegistry.shared.hasOtherOpenMainWindows {
+                        isShowingContinueOfflineWindowChoice = true
+                    } else {
+                        appSession.continueOffline()
+                        appSession.checkForOntologyPreloadPrompt()
+                    }
+                    #else
                     appSession.continueOffline()
                     appSession.checkForOntologyPreloadPrompt()
+                    #endif
                 }
                 .disabled(isSigningIn)
                 .accessibilityIdentifier("continueOfflineButton")
+                #if os(macOS)
+                .confirmationDialog("Open Offline Notebook", isPresented: $isShowingContinueOfflineWindowChoice) {
+                    Button("Open Here") {
+                        appSession.continueOffline()
+                        appSession.checkForOntologyPreloadPrompt()
+                    }
+                    Button("Open in New Window") { openContinueOfflineInNewWindow() }
+                    Button("Cancel", role: .cancel) {}
+                }
+                #endif
             } footer: {
                 Text("Use Cupcake as a personal, local-only lab notebook with no server. Everything you create stays on this device until you sign in later.")
             }
         }
         .formStyle(.grouped)
         .navigationTitle("Cupcake")
+        #if os(macOS)
         .frame(minWidth: 320, minHeight: 320)
+        #endif
         .alert(
             "Forget \(instancePendingRemoval?.label ?? "this instance")?",
             isPresented: Binding(
@@ -158,7 +224,43 @@ struct LoginView: View {
                 Text("This deletes its local data and sign-in permanently. You'll need to sign in again to use it.")
             }
         }
+        #if os(macOS)
+        .confirmationDialog(
+            "Open \(instancePendingWindowChoice?.label ?? "")",
+            isPresented: Binding(
+                get: { instancePendingWindowChoice != nil },
+                set: { if !$0 { instancePendingWindowChoice = nil } }
+            ),
+            presenting: instancePendingWindowChoice
+        ) { instance in
+            Button("Open Here") { appSession.switchToInstance(instance) }
+            Button("Open in New Window") { openKnownInstanceInNewWindow(instance) }
+            Button("Cancel", role: .cancel) {}
+        }
+        #endif
     }
+
+    #if os(macOS)
+    private func openKnownInstanceInNewWindow(_ instance: KnownInstance) {
+        NamespaceRegistry.shared.enqueuePendingLaunchAction(.knownInstance(instance))
+        openWindow(id: "main")
+    }
+
+    private func openSignInInNewWindow() {
+        NamespaceRegistry.shared.enqueuePendingLaunchAction(.signIn(serverURLString: serverURLString, username: username, password: password))
+        openWindow(id: "main")
+    }
+
+    private func openORCIDInNewWindow() {
+        NamespaceRegistry.shared.enqueuePendingLaunchAction(.signInWithORCID(serverURLString: serverURLString))
+        openWindow(id: "main")
+    }
+
+    private func openContinueOfflineInNewWindow() {
+        NamespaceRegistry.shared.enqueuePendingLaunchAction(.continueOffline)
+        openWindow(id: "main")
+    }
+    #endif
 
     private func signIn() {
         errorMessage = nil

@@ -44,6 +44,7 @@ struct ExplorerList<EmptyContent: View, RowContent: View>: View {
                 rows()
             }
         }
+        .listStyle(.plain)
         .accessibilityIdentifier(accessibilityIdentifier ?? "")
         .contentMargins(.top, 12, for: .scrollContent)
     }
@@ -81,6 +82,7 @@ struct SelectableExplorerList<SelectionValue: Hashable, EmptyContent: View, RowC
                 rows()
             }
         }
+        .listStyle(.plain)
         .contentMargins(.top, 12, for: .scrollContent)
     }
 }

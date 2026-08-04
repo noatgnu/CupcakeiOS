@@ -8,6 +8,7 @@ import SwiftUI
 struct RootNavigationView: View {
     @Environment(AppSession.self) private var appSession
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.namespaceID) private var namespaceID
     let ontologyStore: ModelContainer
 
     @State private var isPreloadingOntologyData = false
@@ -82,7 +83,6 @@ struct RootNavigationView: View {
                 .sheet(isPresented: $isShowingSettings) {
                     SettingsView()
                         .modelContainer(ontologyStore)
-                        .frame(minWidth: 400, minHeight: 500)
                 }
                 #endif
             } else {
@@ -162,7 +162,7 @@ struct RootNavigationView: View {
     private var floatingTabSelector: some View {
         HStack(spacing: 10) {
             ForEach(Tab.allCases, id: \.self) { tab in
-                capsuleButton(systemImage: tab.systemImage, label: tab.label, isSelected: selectedTab == tab) {
+                capsuleButton(systemImage: tab.systemImage, label: tab.label, accessibilityIdentifier: "tab_\(tab.label)", isSelected: selectedTab == tab) {
                     selectedTab = tab
                 }
             }
@@ -171,7 +171,7 @@ struct RootNavigationView: View {
                 .frame(height: 24)
             capsuleButton(systemImage: "gearshape", label: "Settings", accessibilityIdentifier: "settingsButton", isSelected: false) {
                 if PlatformWindowPreference.prefersSeparateWindow {
-                    PlatformWindowPreference.openOrFocusWindow(id: "settings", using: openWindow)
+                    PlatformWindowPreference.openOrFocusWindow(id: "settings", namespaceID: namespaceID, using: openWindow)
                 } else {
                     isShowingSettings = true
                 }

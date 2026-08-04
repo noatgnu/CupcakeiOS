@@ -63,7 +63,9 @@ struct NewLabGroupSheet: View {
                 }
             }
         }
+        #if os(macOS)
         .frame(minWidth: 360, minHeight: 360)
+        #endif
     }
 
     private func save() async {

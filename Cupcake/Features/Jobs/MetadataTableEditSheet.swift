@@ -80,7 +80,9 @@ struct MetadataTableEditSheet: View {
                 }
             }
         }
+        #if os(macOS)
         .frame(minWidth: 380, minHeight: 460)
+        #endif
         .alert("Couldn't save table", isPresented: $isShowingError) {
             Button("OK") {}
         } message: {

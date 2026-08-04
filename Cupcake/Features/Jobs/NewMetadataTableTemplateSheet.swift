@@ -99,7 +99,9 @@ struct NewMetadataTableTemplateSheet: View {
                 }
             }
         }
+        #if os(macOS)
         .frame(minWidth: 380, minHeight: 420)
+        #endif
         .alert("Couldn't create template", isPresented: $isShowingError) {
             Button("OK") {}
         } message: {

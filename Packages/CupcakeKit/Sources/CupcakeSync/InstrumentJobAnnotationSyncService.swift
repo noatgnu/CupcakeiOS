@@ -23,16 +23,12 @@ public actor InstrumentJobAnnotationSyncService {
 
     public func refetchAnnotations(jobServerID: Int64, jobClientID: UUID) async throws {
         guard let token = deviceToken() else { return }
-        let authorization = "DeviceToken \(token)"
-
-        var page: PaginatedResponse<InstrumentJobAnnotationDTO> = try await apiClient.get(
-            "instrument-job-annotations/?instrument_job=\(jobServerID)",
-            authorizationHeader: authorization
-        )
-        while true {
-            try await store.upsert(page.results, jobClientID: jobClientID)
-            guard let nextURLString = page.next, let nextURL = URL(string: nextURLString) else { break }
-            page = try await apiClient.get(absoluteURL: nextURL, authorizationHeader: authorization)
+        try await apiClient.fetchAllPages(
+            path: "instrument-job-annotations/",
+            query: [URLQueryItem(name: "instrument_job", value: String(jobServerID))],
+            authorizationHeader: "DeviceToken \(token)"
+        ) { (dtos: [InstrumentJobAnnotationDTO]) in
+            try await store.upsert(dtos, jobClientID: jobClientID)
         }
     }
 

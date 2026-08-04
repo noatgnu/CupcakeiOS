@@ -151,7 +151,9 @@ struct AddAnnotationSheet: View {
                 }
             }
         }
+        #if os(macOS)
         .frame(minWidth: 320, minHeight: 360)
+        #endif
     }
 
     private var textForm: some View {
@@ -176,7 +178,9 @@ struct AddAnnotationSheet: View {
                 }
             }
         }
+        #if os(macOS)
         .frame(minWidth: 320, minHeight: 240)
+        #endif
     }
 
     private func saveRecordedMedia(mode: RecordingMode, url: URL, transcription: String?, language: String?, translation: String?) async throws {
@@ -197,6 +201,8 @@ struct AddAnnotationSheet: View {
                     }
                 }
         }
+        #if os(macOS)
         .frame(minWidth: 320, minHeight: 200)
+        #endif
     }
 }

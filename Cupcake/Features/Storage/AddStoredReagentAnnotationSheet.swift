@@ -59,7 +59,9 @@ struct AddStoredReagentAnnotationSheet: View {
                 }
             }
         }
+        #if os(macOS)
         .frame(minWidth: 360, minHeight: 320)
+        #endif
         .task {
             await loadFolders()
         }

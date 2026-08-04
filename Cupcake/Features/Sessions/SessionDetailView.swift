@@ -68,6 +68,7 @@ struct VideoAnnotationButton: View {
 }
 
 struct SessionDetailWindowID: Codable, Hashable {
+    let namespaceID: UUID
     let sessionClientID: UUID
 }
 
@@ -101,6 +102,7 @@ struct SessionDetailWindowContent: View {
 }
 
 struct StepSessionWindowID: Codable, Hashable {
+    let namespaceID: UUID
     let sessionClientID: UUID
     let stepClientID: UUID
 }
@@ -141,6 +143,7 @@ struct StepSessionWindowContent: View {
 struct SessionDetailView: View {
     @Environment(AppSession.self) private var appSession
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.namespaceID) private var namespaceID
     @Environment(\.modelContext) private var modelContext
     let sessionClientID: UUID
     let protocols: [CachedProtocol]
@@ -170,6 +173,7 @@ struct SessionDetailView: View {
     @State private var isShowingEditSheet = false
     @State private var isDeleting = false
     @State private var isRefreshing = false
+    @State private var isShowingAccessSheet = false
 
     var focusedStepClientID: UUID? = nil
 
@@ -199,6 +203,11 @@ struct SessionDetailView: View {
 
     private var sessionServerID: Int64? {
         sessions.first(where: { $0.clientID == sessionClientID })?.serverID
+    }
+
+    private var isOwner: Bool {
+        guard let currentSession, currentSession.serverID != nil, let ownerServerID = currentSession.ownerServerID else { return false }
+        return ownerServerID == appSession.currentUserID
     }
 
     private func rowHighlightColor(for annotationServerID: Int64?) -> Color? {
@@ -299,9 +308,10 @@ struct SessionDetailView: View {
                 ForEach(sessionAnnotations) { annotation in
                     Group {
                         if annotation.annotationType == "image" {
-                            PhotoAnnotationPreview(loadData: { try await sessionAnnotationFile(clientID: annotation.clientID) })
+                            PhotoAnnotationPreview(annotationClientID: annotation.clientID.uuidString, loadData: { try await sessionAnnotationFile(clientID: annotation.clientID) })
                         } else if annotation.annotationType == "video" {
                             VideoAnnotationPreview(
+                                annotationClientID: annotation.clientID.uuidString,
                                 annotationServerID: annotation.serverID,
                                 transcription: annotation.transcription,
                                 translation: annotation.translation,
@@ -316,9 +326,10 @@ struct SessionDetailView: View {
                                 loadData: { try await sessionAnnotationFile(clientID: annotation.clientID) }
                             )
                         } else if annotation.annotationType == "sketch" {
-                            SketchAnnotationPreview(loadData: { try await sessionAnnotationFile(clientID: annotation.clientID) })
+                            SketchAnnotationPreview(annotationClientID: annotation.clientID.uuidString, loadData: { try await sessionAnnotationFile(clientID: annotation.clientID) })
                         } else {
                             AudioAnnotationPreview(
+                                annotationClientID: annotation.clientID.uuidString,
                                 annotationServerID: annotation.serverID,
                                 transcription: annotation.transcription,
                                 translation: annotation.translation,
@@ -407,7 +418,7 @@ struct SessionDetailView: View {
                             if focusedStepClientID == nil, PlatformWindowPreference.prefersSeparateWindow {
                                 Spacer()
                                 Button {
-                                    openWindow(id: "step-session-window", value: StepSessionWindowID(sessionClientID: sessionClientID, stepClientID: step.clientID))
+                                    openWindow(id: "step-session-window", value: StepSessionWindowID(namespaceID: namespaceID, sessionClientID: sessionClientID, stepClientID: step.clientID))
                                 } label: {
                                     Image(systemName: "macwindow.badge.plus")
                                 }
@@ -428,6 +439,7 @@ struct SessionDetailView: View {
                         Group {
                             if annotation.annotationType == "audio" {
                                 AudioAnnotationPreview(
+                                    annotationClientID: annotation.clientID.uuidString,
                                     annotationServerID: annotation.serverID,
                                     transcription: annotation.transcription,
                                     translation: annotation.translation,
@@ -442,9 +454,10 @@ struct SessionDetailView: View {
                                     loadData: { try await stepAnnotationFile(clientID: annotation.clientID) }
                                 )
                             } else if annotation.annotationType == "image" {
-                                PhotoAnnotationPreview(loadData: { try await stepAnnotationFile(clientID: annotation.clientID) })
+                                PhotoAnnotationPreview(annotationClientID: annotation.clientID.uuidString, loadData: { try await stepAnnotationFile(clientID: annotation.clientID) })
                             } else if annotation.annotationType == "video" {
                                 VideoAnnotationPreview(
+                                    annotationClientID: annotation.clientID.uuidString,
                                     annotationServerID: annotation.serverID,
                                     transcription: annotation.transcription,
                                     translation: annotation.translation,
@@ -459,7 +472,7 @@ struct SessionDetailView: View {
                                     loadData: { try await stepAnnotationFile(clientID: annotation.clientID) }
                                 )
                             } else if annotation.annotationType == "sketch" {
-                                SketchAnnotationPreview(loadData: { try await stepAnnotationFile(clientID: annotation.clientID) })
+                                SketchAnnotationPreview(annotationClientID: annotation.clientID.uuidString, loadData: { try await stepAnnotationFile(clientID: annotation.clientID) })
                             } else if annotation.annotationType == "calculator" {
                                 CalculatorAnnotationPreview(annotationText: annotation.annotationText)
                             } else if annotation.annotationType == "mcalculator" {
@@ -586,7 +599,7 @@ struct SessionDetailView: View {
             if focusedStepClientID == nil, PlatformWindowPreference.prefersSeparateWindow {
                 ToolbarItem {
                     Button {
-                        openWindow(id: "session-detail-window", value: SessionDetailWindowID(sessionClientID: sessionClientID))
+                        openWindow(id: "session-detail-window", value: SessionDetailWindowID(namespaceID: namespaceID, sessionClientID: sessionClientID))
                     } label: {
                         Label("Open in New Window", systemImage: "macwindow.badge.plus")
                     }
@@ -615,6 +628,16 @@ struct SessionDetailView: View {
                     }
                     .accessibilityIdentifier("editSessionButton")
                 }
+                if isOwner {
+                    ToolbarItem {
+                        Button {
+                            isShowingAccessSheet = true
+                        } label: {
+                            Label("Manage Access", systemImage: "person.2.badge.gearshape")
+                        }
+                        .accessibilityIdentifier("manageSessionAccessButton")
+                    }
+                }
                 ToolbarItem {
                     Button(role: .destructive) {
                         Task { await deleteSession() }
@@ -633,6 +656,11 @@ struct SessionDetailView: View {
         .sheet(isPresented: $isShowingEditSheet) {
             if let currentSession {
                 EditSessionSheet(session: currentSession)
+            }
+        }
+        .sheet(isPresented: $isShowingAccessSheet) {
+            if let sessionServerID {
+                AccessManagementView(target: .session(serverID: sessionServerID))
             }
         }
         .sheet(item: $annotationTargetStep) { step in

@@ -65,10 +65,12 @@ struct AddStepSheet: View {
                         dismiss()
                     }
                     .disabled(description.isEmpty)
-                    .accessibilityIdentifier("addTextSheetSaveButton")
+                    .accessibilityIdentifier("addStepSaveButton")
                 }
             }
         }
+        #if os(macOS)
         .frame(minWidth: 360, minHeight: 420)
+        #endif
     }
 }

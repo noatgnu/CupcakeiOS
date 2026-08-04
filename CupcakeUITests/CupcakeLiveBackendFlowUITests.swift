@@ -13,6 +13,11 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         continueAfterFailure = false
     }
 
+    override func tearDown() {
+        XCUIApplication(bundleIdentifier: "info.proteo.cupcake").terminate()
+        super.tearDown()
+    }
+
     @MainActor
     func testSignInAndCreateProtocolSyncsImmediately() throws {
         let app = XCUIApplication()
@@ -20,7 +25,7 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         app.launch()
 
         let serverURLField = app.textFields["serverURLField"]
-        XCTAssertTrue(serverURLField.waitForExistence(timeout: 5))
+        XCTAssertTrue(serverURLField.waitForExistence(timeout: 10))
         replaceText(in: serverURLField, with: "http://127.0.0.1:8002/api/v1/", in: app)
 
         XCTAssertEqual(serverURLField.value as? String, "http://127.0.0.1:8002/api/v1/", "The server URL field should contain exactly the pasted text, not a mix of old and new")
@@ -34,6 +39,7 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         passwordField.typeText("testuser123")
 
         app.buttons["signInButton"].tap()
+        dismissSavePasswordPromptIfPresent()
 
         tapToolbarButton("newProtocolButton", label: "New Protocol", in: app)
 
@@ -52,11 +58,47 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         }
 
         let matchingRows = app.staticTexts.matching(NSPredicate(format: "label == %@ OR value == %@", protocolTitle, protocolTitle))
-        XCTAssertTrue(matchingRows.firstMatch.waitForExistence(timeout: 30), "The newly-created protocol should appear in the list")
+        XCTAssertTrue(matchingRows.firstMatch.waitForExistence(timeout: 10), "The newly-created protocol should appear in the list")
         matchingRows.firstMatch.tap()
 
         XCTAssertFalse(elementContaining("Pending sync", in: app).exists, "A protocol created while signed in against a reachable backend should sync immediately, not queue")
         XCTAssertFalse(elementContaining("Local only", in: app).exists, "\"Local only\" is standalone-mode-only phrasing, shouldn't appear when signed in")
+    }
+
+    @MainActor
+    func testSelectingExistingProtocolRowShowsCorrectDetail() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing-reset-state"]
+        app.launch()
+        signIn(app)
+        waitForSignInSyncToFinish(in: app)
+
+        tapTab("Protocols", in: app, timeout: 10)
+
+        let titlePredicate = NSPredicate(format: "label CONTAINS %@", "Test")
+        var candidateTitle: String?
+        let deadline = Date().addingTimeInterval(10)
+        while Date() < deadline, candidateTitle == nil {
+            let matches = app.staticTexts.matching(titlePredicate)
+            for index in 0..<min(matches.count, 10) {
+                let element = matches.element(boundBy: index)
+                if element.exists, element.label.count > 5 {
+                    candidateTitle = element.label
+                    break
+                }
+            }
+            if candidateTitle == nil { Thread.sleep(forTimeInterval: 0.3) }
+        }
+
+        XCTAssertNotNil(candidateTitle, "There should be at least one existing protocol row already visible in the list without needing to create one")
+        guard let candidateTitle else { return }
+
+        let existingRow = app.staticTexts[candidateTitle]
+        XCTAssertTrue(existingRow.exists, "The chosen existing row should be tappable")
+        existingRow.tap()
+
+        let detailTitleShown = waitForTextAppearing(candidateTitle, in: app, timeout: 10)
+        XCTAssertTrue(detailTitleShown, "Tapping an existing (not-just-created) protocol row \"\(candidateTitle)\" should show its own detail, not stay blank or show a different protocol")
     }
 
     @MainActor
@@ -69,21 +111,20 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         let bannerPredicate = NSPredicate(format: "identifier == %@", "syncProgressBanner")
         var sawPullBanner = false
         var sawPullLabel = ""
+        let bannerQuery = app.staticTexts.matching(bannerPredicate)
         let deadline = Date().addingTimeInterval(20)
         while Date() < deadline {
-            let candidates = [app.otherElements.matching(bannerPredicate), app.staticTexts.matching(bannerPredicate)]
-            for query in candidates {
-                let element = query.firstMatch
-                if element.exists {
-                    let label = element.label
-                    if label.hasPrefix("Pulling") {
-                        sawPullBanner = true
-                        sawPullLabel = label
-                    }
+            let element = bannerQuery.firstMatch
+            if element.exists {
+                let valueText = (element.value as? String) ?? ""
+                let text = !valueText.isEmpty ? valueText : element.label
+                if text.hasPrefix("Pulling") {
+                    sawPullBanner = true
+                    sawPullLabel = text
+                    break
                 }
             }
-            if sawPullBanner { break }
-            Thread.sleep(forTimeInterval: 0.05)
+            Thread.sleep(forTimeInterval: 0.1)
         }
 
         XCTAssertTrue(sawPullBanner, "The sync-progress banner should show a \"Pulling …\" label at some point during the automatic sign-in sync against a real backend with real data to pull")
@@ -92,10 +133,10 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         }
 
         let bannerDeadline = Date().addingTimeInterval(30)
-        while Date() < bannerDeadline, app.otherElements.matching(bannerPredicate).firstMatch.exists || app.staticTexts.matching(bannerPredicate).firstMatch.exists {
+        while Date() < bannerDeadline, bannerQuery.firstMatch.exists {
             Thread.sleep(forTimeInterval: 0.2)
         }
-        XCTAssertFalse(app.otherElements.matching(bannerPredicate).firstMatch.exists, "The banner should disappear once syncAll() finishes, not stay stuck")
+        XCTAssertFalse(bannerQuery.firstMatch.exists, "The banner should disappear once syncAll() finishes, not stay stuck")
     }
 
     @MainActor
@@ -120,10 +161,10 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         let localRow = app.staticTexts[protocolTitle]
         XCTAssertTrue(localRow.waitForExistence(timeout: 5), "The locally-created protocol should appear while still in standalone mode")
 
-        tapToolbarButton("exitOfflineModeButton", label: "Exit Offline Mode", in: app)
+        tapToolbarButton("exitOfflineModeButton", label: "Exit Offline Mode", in: app, overflowIndex: 0)
 
         let serverURLField = app.textFields["serverURLField"]
-        XCTAssertTrue(serverURLField.waitForExistence(timeout: 5))
+        XCTAssertTrue(serverURLField.waitForExistence(timeout: 10))
         replaceText(in: serverURLField, with: "http://127.0.0.1:8002/api/v1/", in: app)
 
         let usernameField = app.textFields["usernameField"]
@@ -135,12 +176,14 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         passwordField.typeText("testuser123")
 
         app.buttons["signInButton"].tap()
+        dismissSavePasswordPromptIfPresent()
 
-        let importButton = app.buttons["importLocalNotebookButton"]
-        XCTAssertTrue(importButton.waitForExistence(timeout: 15), "Signing in with local-only content should offer to import it")
+        let importButton = app.buttons.matching(identifier: "importLocalNotebookButton").firstMatch
+        XCTAssertTrue(importButton.waitForExistence(timeout: 10), "Signing in with local-only content should offer to import it")
         importButton.tap()
+        waitForSignInSyncToFinish(in: app)
 
-        let importedRow = waitForMatch(NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", protocolTitle, protocolTitle), in: app.staticTexts, timeout: 30)
+        let importedRow = waitForMatch(NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", protocolTitle, protocolTitle), in: app.staticTexts, timeout: 10)
         XCTAssertTrue(importedRow.exists, "The imported protocol should appear in the list once synced")
         importedRow.tap()
 
@@ -158,23 +201,23 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         app.launch()
         signIn(app)
 
-        tapTab("Jobs", in: app, timeout: 30)
+        tapTab("Jobs", in: app, timeout: 10)
 
-        findAndTapJobRow(named: jobName, in: app, timeout: 60)
+        findAndTapJobRow(named: jobName, in: app, timeout: 10)
 
         let createFromTemplateButtonForEdit = app.buttons["createMetadataFromTemplateButton"]
         scrollDownUntilVisible(createFromTemplateButtonForEdit, in: app)
-        XCTAssertTrue(createFromTemplateButtonForEdit.waitForExistence(timeout: 15), "Creating a metadata table should become available once a lab group is assigned")
+        XCTAssertTrue(createFromTemplateButtonForEdit.waitForExistence(timeout: 10), "Creating a metadata table should become available once a lab group is assigned")
         createFromTemplateButtonForEdit.tap()
 
-        selectPickerOption("templateCategoryFilterPicker", option: "All", in: app)
+        selectPickerOption("templateCategoryFilterPicker", option: "All", in: app, menuItemCount: 4, optionIndex: 0)
         let templateSearchFieldForEdit = app.textFields["templateSearchField"]
         XCTAssertTrue(templateSearchFieldForEdit.waitForExistence(timeout: 10))
         templateSearchFieldForEdit.tap()
         templateSearchFieldForEdit.typeText(seed.templateName)
 
         let templateRowForEdit = app.buttons["metadataTemplateRow_\(seed.templateName)"]
-        XCTAssertTrue(templateRowForEdit.waitForExistence(timeout: 15), "The template created via the API should appear once synced and filtered by search")
+        XCTAssertTrue(templateRowForEdit.waitForExistence(timeout: 10), "The template created via the API should appear once synced and filtered by search")
         templateRowForEdit.tap()
 
         let sampleCountFieldForEdit = app.textFields["metadataSampleCountField"]
@@ -193,15 +236,22 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         let newValue = "SN-\(Int(Date().timeIntervalSince1970))"
         replaceText(in: valueField, with: newValue, in: app)
 
-        let saveMetadataValueButton = app.buttons["saveMetadataValueButton"]
-        XCTAssertTrue(saveMetadataValueButton.waitForExistence(timeout: 10))
-        saveMetadataValueButton.tap()
+        tapToolbarButton("saveMetadataValueButton", label: "Save", in: app, window: "metadata-value-editor", overflowIndex: 1, timeout: 10)
 
-        let errorAlert = app.alerts["Couldn't save value"]
-        XCTAssertFalse(errorAlert.waitForExistence(timeout: 3), "Saving a metadata value against a reachable backend shouldn't show an error")
+        let errorAlert = waitForAlertOrSheet(in: app, timeout: 3)
+        if errorAlert.exists {
+            XCTFail("Saving a metadata value against a reachable backend shouldn't show an error: \(errorAlert.staticTexts.allElementsBoundByIndex.map(\.label))")
+        }
 
-        let updatedValueElement = waitForMatch(NSPredicate(format: "label CONTAINS %@", newValue), in: app.staticTexts, timeout: 10)
-        XCTAssertTrue(updatedValueElement.exists, "The updated value should appear in the column list after saving")
+        let editorWindow = app.windows.matching(NSPredicate(format: "identifier CONTAINS %@", "metadata-value-editor")).firstMatch
+        let editorDeadline = Date().addingTimeInterval(10)
+        while editorWindow.exists, Date() < editorDeadline {
+            Thread.sleep(forTimeInterval: 0.3)
+        }
+        XCTAssertFalse(editorWindow.exists, "The Edit Value window should close on its own once the save genuinely completes")
+
+        scrollDownUntilVisible(columnRow, in: app, window: "main-AppWindow")
+        XCTAssertTrue(waitForTextAppearing(newValue, in: app, timeout: 10), "The updated value should appear in the column list after saving")
     }
 
     @MainActor
@@ -214,22 +264,23 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         app.launch()
         signIn(app)
 
-        tapTab("Jobs", in: app, timeout: 30)
-        findAndTapJobRow(named: jobName, in: app, timeout: 60)
+        tapTab("Jobs", in: app, timeout: 10)
+        findAndTapJobRow(named: jobName, in: app, timeout: 10)
 
         let createFromTemplateButton = app.buttons["createMetadataFromTemplateButton"]
         scrollDownUntilVisible(createFromTemplateButton, in: app)
-        XCTAssertTrue(createFromTemplateButton.waitForExistence(timeout: 15), "Creating a metadata table should become available once a lab group is assigned")
+        XCTAssertTrue(createFromTemplateButton.waitForExistence(timeout: 10), "Creating a metadata table should become available once a lab group is assigned")
         createFromTemplateButton.tap()
+        waitForSignInSyncToFinish(in: app)
 
-        selectPickerOption("templateCategoryFilterPicker", option: "All", in: app)
+        selectPickerOption("templateCategoryFilterPicker", option: "All", in: app, menuItemCount: 4, optionIndex: 0)
         let templateSearchField = app.textFields["templateSearchField"]
         XCTAssertTrue(templateSearchField.waitForExistence(timeout: 10))
         templateSearchField.tap()
         templateSearchField.typeText(seed.templateName)
 
         let templateRow = app.buttons["metadataTemplateRow_\(seed.templateName)"]
-        XCTAssertTrue(templateRow.waitForExistence(timeout: 15), "The template created via the API should appear once synced and filtered by search")
+        XCTAssertTrue(templateRow.waitForExistence(timeout: 10), "The template created via the API should appear once synced and filtered by search")
         templateRow.tap()
 
         let sampleCountField = app.textFields["metadataSampleCountField"]
@@ -284,16 +335,23 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         XCTAssertTrue(taField.waitForExistence(timeout: 5))
         XCTAssertEqual(taField.value as? String, "T,S", "Applying the combined specification should fill TA with both real residues, comma-joined")
 
-        let saveButton = app.buttons["saveMetadataValueButton"]
-        XCTAssertTrue(saveButton.waitForExistence(timeout: 5))
-        saveButton.tap()
+        tapToolbarButton("saveMetadataValueButton", label: "Save", in: app, window: "metadata-value-editor", overflowIndex: 1, timeout: 5)
 
-        let errorAlert = app.alerts["Couldn't save value"]
-        XCTAssertFalse(errorAlert.waitForExistence(timeout: 3), "Saving a modification-parameters value against a reachable backend shouldn't show an error")
+        let errorAlert = waitForAlertOrSheet(in: app, timeout: 3)
+        if errorAlert.exists {
+            XCTFail("Saving a modification-parameters value against a reachable backend shouldn't show an error: \(errorAlert.staticTexts.allElementsBoundByIndex.map(\.label))")
+        }
 
-        let savedValueElement = waitForMatch(NSPredicate(format: "label CONTAINS %@", "NT=Phospho"), in: app.staticTexts, timeout: 10)
-        XCTAssertTrue(savedValueElement.exists, "The saved NT=Phospho;AC=UNIMOD:21;...;TA=T,S;... value should appear in the column list after saving")
-        XCTAssertTrue(savedValueElement.label.contains("TA=T,S"), "The saved value should include the applied specification's target amino acids")
+        let editorWindow = app.windows.matching(NSPredicate(format: "identifier CONTAINS %@", "metadata-value-editor")).firstMatch
+        let editorDeadline = Date().addingTimeInterval(10)
+        while editorWindow.exists, Date() < editorDeadline {
+            Thread.sleep(forTimeInterval: 0.3)
+        }
+        XCTAssertFalse(editorWindow.exists, "The Edit Value window should close on its own once the save genuinely completes")
+
+        scrollDownUntilVisible(columnRow, in: app, window: "main-AppWindow")
+        XCTAssertTrue(waitForTextAppearing("NT=Phospho", in: app, timeout: 10), "The saved NT=Phospho;AC=UNIMOD:21;...;TA=T,S;... value should appear in the column list after saving")
+        XCTAssertTrue(waitForTextAppearing("TA=T,S", in: app, timeout: 5), "The saved value should include the applied specification's target amino acids")
     }
 
     @MainActor
@@ -306,7 +364,7 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         app.launch()
 
         let serverURLField = app.textFields["serverURLField"]
-        XCTAssertTrue(serverURLField.waitForExistence(timeout: 5))
+        XCTAssertTrue(serverURLField.waitForExistence(timeout: 10))
         replaceText(in: serverURLField, with: "http://127.0.0.1:8002/api/v1/", in: app)
 
         let usernameField = app.textFields["usernameField"]
@@ -318,9 +376,12 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         passwordField.typeText("testuser123")
 
         app.buttons["signInButton"].tap()
+        dismissSavePasswordPromptIfPresent()
+        waitForSignInSyncToFinish(in: app)
 
-        tapTab("Jobs", in: app, timeout: 30)
+        tapTab("Jobs", in: app, timeout: 10)
         tapToolbarButton("manageMetadataTableTemplatesButton", label: "Table Templates", in: app, timeout: 10)
+        waitForSignInSyncToFinish(in: app)
 
         let searchField = app.textFields.matching(identifier: "myTableTemplateSearchField").firstMatch
         XCTAssertTrue(searchField.waitForExistence(timeout: 10))
@@ -328,7 +389,7 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         searchField.typeText(templateName)
 
         let templateRow = app.buttons.matching(identifier: "myTableTemplateRow_\(templateName)").firstMatch
-        XCTAssertTrue(templateRow.waitForExistence(timeout: 15), "The blank template created via the API should appear in the management list")
+        XCTAssertTrue(templateRow.waitForExistence(timeout: 10), "The blank template created via the API should appear in the management list")
         Thread.sleep(forTimeInterval: 1)
         templateRow.tap()
 
@@ -341,12 +402,15 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         let renamedName = templateName + " Renamed"
         replaceText(in: nameField, with: renamedName, in: app)
         app.buttons["saveTableTemplateButton"].tap()
+        XCTAssertTrue(waitForElementDestroyed(identifier: "tableTemplateNameField", in: app, timeout: 10), "Tapping Save should trigger the async save and dismiss the edit sheet")
 
         #if os(iOS)
-        if UIDevice.current.userInterfaceIdiom == .phone {
-            let templatesBackButton = app.navigationBars.buttons["Templates"]
-            XCTAssertTrue(templatesBackButton.waitForExistence(timeout: 5), "Should be back on the template detail page with a Templates back button after saving")
-            templatesBackButton.tap()
+        let templatesBackButton = app.navigationBars.buttons["Templates"]
+        XCTAssertTrue(templatesBackButton.waitForExistence(timeout: 5), "Should be back on the template detail page with a Templates back button after saving")
+        for _ in 0..<4 {
+            if templatesBackButton.isHittable { templatesBackButton.tap() }
+            if searchField.waitForExistence(timeout: 3) { break }
+            Thread.sleep(forTimeInterval: 0.5)
         }
         #endif
         replaceText(in: searchField, with: renamedName, in: app)
@@ -362,36 +426,41 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         app.launch()
         signIn(app)
 
-        tapTab("Protocols", in: app, timeout: 30)
+        tapTab("Protocols", in: app, timeout: 10)
         #if os(macOS)
         app.typeKey(",", modifierFlags: .command)
         #else
-        tapToolbarButton("settingsButton", label: "Settings", in: app)
+        tapToolbarButton("settingsButton", label: "Settings", in: app, verify: { self.waitForTextAppearing("Offline Ontology Data", in: app, timeout: 3) })
         #endif
         XCTAssertTrue(waitForTextAppearing("Offline Ontology Data", in: app, timeout: 10))
-        elementContaining("Offline Ontology Data", in: app).tap()
+        firstExisting(app.buttons["settingsSidebarItem_offlineOntologyData"], app.staticTexts["settingsSidebarItem_offlineOntologyData"], app.cells["settingsSidebarItem_offlineOntologyData"]).tap()
         let schemaImportButton = app.buttons["importOntologyButton_sdrf"]
         scrollDownUntilVisible(schemaImportButton, in: app)
-        XCTAssertTrue(schemaImportButton.waitForExistence(timeout: 15))
-        schemaImportButton.tap()
-        XCTAssertTrue(
-            waitForTextAppearing("Imported", in: app, timeout: 120),
-            "The sdrf schema dataset should finish importing and show its \"Imported\" timestamp"
-        )
+        XCTAssertTrue(schemaImportButton.waitForExistence(timeout: 10))
+        if schemaImportButton.label != "Re-import" {
+            schemaImportButton.tap()
+            let deadline = Date().addingTimeInterval(120)
+            while schemaImportButton.label != "Re-import", Date() < deadline {
+                Thread.sleep(forTimeInterval: 0.2)
+            }
+        }
+        XCTAssertEqual(schemaImportButton.label, "Re-import", "The sdrf schema dataset should finish importing (button relabels itself once its own importedAt state is set)")
         #if os(macOS)
         app.typeKey("w", modifierFlags: .command)
         #else
         tapToolbarButton("doneButton", label: "Done", in: app, timeout: 3)
         #endif
 
-        tapTab("Jobs", in: app, timeout: 30)
-        tapToolbarButton("newJobButton", label: "New Job", in: app, timeout: 10)
+        tapTab("Jobs", in: app, timeout: 10)
+        let newJobOverflowIndex = dynamicOverflowIndex(precedingIdentifiers: ["projectsLink", "manageMetadataTableTemplatesButton", "columnTemplatesToolbarButton", "metadataTablesBrowserButton", "labGroupsButton"], in: app)
+        tapToolbarButton("newJobButton", label: "New Job", in: app, overflowIndex: newJobOverflowIndex, timeout: 10)
         let jobName = "Template Flow Job \(timestamp)"
         let jobNameField = app.textFields["newJobNameField"]
         XCTAssertTrue(jobNameField.waitForExistence(timeout: 5))
         jobNameField.tap()
         jobNameField.typeText(jobName)
-        app.buttons["createJobButton"].tap()
+        tapCreateJobButtonReliably(in: app)
+        XCTAssertTrue(waitForElementDestroyed(identifier: "newJobNameField", in: app, timeout: 10), "Tapping Create should trigger the async create and dismiss the New Job sheet")
 
         findAndTapJobRow(named: jobName, in: app)
 
@@ -413,7 +482,11 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         if UIDevice.current.userInterfaceIdiom == .phone {
             let jobsBackButtonBeforeTemplates = app.navigationBars.buttons["Jobs"]
             XCTAssertTrue(jobsBackButtonBeforeTemplates.waitForExistence(timeout: 5), "Should be back on the job detail page with a Jobs back button before reaching list-level Table Templates management")
-            jobsBackButtonBeforeTemplates.tap()
+            for _ in 0..<4 {
+                if jobsBackButtonBeforeTemplates.isHittable { jobsBackButtonBeforeTemplates.tap() }
+                if app.navigationBars["Jobs"].waitForExistence(timeout: 3) { break }
+                Thread.sleep(forTimeInterval: 0.5)
+            }
         }
         #endif
         tapToolbarButton("manageMetadataTableTemplatesButton", label: "Table Templates", in: app, timeout: 10)
@@ -440,10 +513,21 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         XCTAssertTrue(humanRow.waitForExistence(timeout: 10), "human should be selectable since the sdrf dataset was just imported")
         humanRow.tap()
 
-        app.buttons["createTemplateButton"].tap()
+        let createTemplateButton = app.buttons["createTemplateButton"]
+        XCTAssertTrue(createTemplateButton.waitForExistence(timeout: 5), "The Create button should be reachable once a schema is selected")
+        createTemplateButton.tap()
+
+        let createTemplateErrorAlert = app.alerts.firstMatch
+        if createTemplateErrorAlert.waitForExistence(timeout: 3) {
+            XCTFail("Creating the table template shouldn't show an error: \(createTemplateErrorAlert.staticTexts.allElementsBoundByIndex.map(\.label))")
+        }
+        XCTAssertTrue(
+            waitForElementDestroyed(identifier: "createTemplateButton", in: app, timeout: 10),
+            "The create-template sheet should dismiss itself once its async create call finishes, before we try to close the parent window"
+        )
 
         #if os(macOS)
-        closeWindow(matching: "table-template-manager", in: app)
+        closeWindow(matching: "table-template-manager", in: app, timeout: 10)
         #else
         Thread.sleep(forTimeInterval: 1.0)
         dismissTableTemplateManagementSheet(in: app)
@@ -454,10 +538,11 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
 
         let createFromTemplateButton = app.buttons["createMetadataFromTemplateButton"]
         scrollDownUntilVisible(createFromTemplateButton, in: app)
-        XCTAssertTrue(createFromTemplateButton.waitForExistence(timeout: 15))
+        XCTAssertTrue(createFromTemplateButton.waitForExistence(timeout: 10))
         createFromTemplateButton.tap()
+        waitForSignInSyncToFinish(in: app)
 
-        selectPickerOption("templateCategoryFilterPicker", option: "All", in: app)
+        selectPickerOption("templateCategoryFilterPicker", option: "All", in: app, menuItemCount: 4, optionIndex: 0)
         let templateSearchField = app.textFields["templateSearchField"]
         XCTAssertTrue(templateSearchField.waitForExistence(timeout: 10), "The template picker should offer a search field given how many templates have accumulated on this long-lived test backend")
         templateSearchField.tap()
@@ -475,94 +560,119 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
 
         let addMetadataColumnButton = app.buttons["addMetadataColumnButton"]
         scrollDownUntilVisible(addMetadataColumnButton, in: app)
-        XCTAssertTrue(addMetadataColumnButton.waitForExistence(timeout: 15), "The Metadata Table section should appear once created")
+        XCTAssertTrue(addMetadataColumnButton.waitForExistence(timeout: 10), "The Metadata Table section should appear once created")
 
         #if os(iOS)
         if UIDevice.current.userInterfaceIdiom == .phone {
             let jobsBackButtonBeforeSecondTemplatesVisit = app.navigationBars.buttons["Jobs"]
             XCTAssertTrue(jobsBackButtonBeforeSecondTemplatesVisit.waitForExistence(timeout: 5), "Should be back on the job detail page with a Jobs back button before reaching list-level Table Templates management a second time")
-            jobsBackButtonBeforeSecondTemplatesVisit.tap()
+            for _ in 0..<4 {
+                if jobsBackButtonBeforeSecondTemplatesVisit.isHittable { jobsBackButtonBeforeSecondTemplatesVisit.tap() }
+                if app.navigationBars["Jobs"].waitForExistence(timeout: 3) { break }
+                Thread.sleep(forTimeInterval: 0.5)
+            }
         }
         #endif
         tapToolbarButton("manageMetadataTableTemplatesButton", label: "Table Templates", in: app, timeout: 10)
+        waitForSignInSyncToFinish(in: app)
         let managementSearchField = app.textFields.matching(identifier: "myTableTemplateSearchField").firstMatch
         XCTAssertTrue(managementSearchField.waitForExistence(timeout: 10))
         managementSearchField.tap()
         managementSearchField.typeText(tableTemplateName)
 
         let tableTemplateRow = app.buttons.matching(identifier: "myTableTemplateRow_\(tableTemplateName)").firstMatch
-        XCTAssertTrue(tableTemplateRow.waitForExistence(timeout: 15), "The newly-created table template should appear in the management list")
+        XCTAssertTrue(tableTemplateRow.waitForExistence(timeout: 10), "The newly-created table template should appear in the management list")
         XCTAssertFalse(tableTemplateRow.label.contains("0 columns"), "Combining ms-proteomics + human should produce real columns, not an empty (Blank-equivalent) template: \(tableTemplateRow.label)")
         tableTemplateRow.tap()
 
-        let editTemplateButton = app.buttons["editTableTemplateButton"]
-        XCTAssertTrue(editTemplateButton.waitForExistence(timeout: 10), "The template preview should offer an Edit button")
-        editTemplateButton.tap()
+        tapToolbarButton("editTableTemplateButton", label: "Edit…", in: app, window: "table-template-manager", timeout: 10)
+        let tableTemplateNameField = app.textFields["tableTemplateNameField"]
+        XCTAssertTrue(tableTemplateNameField.waitForExistence(timeout: 10), "The template edit sheet should open")
+
+        let templateColumnSearchField = app.textFields["templateColumnSearchField"]
+        func filterTemplateColumns(to term: String) {
+            guard templateColumnSearchField.waitForExistence(timeout: 3) else { return }
+            replaceText(in: templateColumnSearchField, with: term, in: app)
+        }
 
         let column1Name = "characteristics[flow test a]"
         let addTemplateColumnButton = app.buttons["addTemplateColumnButton"]
-        scrollDownUntilVisible(addTemplateColumnButton, within: "templateColumnsForm", in: app, maxAttempts: 40)
+        filterTemplateColumns(to: "zzznomatchingcolumn")
+        XCTAssertTrue(addTemplateColumnButton.waitForExistence(timeout: 10))
         addTemplateColumnButton.tap()
         let addColumnNameField = app.textFields["addTemplateColumnNameField"]
         XCTAssertTrue(addColumnNameField.waitForExistence(timeout: 5))
         addColumnNameField.tap()
         addColumnNameField.typeText(column1Name)
         app.buttons["confirmAddTemplateColumnButton"].tap()
+        filterTemplateColumns(to: column1Name)
         XCTAssertTrue(app.buttons["templateColumnRow_\(column1Name)"].waitForExistence(timeout: 10), "The first added column should appear")
 
         let column2Name = "characteristics[flow test b]"
-        scrollDownUntilVisible(addTemplateColumnButton, within: "templateColumnsForm", in: app, maxAttempts: 40)
+        filterTemplateColumns(to: "zzznomatchingcolumn")
+        XCTAssertTrue(addTemplateColumnButton.waitForExistence(timeout: 10))
         addTemplateColumnButton.tap()
         let addColumnNameField2 = app.textFields["addTemplateColumnNameField"]
         XCTAssertTrue(addColumnNameField2.waitForExistence(timeout: 5))
         addColumnNameField2.tap()
         addColumnNameField2.typeText(column2Name)
         app.buttons["confirmAddTemplateColumnButton"].tap()
+        filterTemplateColumns(to: column2Name)
         XCTAssertTrue(app.buttons["templateColumnRow_\(column2Name)"].waitForExistence(timeout: 10), "The second added column should appear")
 
-        let templateNameField = app.textFields["tableTemplateNameField"]
         let selectModeButton = app.buttons["templateColumnSelectModeButton"]
-        scrollUpUntilVisible(selectModeButton, orAtTop: templateNameField, within: "templateColumnsForm", in: app, maxAttempts: 15)
+        XCTAssertTrue(selectModeButton.waitForExistence(timeout: 10))
         selectModeButton.tap()
         let column1Row = app.buttons["templateColumnRow_\(column1Name)"]
-        scrollDownUntilVisible(column1Row, within: "templateColumnsForm", in: app, maxAttempts: 40)
+        filterTemplateColumns(to: column1Name)
+        XCTAssertTrue(column1Row.waitForExistence(timeout: 10))
         column1Row.tap()
         let column2Row = app.buttons["templateColumnRow_\(column2Name)"]
-        scrollDownUntilVisible(column2Row, within: "templateColumnsForm", in: app, maxAttempts: 40)
+        filterTemplateColumns(to: column2Name)
+        XCTAssertTrue(column2Row.waitForExistence(timeout: 10))
         column2Row.tap()
+        filterTemplateColumns(to: "")
         let bulkStaffOnlyButton = app.buttons["templateColumnBulkStaffOnlyButton"]
-        scrollUpUntilVisible(bulkStaffOnlyButton, orAtTop: templateNameField, within: "templateColumnsForm", in: app, maxAttempts: 15)
+        XCTAssertTrue(bulkStaffOnlyButton.waitForExistence(timeout: 10))
         bulkStaffOnlyButton.tap()
         XCTAssertFalse(app.alerts["Couldn't save template"].waitForExistence(timeout: 3), "Bulk staff-only update against a reachable backend shouldn't show an error")
         Thread.sleep(forTimeInterval: 3.0)
 
-        scrollUpUntilVisible(selectModeButton, orAtTop: templateNameField, within: "templateColumnsForm", in: app, maxAttempts: 15)
         if selectModeButton.label == "Select" {
             selectModeButton.tap()
         }
-        scrollDownUntilVisible(column1Row, within: "templateColumnsForm", in: app, maxAttempts: 40)
+        filterTemplateColumns(to: column1Name)
+        XCTAssertTrue(column1Row.waitForExistence(timeout: 10))
         column1Row.tap()
-        scrollDownUntilVisible(column2Row, within: "templateColumnsForm", in: app, maxAttempts: 40)
+        filterTemplateColumns(to: column2Name)
+        XCTAssertTrue(column2Row.waitForExistence(timeout: 10))
         column2Row.tap()
+        filterTemplateColumns(to: "")
         let bulkDeleteButton = app.buttons["templateColumnBulkDeleteButton"]
-        scrollUpUntilVisible(bulkDeleteButton, orAtTop: templateNameField, within: "templateColumnsForm", in: app, maxAttempts: 15)
+        XCTAssertTrue(bulkDeleteButton.waitForExistence(timeout: 10))
         bulkDeleteButton.tap()
         XCTAssertFalse(app.buttons["templateColumnRow_\(column1Name)"].waitForExistence(timeout: 5), "Bulk-deleted columns should no longer appear")
-        scrollUpUntilVisible(selectModeButton, orAtTop: templateNameField, within: "templateColumnsForm", in: app, maxAttempts: 15)
         selectModeButton.tap()
 
-        scrollDownUntilVisible(addTemplateColumnButton, within: "templateColumnsForm", in: app, maxAttempts: 40)
+        filterTemplateColumns(to: "zzznomatchingcolumn")
+        XCTAssertTrue(addTemplateColumnButton.waitForExistence(timeout: 10))
         addTemplateColumnButton.tap()
         let seedColumnNameField = app.textFields["addTemplateColumnNameField"]
         XCTAssertTrue(seedColumnNameField.waitForExistence(timeout: 5))
         seedColumnNameField.tap()
         seedColumnNameField.typeText("characteristics[flow seed col]")
         app.buttons["confirmAddTemplateColumnButton"].tap()
+        filterTemplateColumns(to: "characteristics[flow seed col]")
         XCTAssertTrue(app.buttons["templateColumnRow_characteristics[flow seed col]"].waitForExistence(timeout: 10))
 
-        app.buttons["saveTableTemplateButton"].tap()
+        let saveTableTemplateButton = app.buttons["saveTableTemplateButton"]
+        saveTableTemplateButton.tap()
+        XCTAssertTrue(
+            waitForElementDestroyed(identifier: "tableTemplateNameField", in: app, timeout: 10),
+            "The edit-template sheet should dismiss itself once its async save call finishes, before we try to close the parent window. Waiting on the stable name field rather than the Save button itself, since Save's label swaps to a ProgressView mid-save and can falsely register as destroyed before the sheet actually closes."
+        )
         #if os(macOS)
-        closeWindow(matching: "table-template-manager", in: app)
+        closeWindow(matching: "table-template-manager", in: app, timeout: 10)
         #else
         Thread.sleep(forTimeInterval: 1.0)
         dismissTableTemplateManagementSheet(in: app)
@@ -570,11 +680,18 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
             findAndTapJobRow(named: jobName, in: app)
         }
         #endif
-        let addMetadataColumnButtonAgain = app.buttons["addMetadataColumnButton"]
-        scrollDownUntilVisible(addMetadataColumnButtonAgain, in: app)
+        let mainWindow = frontmostWindow(in: app, matching: "main-AppWindow")
+        let addMetadataColumnButtonAgain = mainWindow.buttons["addMetadataColumnButton"]
+        let manageMyColumnTemplatesButton = mainWindow.buttons["manageMyColumnTemplatesButton"]
+        let jobMetadataColumnSearchField = mainWindow.textFields["jobMetadataColumnSearchField"]
+        if jobMetadataColumnSearchField.waitForExistence(timeout: 3) {
+            jobMetadataColumnSearchField.tap()
+            jobMetadataColumnSearchField.typeText("zzznomatchingcolumn")
+        }
         XCTAssertTrue(addMetadataColumnButtonAgain.waitForExistence(timeout: 10))
         addMetadataColumnButtonAgain.tap()
-        app.buttons["manageColumnTemplatesButton"].tap()
+        XCTAssertTrue(manageMyColumnTemplatesButton.waitForExistence(timeout: 10), "The Add Metadata Field sheet should open")
+        manageMyColumnTemplatesButton.tap()
 
         tapSegment("Grouped", in: app)
         XCTAssertTrue(
@@ -588,26 +705,25 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         let columnTemplateNameField = app.textFields["columnTemplateNameField"]
         XCTAssertTrue(columnTemplateNameField.waitForExistence(timeout: 5))
         replaceText(in: columnTemplateNameField, with: columnTemplateName, in: app)
-        columnTemplateNameField.typeText("\n")
-        Thread.sleep(forTimeInterval: 0.3)
 
         let columnTemplateColumnNameField = app.textFields["columnTemplateColumnNameField"]
         replaceText(in: columnTemplateColumnNameField, with: "characteristics[flow column template]", in: app)
-        columnTemplateColumnNameField.typeText("\n")
-        Thread.sleep(forTimeInterval: 0.3)
 
         let tagsField = app.textFields["columnTemplateTagsField"]
         replaceText(in: tagsField, with: "flowtest, verify", in: app)
-        tagsField.typeText("\n")
-        Thread.sleep(forTimeInterval: 0.3)
 
         let defaultPositionField = app.textFields["columnTemplateDefaultPositionField"]
         replaceText(in: defaultPositionField, with: "2", in: app)
 
         app.buttons["saveColumnTemplateButton"].tap()
 
+        let columnTemplateSearchField = app.textFields["columnTemplateSearchField"]
+        XCTAssertTrue(columnTemplateSearchField.waitForExistence(timeout: 10))
+        columnTemplateSearchField.tap()
+        columnTemplateSearchField.typeText(columnTemplateName)
+
         let columnTemplateRow = app.buttons["myColumnTemplateRow_\(columnTemplateName)"]
-        XCTAssertTrue(columnTemplateRow.waitForExistence(timeout: 15), "The newly-created column template should appear in the flat list")
+        XCTAssertTrue(columnTemplateRow.waitForExistence(timeout: 10), "The newly-created column template should appear in the flat list once filtered by its unique name")
 
         columnTemplateRow.tap()
         let reopenedDefaultPositionField = app.textFields["columnTemplateDefaultPositionField"]
@@ -631,23 +747,25 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         app.launchArguments = ["--ui-testing-reset-state"]
         app.launch()
         signIn(app)
+        waitForSignInSyncToFinish(in: app)
 
-        tapTab("Jobs", in: app, timeout: 30)
+        tapTab("Jobs", in: app, timeout: 10)
         findAndTapJobRow(named: jobName, in: app)
 
         let createFromTemplateButtonForGrid = app.buttons["createMetadataFromTemplateButton"]
         scrollDownUntilVisible(createFromTemplateButtonForGrid, in: app)
-        XCTAssertTrue(createFromTemplateButtonForGrid.waitForExistence(timeout: 15), "Creating a metadata table should become available once a lab group is assigned")
+        XCTAssertTrue(createFromTemplateButtonForGrid.waitForExistence(timeout: 10), "Creating a metadata table should become available once a lab group is assigned")
         createFromTemplateButtonForGrid.tap()
+        waitForSignInSyncToFinish(in: app)
 
-        selectPickerOption("templateCategoryFilterPicker", option: "All", in: app)
+        selectPickerOption("templateCategoryFilterPicker", option: "All", in: app, menuItemCount: 4, optionIndex: 0)
         let templateSearchFieldForGrid = app.textFields["templateSearchField"]
         XCTAssertTrue(templateSearchFieldForGrid.waitForExistence(timeout: 10))
         templateSearchFieldForGrid.tap()
         templateSearchFieldForGrid.typeText(seed.templateName)
 
         let templateRowForGrid = app.buttons["metadataTemplateRow_\(seed.templateName)"]
-        XCTAssertTrue(templateRowForGrid.waitForExistence(timeout: 15), "The template created via the API should appear once synced and filtered by search")
+        XCTAssertTrue(templateRowForGrid.waitForExistence(timeout: 10), "The template created via the API should appear once synced and filtered by search")
         templateRowForGrid.tap()
 
         let sampleCountFieldForGrid = app.textFields["metadataSampleCountField"]
@@ -657,15 +775,16 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         app.buttons["createMetadataTableButton"].tap()
 
         let openFullTableViewButton = app.buttons["openFullMetadataTableViewButton"]
-        XCTAssertTrue(openFullTableViewButton.waitForExistence(timeout: 15))
+        XCTAssertTrue(openFullTableViewButton.waitForExistence(timeout: 10))
         scrollDownUntilVisible(openFullTableViewButton, in: app)
         openFullTableViewButton.tap()
 
         tapSegment("List", within: "metadataTableViewModePicker", in: app)
-        XCTAssertTrue(
-            app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", seed.column1Name)).firstMatch.waitForExistence(timeout: 10),
-            "List mode should show the seeded columns"
+        let seededColumnRow = waitForMatchAcrossTypes(
+            NSPredicate(format: "label CONTAINS %@", seed.column1Name),
+            in: app, timeout: 10
         )
+        XCTAssertTrue(seededColumnRow.exists, "List mode should show the seeded columns")
 
         tapSegment("Table", within: "metadataTableViewModePicker", in: app)
         let firstCell = app.buttons["metadataTableCell_\(seed.column1Name)_1"]
@@ -676,19 +795,36 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         XCTAssertTrue(valueField.waitForExistence(timeout: 5))
         valueField.tap()
         valueField.typeText("42.0")
-        tapToolbarButton("saveMetadataValueButton", label: "Save", in: app)
-        XCTAssertTrue(waitForTextAppearing("42.0", in: app, timeout: 15), "The edited cell value should appear once synced")
+        tapToolbarButton("saveMetadataValueButton", label: "Save", in: app, window: "metadata-value-editor", overflowIndex: 1)
+        XCTAssertTrue(waitForElementDisappearing(valueField, timeout: 10), "The edit-value window should close itself once its save call finishes")
+        let metadataTableDetailWindow = frontmostWindow(in: app, matching: "metadata-table-detail")
+        let updatedCellPredicate = NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", "42.0", "42.0")
+        var sawUpdatedCell = false
+        let updatedCellDeadline = Date().addingTimeInterval(10)
+        while Date() < updatedCellDeadline {
+            if metadataTableDetailWindow.staticTexts.matching(updatedCellPredicate).firstMatch.exists
+                || metadataTableDetailWindow.buttons.matching(updatedCellPredicate).firstMatch.exists {
+                sawUpdatedCell = true
+                break
+            }
+        }
+        XCTAssertTrue(sawUpdatedCell, "The edited cell value should appear once synced")
 
         tapSegment("List", within: "metadataTableViewModePicker", in: app)
-        tapMenuItem("metadataTableColumnMenu_\(seed.column2Name)", item: "Autofill", in: app)
+        let columnFilterField = app.textFields["metadataTableColumnFilterField"]
+        XCTAssertTrue(columnFilterField.waitForExistence(timeout: 10))
+        columnFilterField.tap()
+        columnFilterField.typeText(seed.column2Name)
+        tapMenuItem("metadataTableColumnMenu_\(seed.column2Name)", item: "metadataTableColumnAutofillMenuItem_\(seed.column2Name)", in: app)
 
         let templateField = app.textFields["basicAutofillTemplateField"]
         XCTAssertTrue(templateField.waitForExistence(timeout: 5), "Basic mode should be selected by default")
         app.buttons["applyAutofillButton"].tap()
-        XCTAssertTrue(app.alerts["Autofill Complete"].waitForExistence(timeout: 15), "Basic autofill against a reachable backend should report success")
-        app.alerts["Autofill Complete"].buttons["OK"].tap()
+        let autofillCompleteAlert = waitForAlertOrSheet(in: app, timeout: 10)
+        XCTAssertTrue(autofillCompleteAlert.exists, "Basic autofill against a reachable backend should report success")
+        autofillCompleteAlert.buttons["OK"].tap()
 
-        tapMenuItem("metadataTableColumnMenu_\(seed.column2Name)", item: "Autofill", in: app)
+        tapMenuItem("metadataTableColumnMenu_\(seed.column2Name)", item: "metadataTableColumnAutofillMenuItem_\(seed.column2Name)", in: app)
         tapSegment("Advanced", in: app)
 
         let templateSamplesField = app.textFields["advancedAutofillTemplateSamplesField"]
@@ -705,7 +841,7 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         scrollDownUntilVisible(addVariationButton, in: app)
         Thread.sleep(forTimeInterval: 0.5)
         addVariationButton.tap()
-        selectPickerOption("autofillVariationColumnPicker_0", option: seed.column1Name, in: app)
+        selectPickerOption("autofillVariationColumnPicker_0", option: seed.column2Name, in: app, menuItemCount: 2, optionIndex: 1)
         tapSegment("List", within: "autofillVariationTypePicker_0", in: app)
 
         let valuesField = app.textFields["autofillVariationValuesField_0"]
@@ -719,8 +855,9 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         let applyAutofillButton = app.buttons["applyAutofillButton"]
         scrollDownUntilVisible(applyAutofillButton, in: app)
         applyAutofillButton.tap()
-        XCTAssertTrue(app.alerts["Autofill Complete"].waitForExistence(timeout: 15), "Advanced autofill against a reachable backend should report success")
-        app.alerts["Autofill Complete"].buttons["OK"].tap()
+        let advancedAutofillCompleteAlert = waitForAlertOrSheet(in: app, timeout: 10)
+        XCTAssertTrue(advancedAutofillCompleteAlert.exists, "Advanced autofill against a reachable backend should report success")
+        advancedAutofillCompleteAlert.buttons["OK"].tap()
         Thread.sleep(forTimeInterval: 0.5)
 
         #if os(iOS)
@@ -735,10 +872,16 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
                 }
             }
             XCTAssertTrue(reachedJobDetail, "Should be back on the job detail page with a Jobs back button after dismissing the full table view")
-            jobsBackButton.tap()
+            for _ in 0..<4 {
+                if jobsBackButton.isHittable { jobsBackButton.tap() }
+                if app.navigationBars["Jobs"].waitForExistence(timeout: 3) { break }
+                Thread.sleep(forTimeInterval: 0.5)
+            }
         }
+        #else
+        closeWindow(matching: "metadata-table-detail", in: app, timeout: 10)
         #endif
-        tapToolbarButton("metadataTablesBrowserButton", label: "Metadata Tables", in: app)
+        tapToolbarButton("metadataTablesBrowserButton", label: "Metadata Tables", in: app, window: "main-AppWindow", overflowIndex: 1)
 
         let searchField = app.textFields["metadataTablesBrowserSearchField"]
         XCTAssertTrue(searchField.waitForExistence(timeout: 10))
@@ -747,7 +890,7 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         searchField.typeText("\n")
 
         let browserTableRow = app.buttons["metadataTableRow_\(browserTableName)"]
-        XCTAssertTrue(browserTableRow.waitForExistence(timeout: 15), "The ccv-native standalone table should appear in the browser, unlike a job-created (ccm-owned) table")
+        XCTAssertTrue(browserTableRow.waitForExistence(timeout: 10), "The ccv-native standalone table should appear in the browser, unlike a job-created (ccm-owned) table")
 
         browserTableRow.swipeRight()
         let editSwipeAction = app.buttons["Edit"]
@@ -759,9 +902,10 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         replaceText(in: sampleCountField, with: "1", in: app)
         app.buttons["saveMetadataTableEditButton"].tap()
 
-        XCTAssertTrue(app.alerts["Reduce Sample Count?"].waitForExistence(timeout: 10), "Reducing an already-populated sample count should ask for confirmation, not silently apply")
+        let reduceSampleCountAlert = waitForAlertOrSheet(in: app, timeout: 10)
+        XCTAssertTrue(reduceSampleCountAlert.exists, "Reducing an already-populated sample count should ask for confirmation, not silently apply")
         app.buttons["confirmSampleCountReductionButton"].tap()
-        XCTAssertFalse(app.alerts["Couldn't save table"].waitForExistence(timeout: 5), "Confirming the reduction should let the save go through")
+        XCTAssertFalse(app.alerts["Couldn't save table"].waitForExistence(timeout: 5) || app.sheets["Couldn't save table"].waitForExistence(timeout: 5), "Confirming the reduction should let the save go through")
     }
 
     @MainActor
@@ -771,31 +915,436 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         app.launch()
         signIn(app)
 
-        tapTab("Protocols", in: app, timeout: 30)
+        tapTab("Protocols", in: app, timeout: 10)
         #if os(macOS)
         app.typeKey(",", modifierFlags: .command)
         #else
-        tapToolbarButton("settingsButton", label: "Settings", in: app)
+        tapToolbarButton("settingsButton", label: "Settings", in: app, verify: { self.waitForTextAppearing("Ontology Browser", in: app, timeout: 3) })
         #endif
         XCTAssertTrue(waitForTextAppearing("Ontology Browser", in: app, timeout: 10))
-        elementContaining("Ontology Browser", in: app).tap()
+        let ontologyBrowserSidebarItem = firstExisting(app.buttons["settingsSidebarItem_ontologyBrowser"], app.staticTexts["settingsSidebarItem_ontologyBrowser"], app.cells["settingsSidebarItem_ontologyBrowser"])
+        #if !os(macOS)
+        scrollDownUntilVisible(ontologyBrowserSidebarItem, within: "settingsSidebarList", in: app)
+        #endif
+        XCTAssertTrue(ontologyBrowserSidebarItem.waitForExistence(timeout: 5), "The Ontology Browser sidebar item should carry its real accessibility identifier")
+        ontologyBrowserSidebarItem.tap()
 
-        tapSegment("Online", within: "ontologyBrowserModePicker", in: app)
+        tapSegment("Online", within: "ontologyBrowserModePicker", in: app, timeout: 10)
 
         let searchField = app.textFields["ontologyBrowserSearchField"]
         XCTAssertTrue(searchField.waitForExistence(timeout: 10))
         searchField.tap()
         searchField.typeText("Phospho")
 
-        XCTAssertTrue(waitForTextAppearing("UNIMOD", in: app, timeout: 15), "A Unimod section should appear for a Phospho search (native List section headers render uppercase)")
-        XCTAssertTrue(waitForTextAppearing("Phospho", in: app, timeout: 10), "A Phospho result row should appear")
+        let unimodPhosphoRow = firstExisting(
+            app.buttons["ontologyResultRow_unimod:UNIMOD:21"],
+            app.staticTexts["ontologyResultRow_unimod:UNIMOD:21"],
+            app.otherElements["ontologyResultRow_unimod:UNIMOD:21"]
+        )
+        let humanDiseasePhosphoRow = firstExisting(
+            app.buttons["ontologyResultRow_human_disease:DI-01188"],
+            app.staticTexts["ontologyResultRow_human_disease:DI-01188"],
+            app.otherElements["ontologyResultRow_human_disease:DI-01188"]
+        )
+        XCTAssertTrue(humanDiseasePhosphoRow.waitForExistence(timeout: 10), "With every online database enabled, a Human Disease match should appear, proving results span multiple databases")
 
-        let phosphoRow = elementContaining("Phospho", in: app)
-        XCTAssertTrue(phosphoRow.waitForExistence(timeout: 5))
-        phosphoRow.tap()
+        tapToolbarButton("ontologyBrowserDatabasesButton", label: "Databases", in: app)
+        let nonUnimodTypeKeys = ["tissue", "species", "human_disease", "subcellular_location", "ms_unique_vocabularies", "ncbi_taxonomy", "chebi", "mondo", "uberon", "cell_ontology", "psi_ms", "bto", "doid"]
+        for typeKey in nonUnimodTypeKeys {
+            let toggle = firstExisting(
+                app.switches["ontologyDatabaseToggle_\(typeKey)"],
+                app.checkBoxes["ontologyDatabaseToggle_\(typeKey)"],
+                app.buttons["ontologyDatabaseToggle_\(typeKey)"]
+            )
+            XCTAssertTrue(toggle.waitForExistence(timeout: 5), "The \"\(typeKey)\" database toggle should exist in the filter sheet")
+            #if !os(macOS)
+            scrollDownUntilVisible(toggle, within: "ontologyDatabaseFilterList", in: app)
+            Thread.sleep(forTimeInterval: 0.3)
+            #endif
+            func currentValue() -> Int? { toggle.value as? Int ?? (toggle.value as? String).flatMap(Int.init) }
+            let valueBeforeTap = currentValue()
+            for _ in 0..<3 {
+                if currentValue() != valueBeforeTap { break }
+                let deadline = Date().addingTimeInterval(3)
+                while Date() < deadline, !toggle.isHittable {
+                    Thread.sleep(forTimeInterval: 0.1)
+                }
+                Thread.sleep(forTimeInterval: 0.3)
+                toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.5)).tap()
+                Thread.sleep(forTimeInterval: 0.3)
+            }
+            XCTAssertNotEqual(currentValue(), valueBeforeTap, "Tapping the \"\(typeKey)\" toggle's trailing switch control should flip its value (was \(String(describing: valueBeforeTap)))")
+        }
+        let filterDoneButton = app.buttons["ontologyDatabaseFilterDoneButton"]
+        XCTAssertTrue(filterDoneButton.waitForExistence(timeout: 5))
+        filterDoneButton.tap()
+
+        let filterAppliedDeadline = Date().addingTimeInterval(10)
+        while humanDiseasePhosphoRow.exists, Date() < filterAppliedDeadline {
+            Thread.sleep(forTimeInterval: 0.3)
+        }
+        XCTAssertFalse(humanDiseasePhosphoRow.exists, "After disabling every database except Unimod, the Human Disease result should disappear from the still-active Phospho search")
+
+        XCTAssertTrue(unimodPhosphoRow.waitForExistence(timeout: 10), "The specific real Phospho (UNIMOD:21) result row should still exist, now as the sole database's top result")
+        unimodPhosphoRow.tap()
 
         XCTAssertTrue(waitForTextAppearing("Delta Mono Mass", in: app, timeout: 10), "The Unimod detail view should show mass/composition fields, not the generic Simple Term layout")
         XCTAssertTrue(waitForTextAppearing("79.966331", in: app, timeout: 5), "The real Phospho delta mono mass should be shown")
+    }
+
+    @MainActor
+    func testOntologyBrowserOnlineSubcellularLocationShowsRichFullData() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing-reset-state"]
+        app.launch()
+        signIn(app)
+
+        tapTab("Protocols", in: app, timeout: 10)
+        #if os(macOS)
+        app.typeKey(",", modifierFlags: .command)
+        #else
+        tapToolbarButton("settingsButton", label: "Settings", in: app, verify: { self.waitForTextAppearing("Ontology Browser", in: app, timeout: 3) })
+        #endif
+        XCTAssertTrue(waitForTextAppearing("Ontology Browser", in: app, timeout: 10))
+        let ontologyBrowserSidebarItem = firstExisting(app.buttons["settingsSidebarItem_ontologyBrowser"], app.staticTexts["settingsSidebarItem_ontologyBrowser"], app.cells["settingsSidebarItem_ontologyBrowser"])
+        #if !os(macOS)
+        scrollDownUntilVisible(ontologyBrowserSidebarItem, within: "settingsSidebarList", in: app)
+        #endif
+        XCTAssertTrue(ontologyBrowserSidebarItem.waitForExistence(timeout: 5), "The Ontology Browser sidebar item should carry its real accessibility identifier")
+        ontologyBrowserSidebarItem.tap()
+
+        tapSegment("Online", within: "ontologyBrowserModePicker", in: app, timeout: 10)
+
+        let searchField = app.textFields["ontologyBrowserSearchField"]
+        XCTAssertTrue(searchField.waitForExistence(timeout: 10))
+        searchField.tap()
+        searchField.typeText("Acrosomal vesicle")
+
+        let acrosomeResultRow = firstExisting(
+            app.buttons["ontologyResultRow_subcellular_location:SL-0007"],
+            app.staticTexts["ontologyResultRow_subcellular_location:SL-0007"],
+            app.otherElements["ontologyResultRow_subcellular_location:SL-0007"]
+        )
+        XCTAssertTrue(acrosomeResultRow.waitForExistence(timeout: 10), "The specific Acrosome result row should appear for an 'Acrosomal vesicle' synonym search")
+        let rowText = acrosomeResultRow.label.isEmpty ? (acrosomeResultRow.value as? String ?? "") : acrosomeResultRow.label
+        XCTAssertTrue(
+            rowText.contains("Acrosomal vesicle"),
+            "The real Acrosome synonym should render in that specific result row (row text: '\(rowText)'), proving the online path now decodes subcellular_location's own full_data instead of only the generic id/value/description fields"
+        )
+    }
+
+    @MainActor
+    func testColumnTemplateShareGrantsAccessRoleLive() throws {
+        let unique = Int(Date().timeIntervalSince1970)
+        let deviceToken = try fetchDeviceTokenViaAPI()
+
+        let usersJSON = try getJSON("users/?search=importtestuser", deviceToken: deviceToken)
+        guard let userResults = usersJSON["results"] as? [[String: Any]],
+              let importTestUserID = userResults.first(where: { ($0["username"] as? String) == "importtestuser" })?["id"] as? Int else {
+            XCTFail("Couldn't find importtestuser's real id via the API")
+            return
+        }
+
+        let templateName = "Share Test Template \(unique)"
+        let templateJSON = try postJSON(
+            "column-templates/",
+            body: ["name": templateName, "column_name": "share_test_col_\(unique)", "column_type": "characteristics", "visibility": "private"],
+            deviceToken: deviceToken
+        )
+        guard let templateID = templateJSON["id"] as? Int else {
+            XCTFail("Creating a column template should return an id")
+            return
+        }
+
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing-reset-state"]
+        app.launch()
+        signIn(app)
+
+        tapTab("Jobs", in: app, timeout: 10)
+        tapToolbarButton("columnTemplatesToolbarButton", label: "Column Templates", in: app, overflowIndex: 0, timeout: 10)
+
+        let searchField = app.textFields["columnTemplateSearchField"]
+        XCTAssertTrue(searchField.waitForExistence(timeout: 10))
+        searchField.tap()
+        searchField.typeText(templateName)
+
+        let templateRow = app.buttons["myColumnTemplateRow_\(templateName)"].firstMatch
+        XCTAssertTrue(templateRow.waitForExistence(timeout: 10), "The freshly created column template should appear once synced")
+        #if os(macOS)
+        templateRow.rightClick()
+        #else
+        templateRow.press(forDuration: 1.0)
+        #endif
+
+        let shareMenuButton = firstExisting(
+            app.buttons["shareColumnTemplateMenuButton_\(templateName)"],
+            app.menuItems["shareColumnTemplateMenuButton_\(templateName)"]
+        )
+        XCTAssertTrue(shareMenuButton.waitForExistence(timeout: 5), "A Share context-menu action should appear for a template this user owns")
+        shareMenuButton.tap()
+
+        let shareSearchField = app.textFields["templateShareSearchUsersField"]
+        XCTAssertTrue(shareSearchField.waitForExistence(timeout: 10))
+        shareSearchField.tap()
+        shareSearchField.typeText("importtestuser")
+
+        let editButton = app.buttons["shareTemplateAsEditButton_importtestuser"].firstMatch
+        XCTAssertTrue(editButton.waitForExistence(timeout: 10), "The user search should find importtestuser and offer an Edit share button")
+        editButton.tap()
+
+        XCTAssertTrue(waitForTextAppearing("importtestuser", in: app, timeout: 10), "The new share should appear in the Shared With list")
+        XCTAssertTrue(waitForTextAppearing("Edit", in: app, timeout: 5), "The new share should show its Edit permission level")
+
+        let shares = try getJSON("template-shares/?template_id=\(templateID)", deviceToken: deviceToken)
+        guard let shareResults = shares["results"] as? [[String: Any]],
+              let share = shareResults.first(where: { ($0["user"] as? Int) == importTestUserID }) else {
+            XCTFail("The real backend should record a share for importtestuser on this template")
+            return
+        }
+        XCTAssertEqual(share["permission_level"] as? String, "edit", "The share should have been created at Edit permission level, matching the button tapped")
+    }
+
+    @MainActor
+    func testColumnFindReplaceUpdatesValueLive() throws {
+        let unique = Int(Date().timeIntervalSince1970)
+        let deviceToken = try fetchDeviceTokenViaAPI()
+        let tableName = "Find Replace Table \(unique)"
+        let tableID = try seedStandaloneMetadataTableViaAPI(named: tableName, deviceToken: deviceToken)
+
+        let columnJSON = try postJSON(
+            "metadata-tables/\(tableID)/add_column_with_auto_reorder/",
+            body: ["column_data": ["name": "organism", "type": "characteristics", "value": "human"]],
+            deviceToken: deviceToken
+        )
+        guard let columnID = (columnJSON["column"] as? [String: Any])?["id"] as? Int else {
+            XCTFail("Adding a column should return the created column")
+            return
+        }
+        _ = try postJSON(
+            "metadata-columns/\(columnID)/bulk_update_sample_values/",
+            body: ["updates": [["sample_index": 2, "value": "mouse"]]],
+            deviceToken: deviceToken
+        )
+
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing-reset-state"]
+        app.launch()
+        signIn(app)
+        waitForSignInSyncToFinish(in: app)
+
+        tapTab("Jobs", in: app, timeout: 10)
+        tapToolbarButton("metadataTablesBrowserButton", label: "Metadata Tables", in: app, overflowIndex: 1)
+
+        let searchField = app.textFields["metadataTablesBrowserSearchField"]
+        XCTAssertTrue(searchField.waitForExistence(timeout: 10))
+        searchField.tap()
+        searchField.typeText(tableName)
+        searchField.typeText("\n")
+
+        let tableRow = app.buttons["metadataTableRow_\(tableName)"]
+        XCTAssertTrue(tableRow.waitForExistence(timeout: 10), "The freshly seeded table should appear in the browser")
+        tableRow.tap()
+
+        tapSegment("List", within: "metadataTableViewModePicker", in: app)
+
+        tapMenuItem("metadataTableColumnMenu_organism", item: "metadataTableColumnFindReplaceMenuItem_organism", in: app)
+
+        let oldValueField = app.textFields["findReplaceOldValueField"]
+        XCTAssertTrue(oldValueField.waitForExistence(timeout: 10))
+        oldValueField.tap()
+        oldValueField.typeText("human")
+
+        let newValueField = app.textFields["findReplaceNewValueField"]
+        newValueField.tap()
+        newValueField.typeText("rat")
+
+        app.buttons["applyFindReplaceButton"].tap()
+        let replaceCompleteAlert = waitForAlertOrSheet(in: app, timeout: 10)
+        XCTAssertTrue(replaceCompleteAlert.exists, "The replace should complete against a reachable backend")
+        replaceCompleteAlert.buttons["OK"].tap()
+
+        let updatedColumn = try getJSON("metadata-columns/\(columnID)/", deviceToken: deviceToken)
+        XCTAssertEqual(updatedColumn["value"] as? String, "rat", "The column's default value should be updated by the real replace_value endpoint")
+        let modifiers = updatedColumn["modifiers"] as? [[String: Any]]
+        XCTAssertEqual(modifiers?.first?["value"] as? String, "mouse", "The unrelated mouse override for sample 2 should be preserved, not touched by the replacement")
+    }
+
+    @MainActor
+    func testAsyncTaskCenterButtonShowsPendingCountLive() throws {
+        let unique = Int(Date().timeIntervalSince1970)
+        let deviceToken = try fetchDeviceTokenViaAPI()
+        let tableName = "Badge Count Table \(unique)"
+        let tableID = try seedStandaloneMetadataTableViaAPI(named: tableName, deviceToken: deviceToken)
+        _ = try postJSON(
+            "metadata-tables/\(tableID)/add_column_with_auto_reorder/",
+            body: ["column_data": ["name": "organism", "type": "characteristics", "value": "human"]],
+            deviceToken: deviceToken
+        )
+
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing-reset-state"]
+        app.launch()
+        signIn(app)
+        waitForSignInSyncToFinish(in: app)
+
+        tapTab("Jobs", in: app, timeout: 10)
+        tapToolbarButton("metadataTablesBrowserButton", label: "Metadata Tables", in: app, overflowIndex: 1)
+
+        let searchField = app.textFields["metadataTablesBrowserSearchField"]
+        XCTAssertTrue(searchField.waitForExistence(timeout: 10))
+        searchField.tap()
+        searchField.typeText(tableName)
+        searchField.typeText("\n")
+
+        let tableRow = app.buttons["metadataTableRow_\(tableName)"]
+        XCTAssertTrue(tableRow.waitForExistence(timeout: 10), "The freshly seeded table should appear in the browser")
+        tableRow.tap()
+
+        let pendingCountLabel = app.staticTexts["pendingAsyncTaskCount"]
+        XCTAssertTrue(pendingCountLabel.waitForExistence(timeout: 10))
+        let baselineCount = readPendingAsyncTaskCount(pendingCountLabel)
+
+        tapToolbarButton("exportMenu", label: "Export", in: app, window: "metadata-tables-browser", overflowIndex: 1, timeout: 10)
+        let exportSDRFButton = firstExisting(app.buttons["exportSDRFButton"], app.menuItems["exportSDRFButton"])
+        XCTAssertTrue(exportSDRFButton.waitForExistence(timeout: 5), "The Export submenu should be open")
+        exportSDRFButton.tap()
+
+        let exportQueuedAlert = waitForAlertOrSheet(in: app, timeout: 10)
+        XCTAssertTrue(exportQueuedAlert.waitForExistence(timeout: 5), "The export should be accepted and queued against a reachable backend")
+        exportQueuedAlert.buttons["OK"].tap()
+
+        var updatedCount = baselineCount
+        let deadline = Date().addingTimeInterval(15)
+        while Date() < deadline {
+            updatedCount = readPendingAsyncTaskCount(pendingCountLabel)
+            if updatedCount > baselineCount { break }
+            Thread.sleep(forTimeInterval: 1)
+        }
+        XCTAssertGreaterThan(updatedCount, baselineCount, "The Async Tasks button should show an incremented pending count after queuing a real export, was \(baselineCount), now \(updatedCount)")
+    }
+
+    private func readPendingAsyncTaskCount(_ element: XCUIElement) -> Int {
+        if let fromLabel = Int(element.label) { return fromLabel }
+        if let valueString = element.value as? String, let fromValue = Int(valueString) { return fromValue }
+        return 0
+    }
+
+    @MainActor
+    func testRetryFailedAsyncTaskResubmitsLive() throws {
+        let unique = Int(Date().timeIntervalSince1970)
+        let deviceToken = try fetchDeviceTokenViaAPI()
+        let tableName = "Retry Fail Table \(unique)"
+        let tableID = try seedStandaloneMetadataTableViaAPI(named: tableName, deviceToken: deviceToken)
+
+        let columnJSON = try postJSON(
+            "metadata-tables/\(tableID)/add_column_with_auto_reorder/",
+            body: ["column_data": ["name": "badvalue", "type": "characteristics", "value": "placeholder"]],
+            deviceToken: deviceToken
+        )
+        guard let columnID = (columnJSON["column"] as? [String: Any])?["id"] as? Int else {
+            XCTFail("Adding a column should return the created column")
+            return
+        }
+        try patchJSON("metadata-columns/\(columnID)/", body: ["value": "bad\u{000B}value\u{000C}here"], deviceToken: deviceToken)
+
+        let beforeTasks = try getJSON("async-tasks/?metadata_table=\(tableID)&ordering=-created_at&limit=10", deviceToken: deviceToken)
+        let beforeCount = beforeTasks["count"] as? Int ?? 0
+
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing-reset-state"]
+        app.launch()
+        signIn(app)
+        waitForSignInSyncToFinish(in: app)
+
+        tapTab("Jobs", in: app, timeout: 10)
+        tapToolbarButton("metadataTablesBrowserButton", label: "Metadata Tables", in: app, overflowIndex: 1)
+
+        let searchField = app.textFields["metadataTablesBrowserSearchField"]
+        XCTAssertTrue(searchField.waitForExistence(timeout: 10))
+        searchField.tap()
+        searchField.typeText(tableName)
+        searchField.typeText("\n")
+
+        let tableRow = app.buttons["metadataTableRow_\(tableName)"]
+        XCTAssertTrue(tableRow.waitForExistence(timeout: 10), "The freshly seeded table should appear in the browser")
+        tableRow.tap()
+
+        let exportOverflowIndex = dynamicOverflowIndex(precedingIdentifiers: ["editMetadataTableButton"], in: app, window: "metadata-tables-browser")
+        tapToolbarButton("exportMenu", label: "Export", in: app, window: "metadata-tables-browser", overflowIndex: exportOverflowIndex, timeout: 10)
+        let exportExcelButton = firstExisting(app.buttons["exportExcelButton"], app.menuItems["exportExcelButton"])
+        XCTAssertTrue(exportExcelButton.waitForExistence(timeout: 5))
+        exportExcelButton.tap()
+
+        let exportQueuedAlert2 = waitForAlertOrSheet(in: app, timeout: 10)
+        XCTAssertTrue(exportQueuedAlert2.waitForExistence(timeout: 5), "The export should be accepted and queued against a reachable backend")
+        exportQueuedAlert2.buttons["OK"].tap()
+
+        var originalTaskID: String?
+        let queuedDeadline = Date().addingTimeInterval(20)
+        while Date() < queuedDeadline {
+            let page = try getJSON("async-tasks/?metadata_table=\(tableID)&ordering=-created_at&limit=1", deviceToken: deviceToken)
+            if let results = page["results"] as? [[String: Any]], let first = results.first, let id = first["id"] as? String {
+                originalTaskID = id
+                break
+            }
+            Thread.sleep(forTimeInterval: 1)
+        }
+        guard let originalTaskID else {
+            XCTFail("The queued export task should be discoverable via the real API")
+            return
+        }
+
+        var reachedFailure = false
+        let failureDeadline = Date().addingTimeInterval(90)
+        while Date() < failureDeadline {
+            let taskJSON = try getJSON("async-tasks/\(originalTaskID)/", deviceToken: deviceToken)
+            if taskJSON["status"] as? String == "FAILURE" {
+                reachedFailure = true
+                break
+            }
+            Thread.sleep(forTimeInterval: 2)
+        }
+        XCTAssertTrue(reachedFailure, "The export task should genuinely fail server-side once a worker processes the illegal-character column value (openpyxl's IllegalCharacterError)")
+
+        let asyncTaskCenterOverflowIndex = dynamicOverflowIndex(
+            precedingIdentifiers: ["editMetadataTableButton", "exportMenu", "importMenu"],
+            in: app, window: "metadata-tables-browser"
+        )
+        tapToolbarButton("openAsyncTaskCenterButton", label: "Async Tasks", in: app, window: "metadata-tables-browser", overflowIndex: asyncTaskCenterOverflowIndex, timeout: 10)
+
+        let taskRow = waitForFirstExisting(
+            timeout: 10,
+            app.otherElements["asyncTaskRow_\(originalTaskID)"],
+            app.staticTexts["asyncTaskRow_\(originalTaskID)"],
+            app.cells["asyncTaskRow_\(originalTaskID)"]
+        )
+        XCTAssertTrue(taskRow.exists, "The real failed task this session submitted should appear in the task center")
+        #if os(macOS)
+        taskRow.rightClick()
+        #else
+        taskRow.press(forDuration: 1.0)
+        #endif
+
+        let retryMenuButton = firstExisting(
+            app.buttons["retryAsyncTaskMenuButton_\(originalTaskID)"],
+            app.menuItems["retryAsyncTaskMenuButton_\(originalTaskID)"]
+        ).firstMatch
+        XCTAssertTrue(retryMenuButton.waitForExistence(timeout: 5), "A Retry context-menu action should appear for a real failed task")
+        retryMenuButton.tap()
+
+        var newTaskAppeared = false
+        let retryDeadline = Date().addingTimeInterval(20)
+        while Date() < retryDeadline {
+            let afterTasks = try getJSON("async-tasks/?metadata_table=\(tableID)&ordering=-created_at&limit=10", deviceToken: deviceToken)
+            let afterCount = afterTasks["count"] as? Int ?? 0
+            if afterCount > beforeCount + 1 {
+                newTaskAppeared = true
+                break
+            }
+            Thread.sleep(forTimeInterval: 1)
+        }
+        XCTAssertTrue(newTaskAppeared, "Tapping Retry should resubmit the same export request as a genuinely new async task")
     }
 
     @MainActor
@@ -804,6 +1353,7 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         app.launchArguments = ["--ui-testing-reset-state"]
         app.launch()
         signIn(app)
+        waitForSignInSyncToFinish(in: app)
 
         tapToolbarButton("newProtocolButton", label: "New Protocol", in: app)
         let protocolTitle = "Live Variation Test \(Date().timeIntervalSince1970)"
@@ -820,7 +1370,7 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         }
 
         let titlePredicate = NSPredicate(format: "label == %@ OR value == %@", protocolTitle, protocolTitle)
-        var protocolRow = waitForMatch(titlePredicate, in: app.staticTexts, timeout: 30)
+        var protocolRow = waitForMatch(titlePredicate, in: app.staticTexts, timeout: 10)
         XCTAssertTrue(protocolRow.exists, "The newly-created protocol should appear once synced")
 
         let addSectionButton = app.buttons["addSectionButton"]
@@ -837,16 +1387,16 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
 
         let addStepButton = app.buttons["addStepButton"].firstMatch
         XCTAssertTrue(addStepButton.waitForExistence(timeout: 10))
-        var stepField = firstExisting(app.textViews["addTextSheetField"], app.textFields["addTextSheetField"])
+        var stepField = firstExisting(app.textViews["stepDescriptionField"], app.textFields["stepDescriptionField"])
         for _ in 0..<3 {
             if stepField.exists { break }
             addStepButton.tap()
-            stepField = firstExisting(app.textViews["addTextSheetField"], app.textFields["addTextSheetField"])
+            stepField = firstExisting(app.textViews["stepDescriptionField"], app.textFields["stepDescriptionField"])
         }
         XCTAssertTrue(stepField.exists)
         stepField.tap()
         stepField.typeText("Mix reagents")
-        app.buttons["addTextSheetSaveButton"].tap()
+        app.buttons["addStepSaveButton"].tap()
         XCTAssertTrue(waitForTextAppearing("Mix reagents", in: app, timeout: 10))
 
         let stepSyncErrorAlert = app.alerts["Couldn't start session"]
@@ -868,13 +1418,13 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         app.buttons["saveRatingButton"].tap()
         XCTAssertFalse(app.alerts["Couldn't save rating"].waitForExistence(timeout: 3), "Rating a protocol against a reachable backend shouldn't show an error")
 
-        tapToolbarButton("newSessionButton", label: "New Session", in: app, timeout: 10)
+        tapToolbarButton("startProtocolSessionButton", label: "New Session", in: app, timeout: 10)
         let startSessionButton = app.buttons["startSessionButton"]
         XCTAssertTrue(startSessionButton.waitForExistence(timeout: 10))
         startSessionButton.tap()
 
         let addVariationButton = app.buttons["addVariationButton"].firstMatch
-        XCTAssertTrue(addVariationButton.waitForExistence(timeout: 20), "\"Add Variation\" should appear once the session and step both have serverIDs")
+        XCTAssertTrue(addVariationButton.waitForExistence(timeout: 10), "\"Add Variation\" should appear once the session and step both have serverIDs")
         addVariationButton.tap()
 
         let variationDescField = app.textFields["variationDescriptionField"]
@@ -907,6 +1457,11 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         XCTAssertTrue(bookingKindButton.waitForExistence(timeout: 5), "\"Booking\" should be offered once the session and step both have serverIDs")
         bookingKindButton.tap()
 
+        let instrumentSearchField = app.textFields["bookingAnnotationInstrumentSearchField"]
+        XCTAssertTrue(instrumentSearchField.waitForExistence(timeout: 10))
+        instrumentSearchField.tap()
+        instrumentSearchField.typeText("Test Centrifuge")
+
         let instrumentRow = app.buttons["bookingAnnotationInstrumentRow_Test Centrifuge"]
         XCTAssertTrue(instrumentRow.waitForExistence(timeout: 10))
         instrumentRow.tap()
@@ -934,26 +1489,26 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         app.launch()
         signIn(app)
 
-        tapTab("Sessions", in: app, timeout: 30)
+        tapTab("Sessions", in: app, timeout: 10)
         let sessionRow = waitForMatchAcrossTypes(
             NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", seed.sessionName, seed.sessionName),
-            in: app, timeout: 30
+            in: app, timeout: 10
         )
         XCTAssertTrue(sessionRow.exists, "The session seeded via the API should appear once synced")
         sessionRow.tap()
 
-        let startButton = app.buttons["startStepTimerButton"].firstMatch
-        XCTAssertTrue(startButton.waitForExistence(timeout: 15), "The step's timer Start button should render since the step has a duration")
+        let startButton = app.buttons["startStepTimerButton_\(seed.stepID)"]
+        XCTAssertTrue(startButton.waitForExistence(timeout: 10), "The step's timer Start button should render since the step has a duration")
         startButton.tap()
 
-        let stopButton = app.buttons["stopStepTimerButton"].firstMatch
+        let stopButton = app.buttons["stopStepTimerButton_\(seed.stepID)"]
         XCTAssertTrue(stopButton.waitForExistence(timeout: 10), "Starting the timer locally should flip the button to Stop immediately, via the direct-context write")
 
         let timeKeeperID = try findTimeKeeperIDViaAPI(sessionID: seed.sessionID, stepID: seed.stepID, deviceToken: seed.deviceToken)
         try postJSON("time-keepers/\(timeKeeperID)/stop_timer/", body: [:], deviceToken: seed.deviceToken)
 
-        let resumeButton = app.buttons["startStepTimerButton"].firstMatch
-        XCTAssertTrue(resumeButton.waitForExistence(timeout: 15), "Stopping the timer from another \"device\" should push a live update back to this view with no local interaction")
+        let resumeButton = app.buttons["startStepTimerButton_\(seed.stepID)"]
+        XCTAssertTrue(resumeButton.waitForExistence(timeout: 10), "Stopping the timer from another \"device\" should push a live update back to this view with no local interaction")
     }
 
     @MainActor
@@ -969,18 +1524,18 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         app.launch()
         signIn(app)
 
-        tapTab("Sessions", in: app, timeout: 30)
+        tapTab("Sessions", in: app, timeout: 10)
         let sessionRow = waitForMatchAcrossTypes(
             NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", seed.sessionName, seed.sessionName),
-            in: app, timeout: 30
+            in: app, timeout: 10
         )
         XCTAssertTrue(sessionRow.exists, "The session seeded via the API should appear once synced")
         sessionRow.tap()
 
         XCTAssertFalse(app.otherElements["pulsingTimerIndicator"].exists, "No pulsing indicator should show before the timer is started")
 
-        let startButton = app.buttons["startStepTimerButton"].firstMatch
-        XCTAssertTrue(startButton.waitForExistence(timeout: 15), "The step's timer Start button should render since the step has a duration")
+        let startButton = app.buttons["startStepTimerButton_\(seed.stepID)"]
+        XCTAssertTrue(startButton.waitForExistence(timeout: 10), "The step's timer Start button should render since the step has a duration")
         startButton.tap()
 
         XCTAssertTrue(app.otherElements["pulsingTimerIndicator"].firstMatch.waitForExistence(timeout: 10), "Starting the timer should show a pulsing indicator")
@@ -989,13 +1544,13 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
             "A running timer should pulse both on the section header and on the step itself"
         )
 
-        let stopButton = app.buttons["stopStepTimerButton"].firstMatch
+        let stopButton = app.buttons["stopStepTimerButton_\(seed.stepID)"]
         XCTAssertTrue(stopButton.waitForExistence(timeout: 10))
         stopButton.tap()
 
         XCTAssertFalse(app.otherElements["pulsingTimerIndicator"].waitForExistence(timeout: 5), "Stopping the timer should remove the pulsing indicator")
 
-        let resumeButton = app.buttons["startStepTimerButton"].firstMatch
+        let resumeButton = app.buttons["startStepTimerButton_\(seed.stepID)"]
         XCTAssertTrue(resumeButton.waitForExistence(timeout: 10))
         resumeButton.tap()
         XCTAssertTrue(app.otherElements["pulsingTimerIndicator"].firstMatch.waitForExistence(timeout: 10), "Resuming the timer should show the pulsing indicator again")
@@ -1003,7 +1558,7 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         let timeKeeperID = try findTimeKeeperIDViaAPI(sessionID: seed.sessionID, stepID: seed.stepID, deviceToken: seed.deviceToken)
         try postJSON("time-keepers/\(timeKeeperID)/stop_timer/", body: [:], deviceToken: seed.deviceToken)
 
-        XCTAssertFalse(app.otherElements["pulsingTimerIndicator"].waitForExistence(timeout: 15), "Stopping the timer from another \"device\" should push a live update that removes the pulsing indicator, with no local interaction")
+        XCTAssertFalse(app.otherElements["pulsingTimerIndicator"].waitForExistence(timeout: 10), "Stopping the timer from another \"device\" should push a live update that removes the pulsing indicator, with no local interaction")
     }
 
     @MainActor
@@ -1016,15 +1571,17 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         app.launch()
         signIn(app)
 
-        tapTab("Jobs", in: app, timeout: 30)
-        tapToolbarButton("newJobButton", label: "New Job", in: app, timeout: 10)
+        tapTab("Jobs", in: app, timeout: 10)
+        let newJobOverflowIndex = dynamicOverflowIndex(precedingIdentifiers: ["projectsLink", "manageMetadataTableTemplatesButton", "columnTemplatesToolbarButton", "metadataTablesBrowserButton", "labGroupsButton"], in: app)
+        tapToolbarButton("newJobButton", label: "New Job", in: app, overflowIndex: newJobOverflowIndex, timeout: 10)
 
         let jobName = "Sample Pool Test \(Int(Date().timeIntervalSince1970))"
         let jobNameField = app.textFields["newJobNameField"]
         XCTAssertTrue(jobNameField.waitForExistence(timeout: 5))
         jobNameField.tap()
         jobNameField.typeText(jobName)
-        app.buttons["createJobButton"].tap()
+        tapCreateJobButtonReliably(in: app)
+        XCTAssertTrue(waitForElementDestroyed(identifier: "newJobNameField", in: app, timeout: 10), "Tapping Create should trigger the async create and dismiss the New Job sheet")
 
         findAndTapJobRow(named: jobName, in: app)
 
@@ -1036,17 +1593,18 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
 
         let createFromTemplateButton = app.buttons["createMetadataFromTemplateButton"]
         scrollDownUntilVisible(createFromTemplateButton, in: app)
-        XCTAssertTrue(createFromTemplateButton.waitForExistence(timeout: 15), "Creating a metadata table should become available once a lab group is assigned")
+        XCTAssertTrue(createFromTemplateButton.waitForExistence(timeout: 10), "Creating a metadata table should become available once a lab group is assigned")
         createFromTemplateButton.tap()
+        waitForSignInSyncToFinish(in: app)
 
-        selectPickerOption("templateCategoryFilterPicker", option: "All", in: app)
+        selectPickerOption("templateCategoryFilterPicker", option: "All", in: app, menuItemCount: 4, optionIndex: 0)
         let templateSearchFieldForPool = app.textFields["templateSearchField"]
         XCTAssertTrue(templateSearchFieldForPool.waitForExistence(timeout: 10))
         templateSearchFieldForPool.tap()
         templateSearchFieldForPool.typeText(templateName)
 
         let templateRow = app.buttons["metadataTemplateRow_\(templateName)"]
-        XCTAssertTrue(templateRow.waitForExistence(timeout: 15), "The template created via the API should appear once synced and filtered by search")
+        XCTAssertTrue(templateRow.waitForExistence(timeout: 10), "The template created via the API should appear once synced and filtered by search")
         templateRow.tap()
 
         let sampleCountField = app.textFields["metadataSampleCountField"]
@@ -1058,7 +1616,7 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
 
         let newPoolButton = app.buttons["newSamplePoolButton"]
         scrollDownUntilVisible(newPoolButton, in: app)
-        XCTAssertTrue(newPoolButton.waitForExistence(timeout: 15), "The Sample Pools section should appear once the metadata table syncs")
+        XCTAssertTrue(newPoolButton.waitForExistence(timeout: 10), "The Sample Pools section should appear once the metadata table syncs")
         newPoolButton.tap()
 
         let poolNameField = app.textFields["samplePoolNameField"]
@@ -1089,9 +1647,10 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         app.launchArguments = ["--ui-testing-reset-state"]
         app.launch()
         signIn(app)
+        waitForSignInSyncToFinish(in: app)
 
-        tapTab("Inventory", in: app, timeout: 30)
-        tapSegment("Instruments", in: app, timeout: 15)
+        tapTab("Inventory", in: app, timeout: 10)
+        tapSegment("Instruments", in: app, timeout: 10)
 
         tapToolbarButton("newInstrumentButton", label: "New Instrument", in: app, timeout: 10)
         let instrumentName = "Live Metadata Instrument \(timestamp)"
@@ -1106,12 +1665,12 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         instrumentSearchField.tap()
         instrumentSearchField.typeText(instrumentName)
 
-        let instrumentRow = waitForMatchAcrossTypes(NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", instrumentName, instrumentName), in: app, timeout: 30)
+        let instrumentRow = waitForMatchAcrossTypes(NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", instrumentName, instrumentName), in: app, timeout: 10)
         XCTAssertTrue(instrumentRow.exists, "The newly-created instrument should appear once synced")
         instrumentRow.tap()
 
-        let addInstrumentMetadataButton = app.buttons["addMetadataColumnButton"]
-        XCTAssertTrue(addInstrumentMetadataButton.waitForExistence(timeout: 15), "The Metadata section should appear once the instrument's auto-created metadata table syncs")
+        let addInstrumentMetadataButton = app.buttons["addMetadataFieldButton"]
+        XCTAssertTrue(addInstrumentMetadataButton.waitForExistence(timeout: 10), "The Metadata section should appear once the instrument's auto-created metadata table syncs")
         scrollDownUntilVisible(addInstrumentMetadataButton, in: app)
         addInstrumentMetadataButton.tap()
 
@@ -1125,7 +1684,7 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         templateRow.tap()
 
         let instrumentFieldRow = app.buttons["metadataColumnRow_\(columnName)"]
-        XCTAssertTrue(instrumentFieldRow.waitForExistence(timeout: 15), "The newly-added metadata field should appear once synced")
+        XCTAssertTrue(instrumentFieldRow.waitForExistence(timeout: 10), "The newly-added metadata field should appear once synced")
         scrollDownUntilVisible(instrumentFieldRow, in: app)
         instrumentFieldRow.tap()
 
@@ -1133,9 +1692,23 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         XCTAssertTrue(instrumentValueField.waitForExistence(timeout: 5))
         instrumentValueField.tap()
         instrumentValueField.typeText("42.5")
-        tapToolbarButton("saveMetadataValueButton", label: "Save", in: app)
+        tapToolbarButton("saveMetadataValueButton", label: "Save", in: app, window: "metadata-value-editor", overflowIndex: 1)
 
-        XCTAssertTrue(waitForTextAppearing("42.5", in: app, timeout: 15), "The edited metadata value should appear once synced")
+        let instrumentSaveErrorAlert = waitForAlertOrSheet(in: app, timeout: 3)
+        if instrumentSaveErrorAlert.exists {
+            XCTFail("Saving the instrument metadata value shouldn't show an error: \(instrumentSaveErrorAlert.staticTexts.allElementsBoundByIndex.map(\.label))")
+        }
+
+        let editorWindow = app.windows.matching(NSPredicate(format: "identifier CONTAINS %@", "metadata-value-editor")).firstMatch
+        let editorDeadline = Date().addingTimeInterval(10)
+        while editorWindow.exists, Date() < editorDeadline {
+            Thread.sleep(forTimeInterval: 0.3)
+        }
+        XCTAssertFalse(editorWindow.exists, "The Edit Value window should close on its own once the save genuinely completes")
+
+        scrollDownUntilVisible(instrumentFieldRow, in: app, window: "main-AppWindow")
+        XCTAssertTrue(instrumentFieldRow.waitForExistence(timeout: 10), "The edited metadata field row should still be listed once synced")
+        XCTAssertTrue(waitForTextAppearing("42.5", in: app, timeout: 10), "The edited metadata value should appear once synced")
 
         tapSegment("Storage", in: app)
 
@@ -1153,7 +1726,7 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         locationSearchField.typeText(locationName)
 
         let locationRow = app.buttons["storageLocationRow_\(locationName)"]
-        XCTAssertTrue(locationRow.waitForExistence(timeout: 15), "The newly-created location should appear once synced")
+        XCTAssertTrue(locationRow.waitForExistence(timeout: 10), "The newly-created location should appear once synced")
         locationRow.tap()
 
         tapMenuItem("storageAddMenu", item: "Add Reagent", in: app)
@@ -1162,7 +1735,7 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         XCTAssertTrue(reagentNameField.waitForExistence(timeout: 5))
         reagentNameField.tap()
         reagentNameField.typeText(reagentName)
-        selectPickerOption("newStoredReagentUnitPicker", option: "g", in: app)
+        selectPickerOption("newStoredReagentUnitPicker", option: "g", in: app, menuItemCount: 17, optionIndex: 8)
         let reagentQuantityField = app.textFields["newStoredReagentQuantityField"]
         reagentQuantityField.tap()
         reagentQuantityField.typeText("100")
@@ -1174,11 +1747,11 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         reagentSearchField.typeText(reagentName)
 
         let reagentRow = app.buttons["storedReagentRow_\(reagentName)"]
-        XCTAssertTrue(reagentRow.waitForExistence(timeout: 15), "The newly-added reagent should appear once synced")
+        XCTAssertTrue(reagentRow.waitForExistence(timeout: 10), "The newly-added reagent should appear once synced")
         reagentRow.tap()
 
-        let addReagentMetadataButton = app.buttons["addMetadataColumnButton"]
-        XCTAssertTrue(addReagentMetadataButton.waitForExistence(timeout: 15), "The Metadata section should appear once the reagent's auto-created metadata table syncs")
+        let addReagentMetadataButton = app.buttons["addMetadataFieldButton"]
+        XCTAssertTrue(addReagentMetadataButton.waitForExistence(timeout: 10), "The Metadata section should appear once the reagent's auto-created metadata table syncs")
         addReagentMetadataButton.tap()
 
         let reagentTemplateSearchField = app.textFields["addColumnSearchField"]
@@ -1195,7 +1768,7 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
             reagentTemplateRow.tap()
             if reagentFieldRow.waitForExistence(timeout: 5) { break }
         }
-        XCTAssertTrue(reagentFieldRow.waitForExistence(timeout: 15), "The newly-added metadata field should appear on the stored reagent once synced")
+        XCTAssertTrue(reagentFieldRow.waitForExistence(timeout: 10), "The newly-added metadata field should appear on the stored reagent once synced")
     }
 
     @MainActor
@@ -1206,34 +1779,36 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         app.launchArguments = ["--ui-testing-reset-state"]
         app.launch()
         signIn(app)
+        waitForSignInSyncToFinish(in: app)
 
-        tapTab("Jobs", in: app, timeout: 30)
+        tapTab("Jobs", in: app, timeout: 10)
 
         findAndTapJobRow(named: seed.jobName, in: app)
 
         let createFromTemplateButton = app.buttons["createMetadataFromTemplateButton"]
         scrollDownUntilVisible(createFromTemplateButton, in: app)
-        XCTAssertTrue(createFromTemplateButton.waitForExistence(timeout: 15))
+        XCTAssertTrue(createFromTemplateButton.waitForExistence(timeout: 10))
         createFromTemplateButton.tap()
+        waitForSignInSyncToFinish(in: app)
 
         let templateSearchFieldForTiers = app.textFields["templateSearchField"]
         XCTAssertTrue(templateSearchFieldForTiers.waitForExistence(timeout: 10))
 
-        selectPickerOption("templateCategoryFilterPicker", option: "Personal", in: app)
+        selectPickerOption("templateCategoryFilterPicker", option: "Personal", in: app, menuItemCount: 4, optionIndex: 1)
         templateSearchFieldForTiers.tap()
         templateSearchFieldForTiers.typeText(seed.personalTemplateName)
         let personalRow = app.buttons["metadataTemplateRow_\(seed.personalTemplateName)"]
         XCTAssertTrue(personalRow.waitForExistence(timeout: 10), "The personal template should be listed under the Personal category")
 
         replaceText(in: templateSearchFieldForTiers, with: seed.jobGroupTemplateName, in: app)
-        selectPickerOption("templateCategoryFilterPicker", option: "Job's Lab Group", in: app)
+        selectPickerOption("templateCategoryFilterPicker", option: "Job's Lab Group", in: app, menuItemCount: 4, optionIndex: 2)
         XCTAssertTrue(app.buttons["metadataTemplateRow_\(seed.jobGroupTemplateName)"].waitForExistence(timeout: 10), "The job's own lab-group template should be listed under Job's Lab Group")
 
         replaceText(in: templateSearchFieldForTiers, with: seed.otherGroupTemplateName, in: app)
-        selectPickerOption("templateCategoryFilterPicker", option: "Shared With Me", in: app)
+        selectPickerOption("templateCategoryFilterPicker", option: "Shared With Me", in: app, menuItemCount: 4, optionIndex: 3)
         XCTAssertTrue(app.buttons["metadataTemplateRow_\(seed.otherGroupTemplateName)"].waitForExistence(timeout: 10), "The other lab group's template should be listed under Shared With Me")
 
-        selectPickerOption("templateCategoryFilterPicker", option: "All", in: app)
+        selectPickerOption("templateCategoryFilterPicker", option: "All", in: app, menuItemCount: 4, optionIndex: 0)
         replaceText(in: templateSearchFieldForTiers, with: seed.personalTemplateName, in: app)
         XCTAssertTrue(personalRow.waitForExistence(timeout: 10))
         personalRow.tap()
@@ -1246,7 +1821,7 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         app.buttons["createMetadataTableButton"].tap()
 
         let firstColumnRow = app.buttons["metadataColumnRow_\(seed.firstColumnName)"]
-        XCTAssertTrue(firstColumnRow.waitForExistence(timeout: 15), "The metadata table's first column should render")
+        XCTAssertTrue(firstColumnRow.waitForExistence(timeout: 10), "The metadata table's first column should render")
 
         let firstGridCell = app.buttons["metadataCell_\(seed.firstColumnName)_1"]
         scrollDownUntilVisible(firstGridCell, in: app)
@@ -1261,13 +1836,13 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         app.launch()
         signIn(app)
 
-        tapTab("Jobs", in: app, timeout: 30)
+        tapTab("Jobs", in: app, timeout: 10)
 
         #if os(macOS)
         let windowCountBefore = app.windows.count
         #endif
 
-        tapToolbarButton("metadataTablesBrowserButton", label: "Metadata Tables", in: app, timeout: 10)
+        tapToolbarButton("metadataTablesBrowserButton", label: "Metadata Tables", in: app, overflowIndex: 1, timeout: 10)
 
         let searchField = app.textFields["metadataTablesBrowserSearchField"]
         XCTAssertTrue(searchField.waitForExistence(timeout: 10), "The Metadata Tables browser's own content should be reachable")
@@ -1284,7 +1859,7 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         app.launch()
         signIn(app)
 
-        tapTab("Protocols", in: app, timeout: 30)
+        tapTab("Protocols", in: app, timeout: 10)
         openConnectionSettings(in: app)
 
         tapWorkOfflineToggle(in: app)
@@ -1302,7 +1877,7 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         app.buttons["createProtocolButton"].tap()
 
         let matchingRows = app.staticTexts.matching(NSPredicate(format: "label == %@ OR value == %@", protocolTitle, protocolTitle))
-        XCTAssertTrue(matchingRows.firstMatch.waitForExistence(timeout: 15), "The protocol should still be created locally while Work Offline is on")
+        XCTAssertTrue(matchingRows.firstMatch.waitForExistence(timeout: 10), "The protocol should still be created locally while Work Offline is on")
 
         XCTAssertTrue(
             waitForTextAppearing("Pending sync", in: app, timeout: 10),
@@ -1318,7 +1893,7 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         tapTab("Protocols", in: app, timeout: 10)
 
         XCTAssertTrue(
-            waitForTextDisappearing("Pending sync", in: app, timeout: 20),
+            waitForTextDisappearing("Pending sync", in: app, timeout: 10),
             "Turning Work Offline back off should automatically replay the outbox and sync the queued protocol"
         )
     }
@@ -1336,17 +1911,17 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         app.launch()
         signIn(app, baseURL: "https://127.0.0.1:8080/api/v1/")
 
-        tapTab("Sessions", in: app, timeout: 30)
+        tapTab("Sessions", in: app, timeout: 10)
         let sessionRow = waitForMatchAcrossTypes(
             NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", seed.sessionName, seed.sessionName),
-            in: app, timeout: 30
+            in: app, timeout: 10
         )
         XCTAssertTrue(sessionRow.exists, "The session seeded via the API should appear once synced")
         sessionRow.tap()
 
         let editCaptionsButton = app.buttons["editCaptionsButton"].firstMatch
         scrollDownUntilVisible(editCaptionsButton, in: app)
-        XCTAssertTrue(editCaptionsButton.waitForExistence(timeout: 15), "The seeded audio annotation already has a transcription, so Edit Captions should be reachable")
+        XCTAssertTrue(editCaptionsButton.waitForExistence(timeout: 10), "The seeded audio annotation already has a transcription, so Edit Captions should be reachable")
         editCaptionsButton.tap()
 
         let firstCue = app.textViews["captionCueTextField_0"].firstMatch
@@ -1362,7 +1937,7 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         XCTAssertTrue(saveButton.waitForExistence(timeout: 5))
         saveButton.tap()
 
-        XCTAssertTrue(waitForTextDisappearing("Edit Captions", in: app, timeout: 15) || !app.buttons["saveCaptionsButton"].exists, "Saving should dismiss the caption editor")
+        XCTAssertTrue(waitForTextDisappearing("Edit Captions", in: app, timeout: 10) || !app.buttons["saveCaptionsButton"].exists, "Saving should dismiss the caption editor")
 
         let readback = try getJSON("step-annotations/\(seed.stepAnnotationID)/", deviceToken: seed.deviceToken)
         let transcription = readback["transcription"] as? String ?? ""
@@ -1380,8 +1955,8 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         app.launch()
         signIn(app)
 
-        tapTab("Jobs", in: app, timeout: 30)
-        tapToolbarButton("labGroupsButton", label: "Lab Groups", in: app, timeout: 15)
+        tapTab("Jobs", in: app, timeout: 10)
+        tapToolbarButton("labGroupsButton", label: "Lab Groups", in: app, overflowIndex: 2, timeout: 10)
 
         let newLabGroupButton = app.buttons["newLabGroupButton"].firstMatch
         XCTAssertTrue(newLabGroupButton.waitForExistence(timeout: 10))
@@ -1398,7 +1973,7 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
 
         let groupRow = waitForMatchAcrossTypes(
             NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", groupName, groupName),
-            in: app, timeout: 20
+            in: app, timeout: 10
         )
         XCTAssertTrue(groupRow.exists, "The newly-created lab group should appear in the list once synced")
         groupRow.tap()
@@ -1417,12 +1992,192 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         XCTAssertTrue(sendInviteButton.waitForExistence(timeout: 5))
         sendInviteButton.tap()
 
-        XCTAssertTrue(waitForTextDisappearing("Invite Member", in: app, timeout: 15) || !app.buttons["sendInviteButton"].exists, "Sending the invite should dismiss the sheet")
+        XCTAssertTrue(waitForTextDisappearing("Invite Member", in: app, timeout: 10) || !app.buttons["sendInviteButton"].exists, "Sending the invite should dismiss the sheet")
 
         let deviceToken = try fetchDeviceTokenViaAPI()
         let groups = try getJSON("lab-groups/my_groups/?limit=500", deviceToken: deviceToken)
         let results = groups["results"] as? [[String: Any]] ?? []
         XCTAssertTrue(results.contains { ($0["name"] as? String) == groupName }, "The lab group created via the real UI should exist server-side")
+    }
+
+    @MainActor
+    func testProtocolAccessManagementGrantsEditorAccessLive() throws {
+        let protocolTitle = "Live Access Test \(Date().timeIntervalSince1970)"
+        let deviceTokenForSeed = try fetchDeviceTokenViaAPI()
+        _ = try postJSON("protocols/", body: ["protocol_title": protocolTitle, "enabled": false], deviceToken: deviceTokenForSeed)
+
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing-reset-state"]
+        app.launch()
+        signIn(app)
+        waitForSignInSyncToFinish(in: app)
+
+        tapTab("Protocols", in: app, timeout: 10)
+        let protocolSearchField = app.textFields["protocolSearchField"]
+        XCTAssertTrue(protocolSearchField.waitForExistence(timeout: 10))
+        protocolSearchField.tap()
+        protocolSearchField.typeText(protocolTitle)
+
+        let protocolRow = elementContaining(protocolTitle, in: app)
+        XCTAssertTrue(protocolRow.waitForExistence(timeout: 10), "The API-created protocol should appear once synced and filtered by search")
+        protocolRow.tap()
+
+        let manageAccessButton = app.buttons["manageProtocolAccessButton"]
+        XCTAssertTrue(manageAccessButton.waitForExistence(timeout: 10), "Manage Access should be immediately available since the protocol's ownership was already established server-side before the app ever pulled it")
+        let beforeTapAttachment = XCTAttachment(screenshot: app.screenshot())
+        beforeTapAttachment.name = "before-manage-access-tap"
+        beforeTapAttachment.lifetime = .keepAlways
+        add(beforeTapAttachment)
+        manageAccessButton.tap()
+        let afterTapAttachment = XCTAttachment(screenshot: app.screenshot())
+        afterTapAttachment.name = "after-manage-access-tap"
+        afterTapAttachment.lifetime = .keepAlways
+        add(afterTapAttachment)
+
+        let searchField = app.textFields["accessSearchUsersField"]
+        XCTAssertTrue(searchField.waitForExistence(timeout: 10), "Manage Access should open the access management screen")
+        searchField.tap()
+        searchField.typeText("importtestuser")
+
+        let addEditorButton = app.buttons["addAsEditorButton_importtestuser"]
+        XCTAssertTrue(addEditorButton.waitForExistence(timeout: 10), "Searching should find the real importtestuser account")
+        addEditorButton.tap()
+
+        XCTAssertTrue(app.staticTexts["editorRow_importtestuser"].waitForExistence(timeout: 10), "importtestuser should now appear in the Editors list")
+
+        let encodedTitle = protocolTitle.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? protocolTitle
+        let protocolsJSON = try getJSON("protocols/?search=\(encodedTitle)", deviceToken: deviceTokenForSeed)
+        let matches = protocolsJSON["results"] as? [[String: Any]] ?? []
+        guard let match = matches.first(where: { ($0["protocol_title"] as? String) == protocolTitle }) else {
+            XCTFail("Couldn't find the created protocol via the real API to verify its editors array")
+            return
+        }
+        let editors = match["editors"] as? [Int] ?? []
+        let editorsUsernames = match["editors_usernames"] as? [String] ?? []
+        XCTAssertTrue(editorsUsernames.contains("importtestuser"), "The real server-side editors array should include importtestuser after granting access through the UI")
+        XCTAssertFalse(editors.isEmpty)
+    }
+
+    @MainActor
+    func testSessionAccessManagementGrantsEditorAccessLive() throws {
+        let sessionName = "Live Session Access Test \(Date().timeIntervalSince1970)"
+        let deviceTokenForSeed = try fetchDeviceTokenViaAPI()
+        _ = try postJSON("sessions/", body: ["name": sessionName, "enabled": false, "protocols": []], deviceToken: deviceTokenForSeed)
+
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing-reset-state"]
+        app.launch()
+        signIn(app)
+        waitForSignInSyncToFinish(in: app)
+
+        tapTab("Sessions", in: app, timeout: 10)
+        let sessionRow = elementContaining(sessionName, in: app)
+        XCTAssertTrue(sessionRow.waitForExistence(timeout: 10), "The API-created session should appear once synced")
+        sessionRow.tap()
+
+        let beforeTapAttachment = XCTAttachment(screenshot: app.screenshot())
+        beforeTapAttachment.name = "before-session-manage-access-tap"
+        beforeTapAttachment.lifetime = .keepAlways
+        add(beforeTapAttachment)
+        tapToolbarButton("manageSessionAccessButton", label: "Manage Access", in: app, timeout: 10)
+        let afterTapAttachment = XCTAttachment(screenshot: app.screenshot())
+        afterTapAttachment.name = "after-session-manage-access-tap"
+        afterTapAttachment.lifetime = .keepAlways
+        add(afterTapAttachment)
+
+        let searchField = app.textFields["accessSearchUsersField"]
+        XCTAssertTrue(searchField.waitForExistence(timeout: 10), "Manage Access should open the access management screen")
+        searchField.tap()
+        searchField.typeText("importtestuser")
+
+        let addEditorButton = app.buttons["addAsEditorButton_importtestuser"]
+        XCTAssertTrue(addEditorButton.waitForExistence(timeout: 10), "Searching should find the real importtestuser account")
+        addEditorButton.tap()
+
+        XCTAssertTrue(app.staticTexts["editorRow_importtestuser"].waitForExistence(timeout: 10), "importtestuser should now appear in the Editors list")
+
+        let encodedName = sessionName.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? sessionName
+        let sessionsJSON = try getJSON("sessions/?search=\(encodedName)", deviceToken: deviceTokenForSeed)
+        let matches = sessionsJSON["results"] as? [[String: Any]] ?? []
+        guard let match = matches.first(where: { ($0["name"] as? String) == sessionName }) else {
+            XCTFail("Couldn't find the created session via the real API to verify its editors array")
+            return
+        }
+        let editors = match["editors"] as? [Int] ?? []
+        let editorsUsernames = match["editors_usernames"] as? [String] ?? []
+        XCTAssertTrue(editorsUsernames.contains("importtestuser"), "The real server-side editors array should include importtestuser after granting access through the UI")
+        XCTAssertFalse(editors.isEmpty)
+    }
+
+    @MainActor
+    func testSharedWithMeShowsAccessRoleBadgeForProtocolAndSession() throws {
+        let unique = Int(Date().timeIntervalSince1970)
+        let deviceToken = try fetchDeviceTokenViaAPI()
+
+        let usersJSON = try getJSON("users/?search=importtestuser", deviceToken: deviceToken)
+        guard let userResults = usersJSON["results"] as? [[String: Any]],
+              let importTestUserID = userResults.first(where: { ($0["username"] as? String) == "importtestuser" })?["id"] as? Int else {
+            XCTFail("Couldn't find importtestuser's real id via the API")
+            return
+        }
+
+        let protocolTitle = "Shared Badge Protocol \(unique)"
+        let protocolJSON = try postJSON("protocols/", body: ["protocol_title": protocolTitle, "enabled": false], deviceToken: deviceToken)
+        guard let protocolID = protocolJSON["id"] as? Int else {
+            XCTFail("Creating a protocol should return an id")
+            return
+        }
+        try patchJSON("protocols/\(protocolID)/", body: ["editors": [importTestUserID]], deviceToken: deviceToken)
+
+        let sessionName = "Shared Badge Session \(unique)"
+        let sessionJSON = try postJSON("sessions/", body: ["name": sessionName, "enabled": false, "protocols": []], deviceToken: deviceToken)
+        guard let sessionID = sessionJSON["id"] as? Int else {
+            XCTFail("Creating a session should return an id")
+            return
+        }
+        try patchJSON("sessions/\(sessionID)/", body: ["viewers": [importTestUserID]], deviceToken: deviceToken)
+
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing-reset-state"]
+        app.launch()
+        signIn(app, username: "importtestuser", password: "importtestuser123")
+
+        tapTab("Protocols", in: app, timeout: 10)
+        tapToolbarButton("protocolFilterMenu", label: "Filter", in: app, timeout: 10)
+        #if os(macOS)
+        let protocolSharedItem = openMenuItem(itemCount: 5, at: 2, in: app)
+        #else
+        let protocolSharedItem = firstExisting(app.buttons["Shared With Me"], app.menuItems["Shared With Me"])
+        #endif
+        XCTAssertTrue(protocolSharedItem.waitForExistence(timeout: 5))
+        protocolSharedItem.tap()
+
+        let anyAlert = app.alerts.firstMatch
+        if anyAlert.waitForExistence(timeout: 3) {
+            XCTFail("Unexpected alert after applying the filter: \(anyAlert.staticTexts.allElementsBoundByIndex.map(\.label))")
+        }
+
+        XCTAssertTrue(elementContaining(protocolTitle, in: app).waitForExistence(timeout: 10), "The protocol shared as editor should appear under Shared With Me")
+        XCTAssertTrue(
+            firstExisting(app.staticTexts["protocolAccessRoleBadge_\(protocolTitle)"], elementContaining("Editor", in: app)).waitForExistence(timeout: 5),
+            "The protocol row should show an Editor access-role badge"
+        )
+
+        tapTab("Sessions", in: app, timeout: 10)
+        tapToolbarButton("sessionFilterMenu", label: "Filter", in: app, timeout: 10)
+        #if os(macOS)
+        let sessionSharedItem = openMenuItem(itemCount: 3, at: 2, in: app)
+        #else
+        let sessionSharedItem = firstExisting(app.buttons["Shared With Me"], app.menuItems["Shared With Me"])
+        #endif
+        XCTAssertTrue(sessionSharedItem.waitForExistence(timeout: 5))
+        sessionSharedItem.tap()
+
+        XCTAssertTrue(elementContaining(sessionName, in: app).waitForExistence(timeout: 10), "The session shared as viewer should appear under Shared With Me")
+        XCTAssertTrue(
+            firstExisting(app.staticTexts["sessionAccessRoleBadge_\(sessionName)"], elementContaining("Viewer", in: app)).waitForExistence(timeout: 5),
+            "The session row should show a Viewer access-role badge"
+        )
     }
 
     #if !os(macOS)
@@ -1432,28 +2187,24 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         app.launchArguments = ["--ui-testing-reset-state"]
         app.launch()
         signIn(app)
+        waitForSignInSyncToFinish(in: app)
 
-        tapTab("Sessions", in: app, timeout: 30)
+        tapTab("Sessions", in: app, timeout: 10)
 
         let settingsButton = app.buttons["settingsButton"]
         XCTAssertTrue(settingsButton.waitForExistence(timeout: 10), "Settings should be reachable from the Sessions tab, not just Protocols")
         settingsButton.tap()
         XCTAssertTrue(waitForTextAppearing("Appearance", in: app, timeout: 10) || waitForTextAppearing("Connection", in: app, timeout: 10), "Settings should open correctly from a non-Protocols tab")
-        #if os(iOS)
-        if UIDevice.current.userInterfaceIdiom == .phone {
-            let doneButton = app.buttons["Done"].firstMatch
-            if doneButton.waitForExistence(timeout: 3) {
-                doneButton.tap()
-            }
+        let doneButton = app.buttons["Done"].firstMatch
+        if doneButton.waitForExistence(timeout: 3) {
+            doneButton.tap()
         }
-        #endif
 
         tapTab("Sessions", in: app, timeout: 10)
         let accountMenu = app.buttons["accountMenu"]
         XCTAssertTrue(accountMenu.waitForExistence(timeout: 10), "Account should be reachable from the Sessions tab, not just Protocols")
-        accountMenu.tap()
-        let switchInstanceItem = firstExisting(app.menuItems["Switch Instance…"], app.buttons["Switch Instance…"])
-        XCTAssertTrue(switchInstanceItem.waitForExistence(timeout: 5), "The Account menu should list Switch Instance and Sign Out")
+        let switchInstanceItem = openAccountMenuAndFindSwitchInstance(in: app)
+        XCTAssertTrue(switchInstanceItem.exists, "The Account menu should list Switch Instance and Sign Out")
     }
 
     @MainActor
@@ -1467,7 +2218,7 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         signIn(app)
 
         let settingsButton = app.buttons["settingsButton"]
-        XCTAssertTrue(settingsButton.waitForExistence(timeout: 15))
+        XCTAssertTrue(settingsButton.waitForExistence(timeout: 10))
         settingsButton.tap()
 
         let accountRow = elementContaining("Account", in: app)
@@ -1487,7 +2238,7 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         saveButton.tap()
 
         let editButtonReturned = app.buttons["editAccountProfileButton"]
-        XCTAssertTrue(editButtonReturned.waitForExistence(timeout: 15), "Saving should return to the read-only profile view")
+        XCTAssertTrue(editButtonReturned.waitForExistence(timeout: 10), "Saving should return to the read-only profile view")
 
         let deviceToken = try fetchDeviceTokenViaAPI()
         let profile = try getJSON("users/1/", deviceToken: deviceToken)
@@ -1504,7 +2255,7 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         signIn(app)
 
         let settingsButton = app.buttons["settingsButton"]
-        XCTAssertTrue(settingsButton.waitForExistence(timeout: 15))
+        XCTAssertTrue(settingsButton.waitForExistence(timeout: 10))
         settingsButton.tap()
 
         let accountRow = elementContaining("Account", in: app)
@@ -1531,7 +2282,7 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
 
         app.buttons["changePasswordButton"].tap()
 
-        XCTAssertTrue(waitForTextAppearing("current_password", in: app, timeout: 15), "A wrong current password should surface the real server-side validation error")
+        XCTAssertTrue(waitForTextAppearing("current_password", in: app, timeout: 10), "A wrong current password should surface the real server-side validation error")
         XCTAssertFalse(app.staticTexts["Password changed successfully."].exists, "The change must not have gone through")
 
         XCTAssertNoThrow(try fetchDeviceTokenViaAPI(), "The real password must still work afterward — this test must never actually change it")
@@ -1543,14 +2294,13 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         app.launchArguments = ["--ui-testing-reset-state"]
         app.launch()
         signIn(app)
+        waitForSignInSyncToFinish(in: app)
 
-        tapTab("Protocols", in: app, timeout: 30)
+        tapTab("Protocols", in: app, timeout: 10)
         let accountMenu = app.buttons["accountMenu"]
-        XCTAssertTrue(accountMenu.waitForExistence(timeout: 15))
-        accountMenu.tap()
-
-        let switchInstanceItem = firstExisting(app.menuItems["Switch Instance…"], app.buttons["Switch Instance…"])
-        XCTAssertTrue(switchInstanceItem.waitForExistence(timeout: 5))
+        XCTAssertTrue(accountMenu.waitForExistence(timeout: 10))
+        let switchInstanceItem = openAccountMenuAndFindSwitchInstance(in: app)
+        XCTAssertTrue(switchInstanceItem.exists)
         switchInstanceItem.tap()
 
         let knownInstanceRow = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "knownInstanceRow_")).firstMatch
@@ -1558,7 +2308,7 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         knownInstanceRow.tap()
 
         XCTAssertTrue(
-            firstExisting(app.buttons["accountMenu"], app.buttons["settingsButton"]).waitForExistence(timeout: 15),
+            firstExisting(app.buttons["accountMenu"], app.buttons["settingsButton"]).waitForExistence(timeout: 10),
             "Tapping a known instance should sign back in directly using its stored credentials, with nothing retyped"
         )
     }
@@ -1574,7 +2324,7 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         signIn(app)
 
         let settingsButton = app.buttons["settingsButton"]
-        XCTAssertTrue(settingsButton.waitForExistence(timeout: 15))
+        XCTAssertTrue(settingsButton.waitForExistence(timeout: 10))
         settingsButton.tap()
 
         let tokensRow = elementContaining("API Tokens", in: app)
@@ -1594,14 +2344,14 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         XCTAssertTrue(createButton.waitForExistence(timeout: 5))
         createButton.tap()
 
-        XCTAssertTrue(waitForTextAppearing("TOKEN CREATED", in: app, timeout: 15), "Creating a token through the real UI should show the one-time reveal")
+        XCTAssertTrue(waitForTextAppearing("TOKEN CREATED", in: app, timeout: 10), "Creating a token through the real UI should show the one-time reveal")
 
         let doneButton = app.buttons["Done"].firstMatch
         XCTAssertTrue(doneButton.waitForExistence(timeout: 5))
         doneButton.tap()
 
         let createdRow = elementContaining(label, in: app)
-        XCTAssertTrue(createdRow.waitForExistence(timeout: 15), "The newly-created token should appear in the list once synced")
+        XCTAssertTrue(createdRow.waitForExistence(timeout: 10), "The newly-created token should appear in the list once synced")
 
         let deviceToken = try fetchDeviceTokenViaAPI()
         let listing = try getJSON("device-tokens/?limit=1000", deviceToken: deviceToken)
@@ -1625,23 +2375,25 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         app.launchArguments = ["--ui-testing-reset-state"]
         app.launch()
         signIn(app)
+        waitForSignInSyncToFinish(in: app)
 
-        tapTab("Jobs", in: app, timeout: 30)
+        tapTab("Jobs", in: app, timeout: 10)
         findAndTapJobRow(named: jobName, in: app)
 
         let createFromTemplateButton = app.buttons["createMetadataFromTemplateButton"]
         scrollDownUntilVisible(createFromTemplateButton, in: app)
-        XCTAssertTrue(createFromTemplateButton.waitForExistence(timeout: 15))
+        XCTAssertTrue(createFromTemplateButton.waitForExistence(timeout: 10))
         createFromTemplateButton.tap()
+        waitForSignInSyncToFinish(in: app)
 
-        selectPickerOption("templateCategoryFilterPicker", option: "All", in: app)
+        selectPickerOption("templateCategoryFilterPicker", option: "All", in: app, menuItemCount: 4, optionIndex: 0)
         let templateSearchField = app.textFields["templateSearchField"]
         XCTAssertTrue(templateSearchField.waitForExistence(timeout: 10))
         templateSearchField.tap()
         templateSearchField.typeText(seed.templateName)
 
         let templateRow = app.buttons["metadataTemplateRow_\(seed.templateName)"]
-        XCTAssertTrue(templateRow.waitForExistence(timeout: 15))
+        XCTAssertTrue(templateRow.waitForExistence(timeout: 10))
         templateRow.tap()
 
         let sampleCountField = app.textFields["metadataSampleCountField"]
@@ -1651,28 +2403,35 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         app.buttons["createMetadataTableButton"].tap()
 
         let openFullTableViewButton = app.buttons["openFullMetadataTableViewButton"]
-        XCTAssertTrue(openFullTableViewButton.waitForExistence(timeout: 15))
+        XCTAssertTrue(openFullTableViewButton.waitForExistence(timeout: 10))
         scrollDownUntilVisible(openFullTableViewButton, in: app)
         openFullTableViewButton.tap()
 
-        let exportMenu = app.buttons["exportMenu"]
-        XCTAssertTrue(exportMenu.waitForExistence(timeout: 10), "The Export menu should be reachable once the table has columns")
-        exportMenu.tap()
+        tapToolbarButton("exportMenu", label: "Export", in: app, window: "metadata-table-detail", timeout: 10)
 
-        let exportSDRFButton = app.buttons["exportSDRFButton"]
+        let exportSDRFButton = firstExisting(app.buttons["exportSDRFButton"], app.menuItems["exportSDRFButton"])
         XCTAssertTrue(exportSDRFButton.waitForExistence(timeout: 5))
         exportSDRFButton.tap()
 
-        XCTAssertTrue(app.alerts["Export Queued"].waitForExistence(timeout: 15), "Submitting an SDRF export should queue a real async task server-side")
-        app.alerts["Export Queued"].buttons["OK"].tap()
+        let exportQueuedAlert = waitForAlertOrSheet(in: app, timeout: 10)
+        XCTAssertTrue(exportQueuedAlert.waitForExistence(timeout: 5), "Submitting an SDRF export should queue a real async task server-side")
+        exportQueuedAlert.buttons["OK"].tap()
 
-        let openAsyncTaskCenterButton = app.buttons["openAsyncTaskCenterButton"]
-        XCTAssertTrue(openAsyncTaskCenterButton.waitForExistence(timeout: 5))
-        openAsyncTaskCenterButton.tap()
+        tapToolbarButton("openAsyncTaskCenterButton", label: "Async Tasks", in: app, window: "metadata-table-detail", timeout: 10)
 
         let taskRowPredicate = NSPredicate(format: "identifier BEGINSWITH %@", "asyncTaskRow_")
-        let taskRow = app.staticTexts.matching(taskRowPredicate).firstMatch
-        XCTAssertTrue(taskRow.waitForExistence(timeout: 15), "The just-submitted export task should appear in the Async Tasks list")
+        let asButton = app.buttons.matching(taskRowPredicate).firstMatch
+        let asStaticText = app.staticTexts.matching(taskRowPredicate).firstMatch
+        let asOtherElement = app.otherElements.matching(taskRowPredicate).firstMatch
+        let deadline = Date().addingTimeInterval(15)
+        var taskRow = asOtherElement
+        while Date() < deadline {
+            if asButton.exists { taskRow = asButton; break }
+            if asStaticText.exists { taskRow = asStaticText; break }
+            if asOtherElement.exists { taskRow = asOtherElement; break }
+            Thread.sleep(forTimeInterval: 0.3)
+        }
+        XCTAssertTrue(taskRow.exists, "The just-submitted export task should appear in the Async Tasks list")
 
         let deviceToken = try fetchDeviceTokenViaAPI()
         let listing = try getJSON("async-tasks/?task_type=EXPORT_SDRF&limit=1", deviceToken: deviceToken)
@@ -1695,23 +2454,25 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         app.launchArguments = ["--ui-testing-reset-state"]
         app.launch()
         signIn(app)
+        waitForSignInSyncToFinish(in: app)
 
-        tapTab("Jobs", in: app, timeout: 30)
+        tapTab("Jobs", in: app, timeout: 10)
         findAndTapJobRow(named: jobName, in: app)
 
         let createFromTemplateButton = app.buttons["createMetadataFromTemplateButton"]
         scrollDownUntilVisible(createFromTemplateButton, in: app)
-        XCTAssertTrue(createFromTemplateButton.waitForExistence(timeout: 15))
+        XCTAssertTrue(createFromTemplateButton.waitForExistence(timeout: 10))
         createFromTemplateButton.tap()
+        waitForSignInSyncToFinish(in: app)
 
-        selectPickerOption("templateCategoryFilterPicker", option: "All", in: app)
+        selectPickerOption("templateCategoryFilterPicker", option: "All", in: app, menuItemCount: 4, optionIndex: 0)
         let templateSearchField = app.textFields["templateSearchField"]
         XCTAssertTrue(templateSearchField.waitForExistence(timeout: 10))
         templateSearchField.tap()
         templateSearchField.typeText(seed.templateName)
 
         let templateRow = app.buttons["metadataTemplateRow_\(seed.templateName)"]
-        XCTAssertTrue(templateRow.waitForExistence(timeout: 15))
+        XCTAssertTrue(templateRow.waitForExistence(timeout: 10))
         templateRow.tap()
 
         let sampleCountField = app.textFields["metadataSampleCountField"]
@@ -1721,14 +2482,12 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         app.buttons["createMetadataTableButton"].tap()
 
         let openFullTableViewButton = app.buttons["openFullMetadataTableViewButton"]
-        XCTAssertTrue(openFullTableViewButton.waitForExistence(timeout: 15))
+        XCTAssertTrue(openFullTableViewButton.waitForExistence(timeout: 10))
         scrollDownUntilVisible(openFullTableViewButton, in: app)
         openFullTableViewButton.tap()
 
-        let importMenu = app.buttons["importMenu"]
-        XCTAssertTrue(importMenu.waitForExistence(timeout: 10), "The Import menu should be reachable for the table's owner")
-        importMenu.tap()
-        let importButton = app.buttons["importSDRFButton"]
+        tapToolbarButton("importMenu", label: "Import", in: app, window: "metadata-table-detail", timeout: 10)
+        let importButton = firstExisting(app.buttons["importSDRFButton"], app.menuItems["importSDRFButton"])
         XCTAssertTrue(importButton.waitForExistence(timeout: 5), "Choose SDRF File should be reachable inside the Import menu")
         XCTAssertTrue(importButton.isEnabled, "The import trigger should be enabled for the table's owner/editor")
 
@@ -1820,10 +2579,10 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         #if os(macOS)
         app.typeKey(",", modifierFlags: .command)
         #else
-        tapToolbarButton("settingsButton", label: "Settings", in: app)
+        tapToolbarButton("settingsButton", label: "Settings", in: app, verify: { self.waitForTextAppearing("Connection", in: app, timeout: 3) })
         #endif
         XCTAssertTrue(waitForTextAppearing("Connection", in: app, timeout: 10))
-        elementContaining("Connection", in: app).tap()
+        firstExisting(app.buttons["settingsSidebarItem_connection"], app.staticTexts["settingsSidebarItem_connection"], app.cells["settingsSidebarItem_connection"]).tap()
     }
 
     @MainActor
@@ -1839,39 +2598,126 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
     private func tapWorkOfflineToggle(in app: XCUIApplication) {
         let toggle = firstExisting(app.switches["forceOfflineToggle"], app.checkBoxes["forceOfflineToggle"])
         XCTAssertTrue(toggle.waitForExistence(timeout: 10), "The Work Offline toggle should be reachable from Settings > Connection")
-        let valueBeforeTap = toggle.value as? String
+        func describeValue() -> String { "\(toggle.value ?? "nil")" }
+        let valueBeforeTap = describeValue()
         var valueAfterTap = valueBeforeTap
         for _ in 0..<3 {
             toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
             Thread.sleep(forTimeInterval: 0.5)
-            valueAfterTap = toggle.value as? String
+            valueAfterTap = describeValue()
             if valueAfterTap != valueBeforeTap { break }
         }
-        XCTAssertNotEqual(valueBeforeTap, valueAfterTap, "Tapping the Work Offline toggle should flip its reported value (before: \(valueBeforeTap ?? "nil"), after: \(valueAfterTap ?? "nil"))")
+        XCTAssertNotEqual(valueBeforeTap, valueAfterTap, "Tapping the Work Offline toggle should flip its reported value (before: \(valueBeforeTap), after: \(valueAfterTap))")
     }
 
-    @MainActor
-    private func signIn(_ app: XCUIApplication, baseURL: String = "http://127.0.0.1:8002/api/v1/") {
+    private func openAccountMenuAndFindSwitchInstance(in app: XCUIApplication) -> XCUIElement {
+        let accountMenu = app.buttons["accountMenu"]
+        guard accountMenu.waitForExistence(timeout: 10) else {
+            return app.buttons["switchInstanceButton"]
+        }
+        waitUntilHittableAndTap(accountMenu, timeout: 10)
+
+        let deadline = Date().addingTimeInterval(5)
+        while Date() < deadline {
+            let realMenus = app.menus.allElementsBoundByIndex.filter { $0.frame.width > 0 && $0.frame.height > 0 }
+            if let openMenu = realMenus.last {
+                let item = firstExisting(openMenu.menuItems["switchInstanceButton"], openMenu.buttons["switchInstanceButton"])
+                if item.waitForExistence(timeout: 2) { return item }
+            }
+            Thread.sleep(forTimeInterval: 0.2)
+        }
+        return firstExisting(app.menuItems["switchInstanceButton"], app.buttons["switchInstanceButton"])
+    }
+
+    private func ensureSignedOut(in app: XCUIApplication, timeout: TimeInterval = 20) {
         let serverURLField = app.textFields["serverURLField"]
-        XCTAssertTrue(serverURLField.waitForExistence(timeout: 5))
+        if serverURLField.waitForExistence(timeout: 5) {
+            return
+        }
+
+        #if os(macOS)
+        let accountMenu = app.buttons["accountMenu"]
+        guard accountMenu.waitForExistence(timeout: 5) else { return }
+        accountMenu.tap()
+        let signOutMenuItem = firstExisting(app.menuItems["signOutButton"], app.buttons["signOutButton"])
+        guard signOutMenuItem.waitForExistence(timeout: 5) else { return }
+        signOutMenuItem.tap()
+        #else
+        tapToolbarButton("settingsButton", label: "Settings", in: app, verify: { self.waitForTextAppearing("Account", in: app, timeout: 3) })
+        let accountSidebarItem = firstExisting(app.buttons["settingsSidebarItem_account"], app.staticTexts["settingsSidebarItem_account"], app.cells["settingsSidebarItem_account"])
+        scrollDownUntilVisible(accountSidebarItem, in: app)
+        guard accountSidebarItem.waitForExistence(timeout: 5) else { return }
+        accountSidebarItem.tap()
+        let signOutButton = app.buttons["signOutButton"]
+        guard signOutButton.waitForExistence(timeout: 5) else { return }
+        signOutButton.tap()
+        #endif
+
+        XCTAssertTrue(serverURLField.waitForExistence(timeout: timeout), "Should return to the sign-in screen after signing out a pre-existing session")
+        #if os(iOS)
+        let doneButton = app.buttons["doneButton"]
+        if doneButton.exists { doneButton.tap() }
+        #endif
+    }
+
+    private func signIn(_ app: XCUIApplication, baseURL: String = "http://127.0.0.1:8002/api/v1/", username: String = "testuser", password: String = "testuser123") {
+        ensureSignedOut(in: app)
+        let serverURLField = app.textFields["serverURLField"]
+        XCTAssertTrue(serverURLField.waitForExistence(timeout: 10))
         replaceText(in: serverURLField, with: baseURL, in: app)
 
         let usernameField = app.textFields["usernameField"]
         usernameField.tap()
-        usernameField.typeText("testuser")
+        usernameField.typeText(username)
 
         let passwordField = app.secureTextFields["passwordField"]
         passwordField.tap()
-        passwordField.typeText("testuser123")
+        passwordField.typeText(password)
 
         app.buttons["signInButton"].tap()
+        dismissSavePasswordPromptIfPresent()
+    }
+
+    private func dismissSavePasswordPromptIfPresent() {
+        #if !os(macOS)
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let notNow = springboard.buttons["Not Now"]
+        if notNow.waitForExistence(timeout: 3) {
+            notNow.tap()
+        }
+        #endif
     }
 
     @MainActor
-    private func selectPickerOption(_ identifier: String, option: String, in app: XCUIApplication) {
-        let picker = firstExisting(app.popUpButtons[identifier], app.buttons[identifier], app.otherElements[identifier])
-        XCTAssertTrue(picker.waitForExistence(timeout: 5), "Picker \"\(identifier)\" not found")
+    private func waitForSignInSyncToFinish(in app: XCUIApplication, timeout: TimeInterval = 30) {
+        let bannerQuery = app.staticTexts.matching(NSPredicate(format: "identifier == %@", "syncProgressBanner"))
+        let deadline = Date().addingTimeInterval(timeout)
+        var consecutiveAbsences = 0
+        while Date() < deadline {
+            if bannerQuery.firstMatch.exists {
+                consecutiveAbsences = 0
+            } else {
+                consecutiveAbsences += 1
+                if consecutiveAbsences >= 40 { return }
+            }
+            Thread.sleep(forTimeInterval: 0.2)
+        }
+    }
+
+    @MainActor
+    private func selectPickerOption(_ identifier: String, option: String, in app: XCUIApplication, menuItemCount: Int? = nil, optionIndex: Int? = nil) {
+        let picker = waitForFirstExisting(timeout: 10, app.popUpButtons[identifier], app.buttons[identifier], app.otherElements[identifier])
+        XCTAssertTrue(picker.exists, "Picker \"\(identifier)\" not found")
         picker.tap()
+
+        #if os(macOS)
+        if let menuItemCount, let optionIndex {
+            let optionElement = openMenuItem(itemCount: menuItemCount, at: optionIndex, in: app)
+            XCTAssertTrue(optionElement.waitForExistence(timeout: 5), "Picker option \"\(option)\" not found")
+            optionElement.tap()
+            return
+        }
+        #endif
 
         let predicate = NSPredicate(format: "label == %@", option)
         let queries = [app.buttons.matching(predicate), app.staticTexts.matching(predicate), app.menuItems.matching(predicate)]
@@ -2313,31 +3159,57 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         return try result!.get()
     }
 
-    private func scrollDownUntilVisible(_ element: XCUIElement, in app: XCUIApplication, maxAttempts: Int = 15) {
+    private func scrollDownUntilVisible(_ element: XCUIElement, in app: XCUIApplication, window windowIdentifierSubstring: String? = nil, maxAttempts: Int = 15) {
+        #if os(macOS)
+        let window = frontmostWindow(in: app, matching: windowIdentifierSubstring)
         var attempts = 0
-        while attempts < maxAttempts {
-            if element.exists, element.isHittable, app.frame.contains(element.frame) {
+        while attempts < 6 {
+            if element.exists, element.isHittable, element.frame.width > 0, element.frame.height > 0, window.frame.contains(element.frame) {
                 return
             }
-            app.swipeUp(velocity: .fast)
+            let start = window.coordinate(withNormalizedOffset: CGVector(dx: 0.99, dy: 0.15))
+            let end = window.coordinate(withNormalizedOffset: CGVector(dx: 0.99, dy: 0.95))
+            start.press(forDuration: 0.05, thenDragTo: end)
+            attempts += 1
+        }
+        #else
+        var scopedWindow: XCUIElement?
+        if let windowIdentifierSubstring, UIDevice.current.userInterfaceIdiom == .pad {
+            let match = app.windows.matching(NSPredicate(format: "identifier CONTAINS %@", windowIdentifierSubstring)).firstMatch
+            if match.exists { scopedWindow = match }
+        }
+        var attempts = 0
+        while attempts < maxAttempts {
+            if element.exists, element.isHittable, element.frame.width > 0, element.frame.height > 0, app.frame.contains(element.frame) {
+                return
+            }
+            if let scopedWindow {
+                scopedWindow.swipeUp(velocity: .fast)
+            } else {
+                app.swipeUp(velocity: .fast)
+            }
             attempts += 1
             Thread.sleep(forTimeInterval: 0.3)
         }
+        #endif
     }
 
     private func scrollDownUntilVisible(_ element: XCUIElement, within containerIdentifier: String, in app: XCUIApplication, maxAttempts: Int = 15) {
         func container() -> XCUIElement {
             firstExisting(app.collectionViews[containerIdentifier], app.tables[containerIdentifier], app.otherElements[containerIdentifier], app.scrollViews[containerIdentifier])
         }
+        #if os(macOS)
+        return
+        #else
         var attempts = 0
         while attempts < maxAttempts {
-            if element.exists, element.isHittable, app.frame.contains(element.frame) {
+            if element.exists, element.isHittable, element.frame.width > 0, element.frame.height > 0 {
                 return
             }
             container().swipeUp(velocity: .fast)
             attempts += 1
-            Thread.sleep(forTimeInterval: 0.3)
         }
+        #endif
     }
 
     private func scrollUpUntilVisible(_ element: XCUIElement, in app: XCUIApplication, maxAttempts: Int = 15) {
@@ -2353,23 +3225,42 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         func container() -> XCUIElement {
             firstExisting(app.collectionViews[containerIdentifier], app.tables[containerIdentifier], app.otherElements[containerIdentifier], app.scrollViews[containerIdentifier])
         }
+        #if os(macOS)
+        return
+        #else
         var attempts = 0
         while !element.exists, attempts < maxAttempts {
             container().swipeDown(velocity: .fast)
             attempts += 1
-            Thread.sleep(forTimeInterval: 0.5)
         }
+        #endif
     }
 
     private func scrollUpUntilVisible(_ element: XCUIElement, orAtTop topAnchor: XCUIElement, within containerIdentifier: String, in app: XCUIApplication, maxAttempts: Int = 15) {
         func container() -> XCUIElement {
             firstExisting(app.collectionViews[containerIdentifier], app.tables[containerIdentifier], app.otherElements[containerIdentifier], app.scrollViews[containerIdentifier])
         }
+        #if os(macOS)
+        return
+        #else
         var attempts = 0
         while !element.exists, !topAnchor.exists, attempts < maxAttempts {
             container().swipeDown(velocity: .fast)
             attempts += 1
-            Thread.sleep(forTimeInterval: 0.5)
+        }
+        #endif
+    }
+
+    private func tapCreateJobButtonReliably(in app: XCUIApplication) {
+        let button = app.buttons["createJobButton"]
+        let sheetField = app.textFields["newJobNameField"]
+        for _ in 0..<8 {
+            guard sheetField.exists else { return }
+            if button.exists, button.isEnabled, button.isHittable {
+                button.tap()
+            }
+            Thread.sleep(forTimeInterval: 1.0)
+            if !sheetField.exists { return }
         }
     }
 
@@ -2378,59 +3269,112 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         XCTAssertTrue(searchField.waitForExistence(timeout: timeout))
         replaceText(in: searchField, with: jobName, in: app)
 
-        let jobRow = waitForMatchAcrossTypes(NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", jobName, jobName), in: app, timeout: timeout)
+        let asButton = app.buttons["jobRow_\(jobName)"]
+        let asStaticText = app.staticTexts["jobRow_\(jobName)"]
+        let asOtherElement = app.otherElements["jobRow_\(jobName)"]
+        let deadline = Date().addingTimeInterval(timeout)
+        var jobRow = asButton
+        while Date() < deadline {
+            if asButton.exists { jobRow = asButton; break }
+            if asStaticText.exists { jobRow = asStaticText; break }
+            if asOtherElement.exists { jobRow = asOtherElement; break }
+            Thread.sleep(forTimeInterval: 0.3)
+        }
         XCTAssertTrue(jobRow.exists, "The job \"\(jobName)\" should appear once filtered by name")
-        jobRow.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        jobRow.tap()
     }
 
     private func closeWindow(matching identifierSubstring: String, in app: XCUIApplication, timeout: TimeInterval = 10) {
         #if os(macOS)
+        func freshWindowExists() -> Bool {
+            app.windows.matching(NSPredicate(format: "identifier CONTAINS %@", identifierSubstring)).firstMatch.exists
+        }
         let window = app.windows.matching(NSPredicate(format: "identifier CONTAINS %@", identifierSubstring)).firstMatch
         XCTAssertTrue(window.waitForExistence(timeout: timeout), "Expected a window matching \"\(identifierSubstring)\" to close")
-        let closeButton = window.buttons["_XCUI:CloseWindow"]
-        if closeButton.waitForExistence(timeout: 3) {
-            closeButton.tap()
+        func attemptClose() {
+            app.activate()
+            let closeButton = window.buttons["_XCUI:CloseWindow"]
+            if closeButton.waitForExistence(timeout: 3) {
+                closeButton.tap()
+            }
         }
+        attemptClose()
+        #else
+        let doneButton = app.buttons["doneButton_\(identifierSubstring)"].firstMatch
+        if doneButton.waitForExistence(timeout: timeout) {
+            doneButton.tap()
+        }
+        #endif
+        #if os(macOS)
         let deadline = Date().addingTimeInterval(timeout)
-        while window.exists, Date() < deadline {
+        while freshWindowExists(), Date() < deadline {
             Thread.sleep(forTimeInterval: 0.3)
         }
-        if window.exists {
-            app.typeKey("w", modifierFlags: .command)
-            let fallbackDeadline = Date().addingTimeInterval(5)
-            while window.exists, Date() < fallbackDeadline {
+        if freshWindowExists() {
+            attemptClose()
+            let retryDeadline = Date().addingTimeInterval(5)
+            while freshWindowExists(), Date() < retryDeadline {
                 Thread.sleep(forTimeInterval: 0.3)
             }
         }
-        XCTAssertFalse(window.exists, "Window matching \"\(identifierSubstring)\" should have closed")
+        if freshWindowExists() {
+            app.activate()
+            app.typeKey("w", modifierFlags: .command)
+            let fallbackDeadline = Date().addingTimeInterval(5)
+            while freshWindowExists(), Date() < fallbackDeadline {
+                Thread.sleep(forTimeInterval: 0.3)
+            }
+        }
+        XCTAssertFalse(freshWindowExists(), "Window matching \"\(identifierSubstring)\" should have closed")
         #endif
     }
 
     private func tapTab(_ label: String, in app: XCUIApplication, timeout: TimeInterval = 5) {
-        let deadline = Date().addingTimeInterval(timeout)
-        while Date() < deadline {
+        #if !os(macOS)
+        if app.navigationBars[label].exists { return }
+        #endif
+        let findDeadline = Date().addingTimeInterval(timeout)
+        var match: XCUIElement?
+        while Date() < findDeadline {
             let predicate = NSPredicate(format: "label == %@", label)
-            let match = firstExisting(
+            let candidate = firstExisting(
                 app.tabBars.buttons.matching(predicate).firstMatch,
                 app.buttons.matching(predicate).firstMatch,
                 app.radioButtons.matching(predicate).firstMatch,
                 app.cells.matching(predicate).firstMatch,
                 app.cells.staticTexts.matching(predicate).firstMatch
             )
-            if match.exists {
-                match.tap()
-                return
-            }
+            if candidate.exists { match = candidate; break }
             Thread.sleep(forTimeInterval: 0.5)
+        }
+
+        if let match {
+            #if !os(macOS)
+            for _ in 0..<4 {
+                waitUntilHittableAndTap(match, timeout: 2)
+                if app.navigationBars[label].waitForExistence(timeout: 3) { return }
+                if !match.exists || match.isSelected { return }
+            }
+            return
+            #else
+            waitUntilHittableAndTap(match, timeout: timeout)
+            return
+            #endif
         }
 
         let more = app.tabBars.buttons["More"]
         XCTAssertTrue(more.waitForExistence(timeout: timeout), "Neither \"\(label)\" nor a \"More\" tab overflow was found")
-        more.tap()
+        waitUntilHittableAndTap(more, timeout: timeout)
 
         let itemInMore = firstExisting(app.staticTexts[label], app.buttons[label], app.cells[label])
         XCTAssertTrue(itemInMore.waitForExistence(timeout: timeout), "\"\(label)\" was not found inside the tab bar's More list")
         itemInMore.tap()
+    }
+
+    private func waitForAlertOrSheet(in app: XCUIApplication, timeout: TimeInterval) -> XCUIElement {
+        let asAlert = app.alerts.firstMatch
+        if asAlert.waitForExistence(timeout: timeout) { return asAlert }
+        return app.sheets.firstMatch
     }
 
     private func waitForMatch(_ predicate: NSPredicate, in query: XCUIElementQuery, timeout: TimeInterval) -> XCUIElement {
@@ -2451,6 +3395,26 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         return candidates[0]
     }
 
+    private func waitForFirstExisting(timeout: TimeInterval, _ candidates: XCUIElement...) -> XCUIElement {
+        let deadline = Date().addingTimeInterval(timeout)
+        repeat {
+            for candidate in candidates where candidate.exists {
+                return candidate
+            }
+            Thread.sleep(forTimeInterval: 0.2)
+        } while Date() < deadline
+        return candidates[0]
+    }
+
+    private func waitUntilHittableAndTap(_ element: XCUIElement, timeout: TimeInterval = 5) {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline, !element.isHittable {
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+        Thread.sleep(forTimeInterval: 0.3)
+        element.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+    }
+
     private func tapSegment(_ label: String, in app: XCUIApplication, timeout: TimeInterval = 5) {
         let segment = firstExisting(app.radioButtons[label], app.buttons[label])
         XCTAssertTrue(segment.waitForExistence(timeout: timeout), "\"\(label)\" segment not found")
@@ -2458,11 +3422,40 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
     }
 
     private func tapSegment(_ label: String, within pickerIdentifier: String, in app: XCUIApplication, timeout: TimeInterval = 5) {
-        let picker = firstExisting(app.segmentedControls[pickerIdentifier], app.otherElements[pickerIdentifier])
-        XCTAssertTrue(picker.waitForExistence(timeout: timeout), "\"\(pickerIdentifier)\" segmented control not found")
-        let segment = firstExisting(picker.radioButtons[label], picker.buttons[label])
-        XCTAssertTrue(segment.waitForExistence(timeout: timeout), "\"\(label)\" segment not found within \"\(pickerIdentifier)\"")
-        segment.tap()
+        let picker = firstExisting(app.segmentedControls[pickerIdentifier], app.radioGroups[pickerIdentifier], app.otherElements[pickerIdentifier])
+        if picker.waitForExistence(timeout: 3) {
+            let segment = firstExisting(picker.radioButtons[label], picker.buttons[label])
+            XCTAssertTrue(segment.waitForExistence(timeout: timeout), "\"\(label)\" segment not found within \"\(pickerIdentifier)\"")
+            segment.tap()
+            return
+        }
+
+        let window = frontmostWindow(in: app)
+        let overflow = firstExisting(
+            window.popUpButtons["more toolbar items"],
+            window.buttons["more toolbar items"],
+            window.buttons["More"]
+        )
+        XCTAssertTrue(overflow.waitForExistence(timeout: timeout), "Neither \"\(pickerIdentifier)\" nor a toolbar overflow menu was found")
+        waitUntilHittableAndTap(overflow, timeout: timeout)
+
+        #if os(macOS)
+        let overflowSearchRoot = overflow
+        #else
+        let overflowSearchRoot = window
+        #endif
+        let modeMenuItem = overflowItem(labeled: label, in: overflowSearchRoot, timeout: timeout)
+        if modeMenuItem.exists {
+            modeMenuItem.tap()
+            return
+        }
+
+        let modeToggle = overflowItem(labeled: "Mode", in: overflowSearchRoot, timeout: timeout)
+        XCTAssertTrue(modeToggle.exists, "Neither \"\(label)\" nor a \"Mode\" control was found inside the toolbar overflow menu")
+        modeToggle.tap()
+        let segmentInOverflow = overflowItem(labeled: label, in: overflowSearchRoot, timeout: timeout)
+        XCTAssertTrue(segmentInOverflow.exists, "\"\(label)\" was not found inside the \"Mode\" overflow control")
+        segmentInOverflow.tap()
     }
 
     private func tapMenuItem(_ menuIdentifier: String, item label: String, in app: XCUIApplication) {
@@ -2494,57 +3487,180 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(newText, forType: .string)
         for _ in 0..<3 {
+            field.tap()
             field.typeKey("a", modifierFlags: .command)
             field.typeKey("v", modifierFlags: .command)
             if field.value as? String == newText { return }
-            field.tap()
         }
         XCTAssertEqual(field.value as? String, newText, "Failed to replace field text after multiple attempts")
         #else
-        let priorValue = field.value as? String
         let placeholder = field.placeholderValue
+        func matchesTarget() -> Bool {
+            let current = field.value as? String
+            if newText.isEmpty { return current == nil || current == "" || current == placeholder }
+            return current == newText
+        }
+        let priorValue = field.value as? String
         let hasRealPriorContent = priorValue.map { !$0.isEmpty && $0 != newText && $0 != placeholder } ?? false
         if !hasRealPriorContent {
-            field.tap()
+            waitUntilHittableAndTap(field)
             field.typeText(newText)
-            if field.value as? String == newText { return }
+            if matchesTarget() { return }
         }
 
         for _ in 0..<5 {
-            if field.value as? String == newText { return }
-            field.tap()
+            if matchesTarget() { return }
+            waitUntilHittableAndTap(field)
+            Thread.sleep(forTimeInterval: 0.5)
+            waitUntilHittableAndTap(field)
             Thread.sleep(forTimeInterval: 0.3)
-            field.tap()
+            waitUntilHittableAndTap(field)
             let selectAllItem = app.menuItems["Select All"]
-            XCTAssertTrue(selectAllItem.waitForExistence(timeout: 3), "The Select All context menu item should appear after two separate taps")
-            selectAllItem.tap()
-            field.typeText(newText)
-            if field.value as? String == newText { return }
+            let cutItem = app.menuItems["Cut"]
+            let alreadySelected = firstExisting(selectAllItem, cutItem)
+            guard alreadySelected.waitForExistence(timeout: 3) else { continue }
+            if selectAllItem.exists { selectAllItem.tap() }
+            if newText.isEmpty {
+                field.typeText("\u{8}")
+            } else {
+                field.typeText(newText)
+            }
+            if matchesTarget() { return }
         }
-        XCTAssertEqual(field.value as? String, newText, "Failed to replace field text after multiple attempts")
+        XCTAssertTrue(matchesTarget(), "Failed to replace field text after multiple attempts")
         #endif
     }
 
-    private func tapToolbarButton(_ identifier: String, label: String, in app: XCUIApplication, timeout: TimeInterval = 5) {
-        let direct = app.buttons[identifier]
-        if direct.waitForExistence(timeout: timeout) {
-            direct.tap()
+    private func frontmostWindow(in app: XCUIApplication, matching identifierSubstring: String? = nil) -> XCUIElement {
+        #if os(macOS)
+        if let identifierSubstring {
+            return app.windows.matching(NSPredicate(format: "identifier CONTAINS %@", identifierSubstring)).firstMatch
+        }
+        return app.windows.firstMatch
+        #elseif os(iOS)
+        if let identifierSubstring, UIDevice.current.userInterfaceIdiom == .pad {
+            let match = app.windows.matching(NSPredicate(format: "identifier CONTAINS %@", identifierSubstring)).firstMatch
+            if match.exists { return match }
+        }
+        return app
+        #else
+        return app
+        #endif
+    }
+
+    private func directToolbarElement(_ identifier: String, in window: XCUIElement, timeout: TimeInterval) -> XCUIElement? {
+        let asButton = window.buttons[identifier]
+        if asButton.waitForExistence(timeout: timeout) { return asButton }
+        let asMenuButton = window.menuButtons[identifier]
+        if asMenuButton.waitForExistence(timeout: 1) { return asMenuButton }
+        return nil
+    }
+
+    private func toolbarButtonLabel(_ identifier: String, label: String, in app: XCUIApplication, window windowIdentifierSubstring: String? = nil, overflowIndex: Int? = nil, timeout: TimeInterval = 5) -> String {
+        let window = frontmostWindow(in: app, matching: windowIdentifierSubstring)
+        if let direct = directToolbarElement(identifier, in: window, timeout: timeout) {
+            return direct.label
+        }
+
+        let overflow = firstExisting(
+            window.popUpButtons["more toolbar items"],
+            window.buttons["more toolbar items"],
+            window.buttons["More"]
+        )
+        guard overflow.waitForExistence(timeout: timeout) else {
+            XCTFail("Neither \"\(identifier)\" nor a toolbar overflow menu was found")
+            return ""
+        }
+        overflow.tap()
+
+        #if os(macOS)
+        let overflowSearchRoot = overflow
+        #else
+        let overflowSearchRoot = window
+        #endif
+        let itemInOverflow = overflowItem(labeled: label, overflowIndex: overflowIndex, in: overflowSearchRoot, timeout: timeout)
+        XCTAssertTrue(itemInOverflow.exists, "\"\(label)\" was not found inside the toolbar overflow menu")
+        let resolvedLabel = itemInOverflow.label
+        overflow.tap()
+        return resolvedLabel
+    }
+
+    private func dynamicOverflowIndex(precedingIdentifiers: [String], in app: XCUIApplication, window windowIdentifierSubstring: String? = nil) -> Int {
+        let window = frontmostWindow(in: app, matching: windowIdentifierSubstring)
+        return precedingIdentifiers.filter { directToolbarElement($0, in: window, timeout: 1) == nil }.count
+    }
+
+    private func openMenuItem(itemCount: Int? = nil, at index: Int, in app: XCUIApplication, timeout: TimeInterval = 5) -> XCUIElement {
+        let deadline = Date().addingTimeInterval(timeout)
+        var matchedMenu: XCUIElement?
+        while Date() < deadline {
+            let realMenus = app.menus.allElementsBoundByIndex.filter { $0.frame.width > 0 && $0.frame.height > 0 }
+            if let itemCount, let found = realMenus.first(where: { $0.menuItems.count == itemCount }) {
+                matchedMenu = found
+                break
+            } else if itemCount == nil, let found = realMenus.last {
+                matchedMenu = found
+                break
+            }
+            Thread.sleep(forTimeInterval: 0.2)
+        }
+        guard let matchedMenu else {
+            XCTFail("No open menu was found within \(timeout)s")
+            return app.menus.firstMatch.menuItems.element(boundBy: index)
+        }
+        return matchedMenu.menuItems.element(boundBy: index)
+    }
+
+    private func overflowItem(labeled label: String, overflowIndex: Int? = nil, in overflow: XCUIElement, timeout: TimeInterval) -> XCUIElement {
+        #if os(macOS)
+        if let overflowIndex {
+            let element = overflow.menuItems.element(boundBy: overflowIndex)
+            _ = element.waitForExistence(timeout: timeout)
+            return element
+        }
+        #endif
+        let predicate = NSPredicate(format: "label == %@ OR label BEGINSWITH %@", label, label)
+        let menuItem = overflow.menuItems.matching(predicate).firstMatch
+        if menuItem.waitForExistence(timeout: timeout) {
+            return menuItem
+        }
+        let button = overflow.buttons.matching(predicate).firstMatch
+        _ = button.waitForExistence(timeout: 1)
+        return button
+    }
+
+    private func tapToolbarButton(_ identifier: String, label: String, in app: XCUIApplication, window windowIdentifierSubstring: String? = nil, overflowIndex: Int? = nil, timeout: TimeInterval = 5, verify: (() -> Bool)? = nil) {
+        let window = frontmostWindow(in: app, matching: windowIdentifierSubstring)
+        if let direct = directToolbarElement(identifier, in: window, timeout: timeout) {
+            if let verify {
+                for _ in 0..<4 {
+                    waitUntilHittableAndTap(direct, timeout: timeout)
+                    if verify() { return }
+                }
+                return
+            }
+            waitUntilHittableAndTap(direct, timeout: timeout)
             return
         }
 
         let overflow = firstExisting(
-            app.popUpButtons["more toolbar items"],
-            app.buttons["more toolbar items"],
-            app.buttons["More"]
+            window.popUpButtons["more toolbar items"],
+            window.buttons["more toolbar items"],
+            window.buttons["More"]
         )
         guard overflow.waitForExistence(timeout: timeout) else {
             XCTFail("Neither \"\(identifier)\" nor a toolbar overflow menu was found")
             return
         }
-        overflow.tap()
+        waitUntilHittableAndTap(overflow, timeout: timeout)
 
-        let itemInOverflow = firstExisting(app.menuItems[label], app.buttons[label])
-        XCTAssertTrue(itemInOverflow.waitForExistence(timeout: timeout), "\"\(label)\" was not found inside the toolbar overflow menu")
+        #if os(macOS)
+        let overflowSearchRoot = overflow
+        #else
+        let overflowSearchRoot = window
+        #endif
+        let itemInOverflow = overflowItem(labeled: label, overflowIndex: overflowIndex, in: overflowSearchRoot, timeout: timeout)
+        XCTAssertTrue(itemInOverflow.exists, "\"\(label)\" was not found inside the toolbar overflow menu")
         itemInOverflow.tap()
     }
 
@@ -2554,42 +3670,73 @@ final class CupcakeLiveBackendFlowUITests: XCTestCase {
             backToTemplatesButton.tap()
             Thread.sleep(forTimeInterval: 0.5)
         }
+        #if os(macOS)
+        let usesSeparateWindow = true
+        #elseif os(iOS)
+        let usesSeparateWindow = UIDevice.current.userInterfaceIdiom == .pad
+        #else
+        let usesSeparateWindow = false
+        #endif
+        if usesSeparateWindow {
+            closeWindow(matching: "table-template-manager", in: app)
+            return
+        }
         let stillOpenMarker = app.buttons["newMetadataTableTemplateButton"]
         for _ in 0..<maxAttempts {
-            tapToolbarButton("doneButton", label: "Done", in: app, timeout: 3)
+            tapToolbarButton("tableTemplateManagementSheetDoneButton", label: "Done", in: app, timeout: 3)
             Thread.sleep(forTimeInterval: 0.5)
             if !stillOpenMarker.exists {
                 return
             }
         }
-        XCTFail("Table Template Management sheet did not dismiss after \(maxAttempts) attempts at \"doneButton\"")
+        XCTFail("Table Template Management sheet did not dismiss after \(maxAttempts) attempts at \"tableTemplateManagementSheetDoneButton\"")
     }
 
     private func elementContaining(_ substring: String, in app: XCUIApplication) -> XCUIElement {
         let predicate = NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", substring, substring)
-        let staticText = app.staticTexts.matching(predicate).firstMatch
-        let button = app.buttons.matching(predicate).firstMatch
-        return staticText.exists ? staticText : button
+        return app.staticTexts.matching(predicate).firstMatch.exists
+            ? app.staticTexts.matching(predicate).firstMatch
+            : app.buttons.matching(predicate).firstMatch
     }
 
     private func waitForTextAppearing(_ substring: String, in app: XCUIApplication, timeout: TimeInterval) -> Bool {
         let predicate = NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", substring, substring)
-        let deadline = Date().addingTimeInterval(timeout)
-        while Date() < deadline {
-            if app.staticTexts.matching(predicate).firstMatch.exists { return true }
-            if app.buttons.matching(predicate).firstMatch.exists { return true }
-            Thread.sleep(forTimeInterval: 0.5)
+        if app.staticTexts.matching(predicate).firstMatch.waitForExistence(timeout: timeout) {
+            return true
         }
-        return false
+        return app.buttons.matching(predicate).firstMatch.exists
+    }
+
+    private func waitForElementDisappearing(_ element: XCUIElement, timeout: TimeInterval) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while element.exists, Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.2)
+        }
+        return !element.exists
+    }
+
+    private func waitForElementDestroyed(identifier: String, in app: XCUIApplication, timeout: TimeInterval) -> Bool {
+        #if os(macOS)
+        if let pid = NSRunningApplication.runningApplications(withBundleIdentifier: "info.proteo.cupcake").first?.processIdentifier {
+            return AXEventWaiter(pid: pid).waitForDestruction(ofIdentifier: identifier, timeout: timeout)
+        }
+        #endif
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline, app.descendants(matching: .any).matching(identifier: identifier).firstMatch.exists {
+            Thread.sleep(forTimeInterval: 0.2)
+        }
+        return !app.descendants(matching: .any).matching(identifier: identifier).firstMatch.exists
     }
 
     private func waitForTextDisappearing(_ substring: String, in app: XCUIApplication, timeout: TimeInterval) -> Bool {
         let predicate = NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", substring, substring)
+        let staticText = app.staticTexts.matching(predicate).firstMatch
+        let button = app.buttons.matching(predicate).firstMatch
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
-            let stillPresent = app.staticTexts.matching(predicate).firstMatch.exists || app.buttons.matching(predicate).firstMatch.exists
+            let stillPresent = staticText.exists || button.exists
             if !stillPresent { return true }
-            Thread.sleep(forTimeInterval: 0.5)
+            Thread.sleep(forTimeInterval: 0.2)
         }
         return false
     }

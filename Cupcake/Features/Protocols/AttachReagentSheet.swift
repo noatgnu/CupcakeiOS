@@ -71,7 +71,9 @@ struct AttachReagentSheet: View {
                 }
             }
         }
+        #if os(macOS)
         .frame(minWidth: 360, minHeight: 420)
+        #endif
         .alert("Couldn't attach reagent", isPresented: $isShowingError) {
             Button("OK") {}
         } message: {

@@ -74,7 +74,9 @@ struct CalculatorAnnotationView: View {
                 Text(errorMessage ?? "")
             }
         }
+        #if os(macOS)
         .frame(minWidth: 360, minHeight: 560)
+        #endif
     }
 
     private var displayArea: some View {

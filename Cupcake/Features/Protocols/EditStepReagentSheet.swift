@@ -64,7 +64,9 @@ struct EditStepReagentSheet: View {
                 }
             }
         }
+        #if os(macOS)
         .frame(minWidth: 320, minHeight: 260)
+        #endif
         .alert("Couldn't save reagent", isPresented: $isShowingError) {
             Button("OK") {}
         } message: {

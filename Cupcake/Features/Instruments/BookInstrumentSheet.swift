@@ -61,7 +61,9 @@ struct BookInstrumentSheet: View {
                 }
             }
         }
+        #if os(macOS)
         .frame(minWidth: 360, minHeight: 400)
+        #endif
         .alert("Couldn't book instrument", isPresented: $isShowingError) {
             Button("OK") {}
         } message: {

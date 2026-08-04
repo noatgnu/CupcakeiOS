@@ -1,4 +1,7 @@
 import SwiftUI
+#if os(iOS)
+import UIKit
+#endif
 
 struct TwoPanelExplorerView<SidebarHeader: View, Sidebar: View, Detail: View>: View {
     @Binding var pathStack: [BreadcrumbSegment]
@@ -26,11 +29,16 @@ struct TwoPanelExplorerView<SidebarHeader: View, Sidebar: View, Detail: View>: V
     }
 
     var body: some View {
-        if horizontalSizeClass == .compact {
-            compactBody
-        } else {
-            regularBody
+        Group {
+            if horizontalSizeClass == .compact {
+                compactBody
+                    .transition(.opacity)
+            } else {
+                regularBody
+                    .transition(.opacity)
+            }
         }
+        .animation(.default, value: horizontalSizeClass)
     }
 
     private var regularBody: some View {
@@ -67,13 +75,19 @@ struct TwoPanelExplorerView<SidebarHeader: View, Sidebar: View, Detail: View>: V
     private var sectionTitle: some View {
         #if os(macOS)
         EmptyView()
+        #elseif os(iOS)
+        if UIDevice.current.userInterfaceIdiom == .pad {
+            Text(pathStack.first?.name ?? "")
+                .font(.largeTitle.bold())
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 16)
+                .padding(.top, -16)
+                .padding(.bottom, 4)
+        } else {
+            EmptyView()
+        }
         #else
-        Text(pathStack.first?.name ?? "")
-            .font(.largeTitle.bold())
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 16)
-            .padding(.top, -16)
-            .padding(.bottom, 4)
+        EmptyView()
         #endif
     }
 

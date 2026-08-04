@@ -136,6 +136,7 @@ struct StorageListView<SectionPicker: View>: View {
                         }
                     } label: {
                         Label("Add", systemImage: "plus")
+                            .labelStyle(.iconOnly)
                     }
                     .accessibilityIdentifier("storageAddMenu")
                 }

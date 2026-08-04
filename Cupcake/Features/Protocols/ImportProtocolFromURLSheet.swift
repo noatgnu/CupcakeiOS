@@ -40,7 +40,9 @@ struct ImportProtocolFromURLSheet: View {
                 }
             }
         }
+        #if os(macOS)
         .frame(minWidth: 380, minHeight: 220)
+        #endif
         .alert("Couldn't import protocol", isPresented: $isShowingError) {
             Button("OK") {}
         } message: {

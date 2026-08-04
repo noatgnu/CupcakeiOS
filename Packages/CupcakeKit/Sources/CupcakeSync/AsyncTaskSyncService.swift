@@ -83,8 +83,21 @@ public actor AsyncTaskSyncService {
         metadataTableServerID: Int64, fileURL: URL, replaceExisting: Bool,
         importScope: AsyncMetadataImportScope = .userMetadata, validateOntologies: Bool = true, applySchemaTemplates: Bool = false
     ) async throws -> String {
+        let fileData = try Data(contentsOf: fileURL)
+        return try await importSDRFFile(
+            metadataTableServerID: metadataTableServerID, fileData: fileData, fileName: fileURL.lastPathComponent,
+            replaceExisting: replaceExisting, importScope: importScope, validateOntologies: validateOntologies,
+            applySchemaTemplates: applySchemaTemplates
+        )
+    }
+
+    @discardableResult
+    public func importSDRFFile(
+        metadataTableServerID: Int64, fileData: Data, fileName: String, replaceExisting: Bool,
+        importScope: AsyncMetadataImportScope = .userMetadata, validateOntologies: Bool = true, applySchemaTemplates: Bool = false
+    ) async throws -> String {
         try await submitImport(
-            action: "sdrf_file", metadataTableServerID: metadataTableServerID, fileURL: fileURL,
+            action: "sdrf_file", metadataTableServerID: metadataTableServerID, fileData: fileData, fileName: fileName,
             mimeType: "text/tab-separated-values", replaceExisting: replaceExisting, importScope: importScope,
             validateOntologies: validateOntologies, applySchemaTemplates: applySchemaTemplates
         )
@@ -95,19 +108,30 @@ public actor AsyncTaskSyncService {
         metadataTableServerID: Int64, fileURL: URL, replaceExisting: Bool,
         importScope: AsyncMetadataImportScope = .userMetadata, validateOntologies: Bool = true
     ) async throws -> String {
+        let fileData = try Data(contentsOf: fileURL)
+        return try await importExcelFile(
+            metadataTableServerID: metadataTableServerID, fileData: fileData, fileName: fileURL.lastPathComponent,
+            replaceExisting: replaceExisting, importScope: importScope, validateOntologies: validateOntologies
+        )
+    }
+
+    @discardableResult
+    public func importExcelFile(
+        metadataTableServerID: Int64, fileData: Data, fileName: String, replaceExisting: Bool,
+        importScope: AsyncMetadataImportScope = .userMetadata, validateOntologies: Bool = true
+    ) async throws -> String {
         try await submitImport(
-            action: "excel_file", metadataTableServerID: metadataTableServerID, fileURL: fileURL,
+            action: "excel_file", metadataTableServerID: metadataTableServerID, fileData: fileData, fileName: fileName,
             mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             replaceExisting: replaceExisting, importScope: importScope, validateOntologies: validateOntologies, applySchemaTemplates: false
         )
     }
 
     private func submitImport(
-        action: String, metadataTableServerID: Int64, fileURL: URL, mimeType: String,
+        action: String, metadataTableServerID: Int64, fileData: Data, fileName: String, mimeType: String,
         replaceExisting: Bool, importScope: AsyncMetadataImportScope, validateOntologies: Bool, applySchemaTemplates: Bool
     ) async throws -> String {
         guard let token = deviceToken() else { throw AsyncTaskSyncError.noDeviceToken }
-        let fileData = try Data(contentsOf: fileURL)
         var form = MultipartFormBuilder()
         form.addField(name: "metadata_table_id", value: String(metadataTableServerID))
         form.addField(name: "replace_existing", value: replaceExisting ? "true" : "false")
@@ -116,7 +140,7 @@ public actor AsyncTaskSyncService {
         if action == "sdrf_file" {
             form.addField(name: "apply_schema_templates", value: applySchemaTemplates ? "true" : "false")
         }
-        form.addFile(name: "file", filename: fileURL.lastPathComponent, mimeType: mimeType, data: fileData)
+        form.addFile(name: "file", filename: fileName, mimeType: mimeType, data: fileData)
         let response: AsyncTaskCreatedResponse = try await apiClient.sendMultipart(
             "async-import/\(action)/", body: form, authorizationHeader: "DeviceToken \(token)"
         )

@@ -85,6 +85,7 @@ public actor DeviceTokenSyncService {
         }
         try await apiClient.sendNoContent("device-tokens/\(id)/", method: .delete, authorizationHeader: "DeviceToken \(token)")
     }
+
 }
 
 private struct EmptyEncodable: Encodable, Sendable {}

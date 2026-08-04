@@ -12,6 +12,7 @@ struct AsyncTaskCenterView: View {
     @State private var isShowingError = false
     @State private var downloadingTaskID: String?
     @State private var downloadedFileURL: URL?
+    @State private var retryingTaskID: String?
 
     private static let statusOptions = ["All", "QUEUED", "STARTED", "SUCCESS", "FAILURE", "CANCELLED"]
     @State private var statusFilter = "All"
@@ -77,6 +78,7 @@ struct AsyncTaskCenterView: View {
             await reload()
             await listenForLiveUpdates()
         }
+        .closableWindowToolbar(id: "async-task-center")
     }
 
     @ViewBuilder
@@ -107,6 +109,7 @@ struct AsyncTaskCenterView: View {
                     .foregroundStyle(.red)
             }
         }
+        .accessibilityElement(children: .combine)
         .accessibilityIdentifier("asyncTaskRow_\(task.id)")
         .swipeActions(edge: .trailing) {
             Button(role: .destructive) {
@@ -127,6 +130,20 @@ struct AsyncTaskCenterView: View {
                 .tint(.blue)
                 .disabled(downloadingTaskID != nil)
             }
+            if task.status == "FAILURE", appSession.retryAction(forTaskID: task.id) != nil {
+                Button {
+                    Task { await retry(task) }
+                } label: {
+                    if retryingTaskID == task.id {
+                        ProgressView()
+                    } else {
+                        Label("Retry", systemImage: "arrow.clockwise")
+                    }
+                }
+                .tint(.orange)
+                .disabled(retryingTaskID != nil)
+                .accessibilityIdentifier("retryAsyncTaskButton_\(task.id)")
+            }
         }
         .contextMenu {
             Button(role: .destructive) {
@@ -140,6 +157,14 @@ struct AsyncTaskCenterView: View {
                 } label: {
                     Label("Download", systemImage: "arrow.down.circle")
                 }
+            }
+            if task.status == "FAILURE", appSession.retryAction(forTaskID: task.id) != nil {
+                Button {
+                    Task { await retry(task) }
+                } label: {
+                    Label("Retry", systemImage: "arrow.clockwise")
+                }
+                .accessibilityIdentifier("retryAsyncTaskMenuButton_\(task.id)")
             }
         }
     }
@@ -200,6 +225,20 @@ struct AsyncTaskCenterView: View {
     private func cancelOrDelete(_ task: AsyncTaskDTO) async {
         do {
             try await appSession.makeSyncServices().asyncTaskSync.cancel(id: task.id)
+            await reload()
+        } catch {
+            errorMessage = error.userFacingMessage
+            isShowingError = true
+        }
+    }
+
+    private func retry(_ task: AsyncTaskDTO) async {
+        guard let action = appSession.retryAction(forTaskID: task.id) else { return }
+        retryingTaskID = task.id
+        defer { retryingTaskID = nil }
+        do {
+            let newTaskID = try await action.resubmit(using: appSession.makeSyncServices().asyncTaskSync)
+            appSession.recordRetryAction(action, forTaskID: newTaskID)
             await reload()
         } catch {
             errorMessage = error.userFacingMessage

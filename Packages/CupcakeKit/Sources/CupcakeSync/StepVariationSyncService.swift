@@ -20,20 +20,16 @@ public actor StepVariationSyncService {
 
     public func refetch(stepServerID: Int64, sessionServerID: Int64? = nil) async throws {
         guard let token = deviceToken() else { return }
-        let authorization = "DeviceToken \(token)"
         var query = [URLQueryItem(name: "step", value: String(stepServerID))]
         if let sessionServerID {
             query.append(URLQueryItem(name: "session", value: String(sessionServerID)))
         }
-        var page: PaginatedResponse<StepVariationDTO> = try await apiClient.get(
-            "step-variations/",
+        try await apiClient.fetchAllPages(
+            path: "step-variations/",
             query: query,
-            authorizationHeader: authorization
-        )
-        while true {
-            try await store.upsert(page.results)
-            guard let nextURLString = page.next, let nextURL = URL(string: nextURLString) else { break }
-            page = try await apiClient.get(absoluteURL: nextURL, authorizationHeader: authorization)
+            authorizationHeader: "DeviceToken \(token)"
+        ) { (dtos: [StepVariationDTO]) in
+            try await store.upsert(dtos)
         }
     }
 

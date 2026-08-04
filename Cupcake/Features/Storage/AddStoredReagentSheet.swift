@@ -154,7 +154,9 @@ struct AddStoredReagentSheet: View {
                 }
             }
         }
+        #if os(macOS)
         .frame(minWidth: 360, minHeight: 460)
+        #endif
         .alert("Couldn't add reagent", isPresented: $isShowingError) {
             Button("OK") {}
         } message: {
